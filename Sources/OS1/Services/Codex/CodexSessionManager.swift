@@ -2115,7 +2115,7 @@ final class CodexSessionManager: ObservableObject {
     private func persistSessions() {
         let snapshot = sessions
         logQueue.async { [persistURL] in
-            if let data = try? JSONEncoder().encode(snapshot) {
+            if let data = try? CompanySchemaMigrationEngine.encodeCurrent(sessions: snapshot) {
                 try? data.write(to: persistURL, options: [.atomic])
             }
         }
@@ -2484,8 +2484,20 @@ final class CodexSessionManager: ObservableObject {
 
     private func loadPersistedSessions() {
         guard let data = try? Data(contentsOf: persistURL),
-              let decoded = try? JSONDecoder().decode([CodexSession].self, from: data) else { return }
-        sessions = decoded.map { Self.recoverSessionAfterRestart($0, now: Date(), retryJitterSeconds: maxJitterSeconds) }
+              let decoded = try? CompanySchemaMigrationEngine.decodeSessions(from: data) else { return }
+        appendEvent(
+            kind: .lifecycleChanged,
+            summary: "Durable session state schema validated",
+            metadata: [
+                "sourceVersion": "\(decoded.report.sourceVersion)",
+                "targetVersion": "\(decoded.report.targetVersion)",
+                "status": decoded.report.status.rawValue,
+                "records": "\(decoded.report.migratedRecordCount)"
+            ]
+        )
+        sessions = decoded.sessions.map {
+            Self.recoverSessionAfterRestart($0, now: Date(), retryJitterSeconds: maxJitterSeconds)
+        }
         // Resume heartbeat loops for idle/blocked companies so the loop survives app restarts.
         Task { @MainActor [weak self] in
             self?.resumeAllScheduledCompanies()
