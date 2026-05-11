@@ -64,6 +64,17 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+      - name: Upload to Codecov
+        if: hashFiles('coverage.lcov') != '' && env.CODECOV_TOKEN != ''
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage.lcov
+          flags: swift
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
       - name: Publish coverage summary
         if: hashFiles('coverage-summary.txt') != ''
         run: |
