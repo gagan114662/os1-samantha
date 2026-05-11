@@ -92,10 +92,19 @@ struct RootView: View {
     private var realtimeVoiceRuntime: some View {
         if appState.isRealtimeVoiceEnabled && bootAnimationFinished {
             RealtimeVoiceRuntimeView(
-                openAIAPIKey: openAIAPIKey,
+                elevenLabsAPIKey: nil,
+                elevenLabsAgentID: nil,
                 orgoAPIKey: appState.orgoCredentialStore.loadAPIKey(),
                 orgoDefaultComputerID: activeOrgoComputerID
             ) { status in
+                let line = "[\(Date())] [voice] \(status)\n"
+                if let data = line.data(using: .utf8) {
+                    if let h = try? FileHandle(forWritingTo: URL(fileURLWithPath: "/tmp/os1-voice.log")) {
+                        h.seekToEndOfFile(); h.write(data); try? h.close()
+                    } else {
+                        try? data.write(to: URL(fileURLWithPath: "/tmp/os1-voice.log"))
+                    }
+                }
                 appState.updateRealtimeVoiceStatus(status)
             }
             .id(activeOrgoComputerID ?? "no-active-orgo-computer")
@@ -126,9 +135,18 @@ struct RootView: View {
                             .padding(.horizontal, 16)
                     }
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(availableSections) { section in
-                            sectionRow(section)
+                    VStack(alignment: .leading, spacing: 14) {
+                        ForEach(groupedSections, id: \.title) { group in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(group.title)
+                                    .os1Style(theme.typography.smallCaps)
+                                    .foregroundStyle(theme.palette.onCoralMuted)
+                                    .padding(.horizontal, 12)
+                                    .padding(.bottom, 2)
+                                ForEach(group.sections) { section in
+                                    sectionRow(section)
+                                }
+                            }
                         }
                     }
                     .padding(.horizontal, 10)
@@ -245,12 +263,42 @@ struct RootView: View {
         guard let connection = appState.activeConnection else {
             return [.connections]
         }
-        var sections: [AppSection] = [.connections, .overview, .sessions, .cronjobs, .kanban, .files, .usage, .skills, .knowledgeBase, .connectors, .providers, .mail, .messaging, .terminal, .doctor]
-        // Desktop is only meaningful for Orgo VMs (SSH hosts have no VM screen).
+        var sections: [AppSection] = [.connections, .overview, .sessions, .cronjobs, .kanban, .files, .usage, .skills, .knowledgeBase, .codexTasks, .connectors, .providers, .mail, .messaging, .terminal, .doctor]
         if case .orgo = connection.transport {
             sections.append(.desktop)
+            sections.append(.tiles)
         }
         return sections
+    }
+
+    /// Sidebar sections grouped by intent. Each header is a small-caps label
+    /// that the user can read at a glance instead of scanning 18 flat rows.
+    /// Groups appear in priority order; sections inside each group stay flat
+    /// rows (no collapse) so muscle-memory doesn't change.
+    private var groupedSections: [SidebarGroup] {
+        let visible = Set(availableSections)
+        let groups: [SidebarGroup] = [
+            SidebarGroup(title: L10n.string("COMPUTERS"),
+                         sections: [.connections, .overview, .desktop, .tiles, .terminal, .doctor]),
+            SidebarGroup(title: L10n.string("AGENT WORK"),
+                         sections: [.sessions, .codexTasks, .kanban, .cronjobs]),
+            SidebarGroup(title: L10n.string("KNOWLEDGE"),
+                         sections: [.files, .skills, .knowledgeBase, .usage]),
+            SidebarGroup(title: L10n.string("CHANNELS"),
+                         sections: [.mail, .messaging]),
+            SidebarGroup(title: L10n.string("CONFIGURATION"),
+                         sections: [.providers, .connectors]),
+        ]
+        // Filter to only sections that are actually available; drop empty groups
+        return groups.compactMap { g in
+            let kept = g.sections.filter { visible.contains($0) }
+            return kept.isEmpty ? nil : SidebarGroup(title: g.title, sections: kept)
+        }
+    }
+
+    private struct SidebarGroup {
+        let title: String
+        let sections: [AppSection]
     }
 
     // MARK: - Detail
@@ -284,6 +332,10 @@ struct RootView: View {
             KnowledgeBaseView(splitLayout: $knowledgeBaseSplitLayout)
         case .desktop:
             DesktopView()
+        case .tiles:
+            TilesView()
+        case .codexTasks:
+            CodexTasksView()
         case .mail:
             MailView(viewModel: appState.mailSetupViewModel)
         case .messaging:
