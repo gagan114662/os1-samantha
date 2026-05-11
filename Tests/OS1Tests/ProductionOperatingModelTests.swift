@@ -60,4 +60,31 @@ struct ProductionOperatingModelTests {
         #expect(problems.contains { $0.contains("localDevelopment") })
         #expect(problems.contains { $0.contains("granted every shared credential") })
     }
+
+    @Test
+    func doctorParsesEvaluationReportSummary() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("os1-eval-report-test-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let reportURL = root.appendingPathComponent("non-live-report.json")
+        try """
+        {
+          "suite": "company-agent-non-live",
+          "passed": true,
+          "passedCount": 8,
+          "totalCount": 8,
+          "averageScore": 100.0
+        }
+        """.write(to: reportURL, atomically: true, encoding: .utf8)
+
+        let summary = try #require(DoctorViewModel.evaluationReportSummary(at: reportURL))
+
+        #expect(summary.suite == "company-agent-non-live")
+        #expect(summary.passed)
+        #expect(summary.passedCount == 8)
+        #expect(summary.totalCount == 8)
+        #expect(summary.averageScore == 100)
+    }
 }

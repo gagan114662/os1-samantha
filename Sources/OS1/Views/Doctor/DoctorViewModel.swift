@@ -162,7 +162,8 @@ final class DoctorViewModel: ObservableObject {
         async let sharedCredentials = makeSharedCredentialScopeCheck()
         async let notarization = makeNotarizationCheck()
         async let productionGates = makeProductionGatesCheck()
-        return await [codex, claude, wuphf, launchd, voicePort, keychain, sharedCredentials, notarization, productionGates]
+        async let evalHarness = makeEvaluationHarnessCheck()
+        return await [codex, claude, wuphf, launchd, voicePort, keychain, sharedCredentials, notarization, productionGates, evalHarness]
     }
 
     private func makeProductionGatesCheck() async -> Check {
@@ -221,6 +222,57 @@ final class DoctorViewModel: ObservableObject {
             return cwdDoc
         }
         return URL(fileURLWithPath: "/Users/gaganarora/Desktop/my projects/hermes-desktop-os1/docs/production-operating-model.md")
+    }
+
+    private func makeEvaluationHarnessCheck() async -> Check {
+        let reportURL = Self.evaluationReportURL()
+        guard let summary = Self.evaluationReportSummary(at: reportURL) else {
+            return Check(
+                id: "evaluation-harness",
+                title: L10n.string("Agent eval harness"),
+                severity: .warn,
+                summary: L10n.string("No non-live eval report found"),
+                detail: L10n.string("Run `python3 scripts/run-evals.py` to create artifacts/evals/non-live-report.json. CI runs this on every PR and uploads the report artifact."),
+                actions: []
+            )
+        }
+
+        return Check(
+            id: "evaluation-harness",
+            title: L10n.string("Agent eval harness"),
+            severity: summary.passed ? .ok : .error,
+            summary: L10n.string(
+                "Eval suite %@: %lld/%lld passed, score %.1f",
+                summary.suite,
+                summary.passedCount,
+                summary.totalCount,
+                summary.averageScore
+            ),
+            detail: reportURL.path,
+            actions: []
+        )
+    }
+
+    struct EvaluationReportSummary: Decodable, Equatable {
+        let suite: String
+        let passed: Bool
+        let passedCount: Int
+        let totalCount: Int
+        let averageScore: Double
+    }
+
+    nonisolated static func evaluationReportSummary(at url: URL) -> EvaluationReportSummary? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(EvaluationReportSummary.self, from: data)
+    }
+
+    private nonisolated static func evaluationReportURL() -> URL {
+        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let cwdReport = cwd.appendingPathComponent("artifacts/evals/non-live-report.json")
+        if FileManager.default.fileExists(atPath: cwdReport.path) {
+            return cwdReport
+        }
+        return URL(fileURLWithPath: "/Users/gaganarora/Desktop/my projects/hermes-desktop-os1/artifacts/evals/non-live-report.json")
     }
 
     /// Reports whether the built OS1.app bundle is Developer-ID-signed +
