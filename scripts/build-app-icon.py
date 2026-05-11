@@ -5,11 +5,11 @@ Build packaging/AppIcon-1024.png from a source brand-mark PNG.
 The source is a square PNG (any size) of the Orgo brand mark — solid orange
 background with the white ring centered. This script:
 
-  1. Resizes the source down to the macOS Big Sur+ inner-icon bounds (824×824
-     centered inside a 1024×1024 transparent canvas, ~100 px margin on each
+  1. Resizes the source down to the macOS Big Sur+ inner-icon bounds (824x824
+     centered inside a 1024x1024 transparent canvas, ~100 px margin on each
      side — Apple's spec).
   2. Applies a continuous-curvature squircle mask (185 px corner radius on
-     824 = ~22.5 %, supersampled 4× for clean anti-aliased edges).
+     824 = ~22.5 %, supersampled 4x for clean anti-aliased edges).
   3. Lays in three subtle polish layers used by Apple's modern macOS icons:
        - vertical multiply gradient (~6 % lighter at top, ~6 % darker at
          bottom) — gives the icon "weight" without reading as a gradient
@@ -66,7 +66,7 @@ def vertical_l_column(height: int, alpha_at_y) -> Image.Image:
     px = col.load()
     for y in range(height):
         t = y / (height - 1) if height > 1 else 0.0
-        px[0, y] = max(0, min(255, int(round(alpha_at_y(t)))))
+        px[0, y] = max(0, min(255, round(alpha_at_y(t))))
     return col
 
 
@@ -112,7 +112,7 @@ def main(src_path: pathlib.Path, out_path: pathlib.Path) -> None:
         if y_pix < shadow_start:
             return 0.0
         local_t = (y_pix - shadow_start) / (sh - 1) if sh > 1 else 0.0
-        return SHADOW_PEAK_ALPHA * (local_t ** 1.2)
+        return SHADOW_PEAK_ALPHA * (local_t**1.2)
 
     shadow_alpha = vertical_l_column(INNER, shadow_alpha_at).resize((INNER, INNER))
     shadow = Image.new("RGBA", (INNER, INNER), (0, 0, 0, 0))
@@ -137,8 +137,10 @@ def main(src_path: pathlib.Path, out_path: pathlib.Path) -> None:
 
 if __name__ == "__main__":
     repo_root = pathlib.Path(__file__).resolve().parent.parent
-    default_src = pathlib.Path.home() / "Downloads" / (
-        "ig_0c92a172ea0e2f1f0169f80d7e290c8196bd19f46153a16b82.png"
+    default_src = (
+        pathlib.Path.home()
+        / "Downloads"
+        / ("ig_0c92a172ea0e2f1f0169f80d7e290c8196bd19f46153a16b82.png")
     )
     src = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else default_src
     out = repo_root / "packaging" / "AppIcon-1024.png"

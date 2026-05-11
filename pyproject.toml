@@ -1,0 +1,50 @@
+# Project-level tooling configuration.
+# Note: This repo is primarily a Swift package; Python lives in scripts/daemons.
+# Only [tool.ruff] is configured here. Build metadata (e.g. [project], [build-system])
+# is intentionally omitted so this file does not declare a Python package.
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = [
+  "Vendor",
+  ".venv",
+  "_site",
+  "site",
+]
+
+[tool.ruff.lint]
+# Pick a sensible default rule set without going overboard.
+select = [
+  "E",     # pycodestyle errors
+  "W",     # pycodestyle warnings
+  "F",     # pyflakes
+  "I",     # isort
+  "B",     # flake8-bugbear
+  "UP",    # pyupgrade
+  "SIM",   # flake8-simplify
+  "RUF",   # ruff-specific
+  "S",     # flake8-bandit (security)
+  "C4",    # flake8-comprehensions
+]
+ignore = [
+  "E501",  # line-too-long (handled by formatter / line-length)
+  "S101",  # use of assert (fine in scripts/tests)
+  "S603",  # subprocess call (we audit these manually)
+  "S607",  # starting process with partial path
+  "B008",  # function call in default arg
+  "SIM108", # ternary instead of if-else (style preference)
+  "RUF012", # mutable class defaults (annotation noise)
+  "UP006", "UP007", # legacy typing forms acceptable for cross-version scripts
+]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/**" = ["S101", "S603", "S607"]
+"daemons/**" = ["S101"]
+"**/tests/**" = ["S101", "S105", "S106"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+skip-magic-trailing-comma = false

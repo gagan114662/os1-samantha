@@ -8,6 +8,7 @@ in #general via the OS1 voice server's /wuphf/* bridge, then reads the
 office's reply and summarizes back to Telegram."""
 
 import atexit
+import contextlib
 import json
 import os
 import re
@@ -66,7 +67,10 @@ def acquire_pid_lock() -> None:
             with open(PID_FILE) as f:
                 old_pid = int(f.read().strip())
             os.kill(old_pid, 0)
-            print(f"[bot] another bot.py is already running (pid {old_pid}); refusing to start", flush=True)
+            print(
+                f"[bot] another bot.py is already running (pid {old_pid}); refusing to start",
+                flush=True,
+            )
             sys.exit(0)
         except (OSError, ValueError):
             pass
@@ -79,7 +83,8 @@ def acquire_pid_lock() -> None:
 def get_token() -> str:
     out = subprocess.run(
         ["security", "find-generic-password", "-s", "org.telegram.bot-token", "-w"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     token = out.stdout.strip()
     if not token:
@@ -99,10 +104,10 @@ def call_telegram(token: str, method: str, **params) -> dict:
     url = f"https://api.telegram.org/bot{token}/{method}"
     if params:
         data = urllib.parse.urlencode(params).encode()
-        req = urllib.request.Request(url, data=data)
+        req = urllib.request.Request(url, data=data)  # noqa: S310
     else:
-        req = urllib.request.Request(url)
-    with urllib.request.urlopen(req, timeout=60) as r:
+        req = urllib.request.Request(url)  # noqa: S310
+    with urllib.request.urlopen(req, timeout=60) as r:  # noqa: S310
         return json.loads(r.read())
 
 
@@ -113,9 +118,9 @@ def call_os1(method: str, path: str, body: dict | None = None) -> dict:
     url = f"http://127.0.0.1:{port}{path}"
     data = json.dumps(body).encode() if body is not None else None
     headers = {"Content-Type": "application/json"} if body is not None else {}
-    req = urllib.request.Request(url, data=data, method=method, headers=headers)
+    req = urllib.request.Request(url, data=data, method=method, headers=headers)  # noqa: S310
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=30) as r:  # noqa: S310
             return json.loads(r.read())
     except urllib.error.HTTPError as e:
         return {"ok": False, "error": f"HTTP {e.code}: {e.read()[:300].decode(errors='replace')}"}
@@ -126,10 +131,10 @@ def call_os1(method: str, path: str, body: dict | None = None) -> dict:
 # All Samantha-via-bot actions route through the OS1 voice server's /wuphf/* bridge,
 # which proxies to localhost:7891 (the WUPHF office).
 TOOL_ROUTES = {
-    "wuphf_post":         ("POST", "/wuphf/post"),
-    "wuphf_read":         ("POST", "/wuphf/read"),
+    "wuphf_post": ("POST", "/wuphf/post"),
+    "wuphf_read": ("POST", "/wuphf/read"),
     "wuphf_list_members": ("POST", "/wuphf/members"),
-    "wuphf_wiki_search":  ("POST", "/wuphf/wiki-search"),
+    "wuphf_wiki_search": ("POST", "/wuphf/wiki-search"),
 }
 
 
@@ -157,7 +162,9 @@ def call_claude(history: list[dict], user_message: str, action_result: str | Non
     for turn in history[-8:]:
         parts.append(f"{turn['role']}: {turn['text']}")
     if action_result is not None:
-        parts.append(f"system: ACTION result was:\n{action_result}\nNow reply to the user in 1-2 sentences summarizing what happened. Quote a brief agent response if relevant.")
+        parts.append(
+            f"system: ACTION result was:\n{action_result}\nNow reply to the user in 1-2 sentences summarizing what happened. Quote a brief agent response if relevant."
+        )
     else:
         parts.append(f"user: {user_message}")
     parts.append("assistant:")
@@ -165,7 +172,9 @@ def call_claude(history: list[dict], user_message: str, action_result: str | Non
     try:
         proc = subprocess.run(
             ["claude", "-p", "--output-format", "text", full],
-            capture_output=True, text=True, timeout=180,
+            capture_output=True,
+            text=True,
+            timeout=180,
         )
         if proc.returncode != 0:
             return f"(claude error: {proc.stderr[:200] or 'rc=' + str(proc.returncode)})"
@@ -193,10 +202,8 @@ def handle_message(token: str, chat_id: int, text: str) -> None:
     history = HISTORIES.setdefault(chat_id, [])
     history.append({"role": "user", "text": text})
 
-    try:
+    with contextlib.suppress(Exception):
         call_telegram(token, "sendChatAction", chat_id=chat_id, action="typing")
-    except Exception:
-        pass
 
     reply = call_claude(history, text)
     print(f"[bot] claude: {reply[:120]}", flush=True)
@@ -213,10 +220,8 @@ def handle_message(token: str, chat_id: int, text: str) -> None:
 
         result = execute_action(action)
         print(f"[bot] action {action.get('tool')} -> {result[:120]}", flush=True)
-        try:
+        with contextlib.suppress(Exception):
             call_telegram(token, "sendChatAction", chat_id=chat_id, action="typing")
-        except Exception:
-            pass
         history.append({"role": "assistant", "text": f"ACTION: {action.get('tool')}"})
         summary = call_claude(history, "", action_result=result)
         history.append({"role": "assistant", "text": summary})
