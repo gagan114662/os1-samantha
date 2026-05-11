@@ -50,6 +50,37 @@ struct CompanyLifecycleEngineTests {
     }
 
     @Test
+    func paidLaunchRequiresLegalReadinessGate() {
+        let blocked = CompanyLifecycleEngine.decide(snapshot(
+            stage: .building,
+            distribution: activeDistribution(),
+            legal: CompanyLegalReadiness(
+                companyID: "company",
+                blockers: ["Privacy policy link is required."],
+                policyLinks: [:],
+                reviewedAt: nil,
+                approvalRequestID: nil
+            )
+        ))
+        let approved = CompanyLifecycleEngine.decide(snapshot(
+            stage: .building,
+            distribution: activeDistribution(),
+            legal: CompanyLegalReadiness(
+                companyID: "company",
+                blockers: [],
+                policyLinks: [:],
+                reviewedAt: Date(timeIntervalSince1970: 1_800_000_000),
+                approvalRequestID: "approval-legal"
+            )
+        ))
+
+        #expect(blocked.action == .hold)
+        #expect(blocked.rationale.contains("Legal launch gate blocked paid launch"))
+        #expect(approved.action == .promote)
+        #expect(approved.to == .launched)
+    }
+
+    @Test
     func portfolioRanksByEvidenceRevenueProfitAndRisk() {
         let winner = snapshot(stage: .launched, ledger: CompanyLedgerSummary(entries: [
             CompanyLedgerEntry(id: "rev", companyID: "winner", occurredAt: nil, kind: .revenue, amountUSD: 200, source: "stripe", confidence: .verified, note: "id=cs_1"),
@@ -69,6 +100,8 @@ struct CompanyLifecycleEngineTests {
         validation: CompanyValidationResult.Decision? = nil,
         ledger: CompanyLedgerSummary = .empty,
         budgetStatus: CompanyBudgetStatus? = nil,
+        distribution: CompanyDistributionSummary? = nil,
+        legal: CompanyLegalReadiness? = nil,
         failures: Int = 0,
         risk: CompanyIdea.RiskTier = .low,
         artifacts: [String] = []
@@ -93,11 +126,36 @@ struct CompanyLifecycleEngineTests {
                     reasons: [$0.rawValue]
                 )
             },
-            distribution: nil,
+            distribution: distribution,
+            legalReadiness: legal,
             failureCount: failures,
             complianceRisk: risk,
             overrideReason: nil,
             artifactPaths: artifacts
+        )
+    }
+
+    private func activeDistribution() -> CompanyDistributionSummary {
+        CompanyDistributionSummary(
+            active: [
+                CompanyGrowthCampaign(
+                    id: "campaign-1",
+                    companyID: "company",
+                    channel: .seoPages,
+                    audience: "buyers",
+                    creative: "publish paid landing page",
+                    spendLimitUSD: 0,
+                    approvalState: .approved,
+                    complianceChecks: ["claims review"],
+                    complianceDecision: .approved,
+                    rateLimitPerDay: 5,
+                    suppressionList: [],
+                    nextAction: "launch"
+                )
+            ],
+            blocked: [],
+            nextRecommendedAction: "launch",
+            revenueLedgerEntries: []
         )
     }
 }
