@@ -2081,13 +2081,18 @@ final class CodexSessionManager: ObservableObject {
         encoder.dateEncodingStrategy = .iso8601
         let manifestURL = destinationRoot.appendingPathComponent("manifest.json")
         try encoder.encode(manifest).write(to: manifestURL, options: [.atomic])
+        let integrity = CompanyStateBackupBuilder.verifyManifest(manifest, backupRoot: destinationRoot)
         appendEvent(
             kind: .stateBackupCreated,
             summary: "State backup created",
             metadata: [
                 "backupID": backupID,
                 "entries": "\(manifest.entries.count)",
-                "manifest": manifestURL.path
+                "manifest": manifestURL.path,
+                "integrity": integrity.status.rawValue,
+                "verifiedEntries": "\(integrity.verifiedEntryCount)",
+                "rpoHours": "\(manifest.recoveryPointObjectiveHours)",
+                "rtoHours": "\(manifest.recoveryTimeObjectiveHours)"
             ]
         )
         return manifest
