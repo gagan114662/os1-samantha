@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Voice-spawnable Codex Tasks. Each task = `codex exec --dangerously-bypass-approvals-and-sandbox`
-/// running in its own git worktree under ~/.os1/codex-tasks/sessions/<id>.
+/// Voice-spawnable Codex Tasks. Each task runs through a generated sandbox profile
+/// in its own git worktree under ~/.os1/codex-tasks/sessions/<id>.
 struct CodexTasksView: View {
     @Environment(\.os1Theme) private var theme
     @StateObject private var manager = CodexSessionManager.shared
@@ -29,6 +29,7 @@ struct CodexTasksView: View {
             templateBar
             approvalConsole
             eventConsole
+            metricsStrip
             if manager.sessions.isEmpty {
                 emptyPlaceholder
             } else {
@@ -450,6 +451,24 @@ struct CodexTasksView: View {
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
+    private var metricsStrip: some View {
+        let metrics = manager.metricsSnapshot()
+        return HStack(spacing: 10) {
+            Label("observability", systemImage: "chart.xyaxis.line")
+            Text("events \(metrics.eventCount)")
+            Text("success \(percentLabel(metrics.successRate))")
+            Text("errors \(percentLabel(metrics.errorRate))")
+            Text("avg \(latencyLabel(metrics.averageLatencyMS))")
+            Text("manual \(metrics.manualInterventionCount)")
+            Text("profit \(moneyLabel(metrics.profitUSD))")
+            Spacer()
+        }
+        .font(.system(.caption2, design: .monospaced))
+        .foregroundStyle(theme.palette.onCoralMuted)
+        .padding(.horizontal, 18)
+        .padding(.bottom, 8)
+    }
+
     // MARK: - Grid
 
     private var grid: some View {
@@ -657,6 +676,36 @@ struct CodexTasksView: View {
             .background(Color.black.opacity(0.3))
             .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
 
+            let events = manager.eventTimeline(companyID: session.id, limit: 12)
+            HStack {
+                Text("Run timeline")
+                    .os1Style(theme.typography.label)
+                    .foregroundStyle(theme.palette.onCoralMuted)
+                Spacer()
+                let metrics = manager.metricsSnapshot(companyID: session.id)
+                Text("success \(percentLabel(metrics.successRate)) · errors \(percentLabel(metrics.errorRate)) · avg \(latencyLabel(metrics.averageLatencyMS))")
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(theme.palette.onCoralMuted)
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    if events.isEmpty {
+                        Text("No events yet")
+                            .font(.caption)
+                            .foregroundStyle(theme.palette.onCoralMuted)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        ForEach(events) { event in
+                            eventTimelineRow(event)
+                        }
+                    }
+                }
+                .padding(8)
+            }
+            .frame(maxHeight: 150)
+            .background(theme.palette.glassFill)
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+
             Text(session.worktreePath)
                 .font(.system(.caption2, design: .monospaced))
                 .foregroundStyle(theme.palette.onCoralMuted)
@@ -675,6 +724,63 @@ struct CodexTasksView: View {
         }
         .padding(20)
         .frame(width: 760, height: 560)
+    }
+
+    private func eventTimelineRow(_ event: CompanyEvent) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                Image(systemName: eventIcon(event.kind))
+                    .foregroundStyle(eventColor(event.kind))
+                    .frame(width: 16)
+                Text(event.kind.rawValue)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(theme.palette.onCoralMuted)
+                Text(relativeAge(event.occurredAt))
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(theme.palette.onCoralMuted)
+                if let tool = event.tool {
+                    Text(tool)
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(theme.palette.onCoralMuted)
+                }
+                Spacer()
+                if let latency = event.latencyMS {
+                    Text(latencyLabel(latency))
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(theme.palette.onCoralMuted)
+                }
+            }
+            Text(event.summary)
+                .font(.caption)
+                .foregroundStyle(theme.palette.onCoralPrimary)
+                .lineLimit(2)
+            if let command = event.metadata["command"] {
+                Text(command)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(theme.palette.onCoralSecondary)
+                    .lineLimit(2)
+            } else if let output = event.outputSummary, !output.isEmpty {
+                Text(output)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(theme.palette.onCoralSecondary)
+                    .lineLimit(2)
+            }
+            HStack(spacing: 8) {
+                if let inputHash = event.inputHash {
+                    Text("input \(String(inputHash.prefix(10)))")
+                }
+                if let approvalState = event.approvalState {
+                    Text("approval \(approvalState)")
+                }
+                if let logFile = event.metadata["logFile"], !logFile.isEmpty {
+                    Text(URL(fileURLWithPath: logFile).lastPathComponent)
+                }
+            }
+            .font(.system(.caption2, design: .monospaced))
+            .foregroundStyle(theme.palette.onCoralMuted)
+        }
+        .padding(.vertical, 5)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Empty state
@@ -815,9 +921,24 @@ struct CodexTasksView: View {
         return "\(sign)$\(String(format: "%.2f", abs(amount)))"
     }
 
+    private func percentLabel(_ value: Double) -> String {
+        "\(Int((value * 100).rounded()))%"
+    }
+
+    private func latencyLabel(_ value: Int?) -> String {
+        guard let value else { return "n/a" }
+        if value < 1000 { return "\(value)ms" }
+        return String(format: "%.1fs", Double(value) / 1000.0)
+    }
+
+    private func latencyLabel(_ value: Int) -> String {
+        latencyLabel(Optional(value))
+    }
+
     private func eventIcon(_ kind: CompanyEvent.Kind) -> String {
         switch kind {
         case .companyCreated: return "building.2"
+        case .externalSideEffect: return "arrow.up.right.square"
         case .heartbeatStarted: return "play.circle"
         case .heartbeatFinished: return "checkmark.circle"
         case .heartbeatQueued: return "line.3.horizontal.decrease.circle"
@@ -839,7 +960,7 @@ struct CodexTasksView: View {
         switch kind {
         case .budgetBlocked, .companyKilled, .approvalDenied:
             return theme.palette.danger
-        case .heartbeatQueued:
+        case .heartbeatQueued, .externalSideEffect:
             return .purple
         case .companyPaused, .fleetPaused, .approvalRequested, .approvalChangesRequested:
             return .orange

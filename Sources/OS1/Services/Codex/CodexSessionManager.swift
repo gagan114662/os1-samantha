@@ -428,6 +428,10 @@ final class CodexSessionManager: ObservableObject {
             kind: .heartbeatStarted,
             companyID: id,
             summary: "Started heartbeat \(session.heartbeatCount) for \(session.title)",
+            runID: session.heartbeatLease?.id,
+            tool: "codex",
+            riskTier: session.sandboxMode.rawValue,
+            approvalState: "file-gated",
             metadata: [
                 "heartbeat": "\(session.heartbeatCount)",
                 "lifecycleStage": session.lifecycleStage.rawValue,
@@ -529,9 +533,31 @@ final class CodexSessionManager: ObservableObject {
         proc.environment = environment
         // Prompt is piped via stdin so no user text touches the shell command line.
         let codexCommand = "cat \(Self.shellEscape(promptFile)) | codex exec --dangerously-bypass-approvals-and-sandbox -"
+        let launchedCommand = session.sandboxMode == .sandbox
+            ? "/usr/bin/sandbox-exec -f \(sandboxProfileURL.path) /usr/bin/env zsh -l -c \(codexCommand)"
+            : "/usr/bin/env zsh -l -c \(codexCommand)"
         proc.arguments = session.sandboxMode == .sandbox
             ? ["-f", sandboxProfileURL.path, "/usr/bin/env", "zsh", "-l", "-c", codexCommand]
             : ["zsh", "-l", "-c", codexCommand]
+        appendEvent(
+            kind: .externalSideEffect,
+            companyID: id,
+            actor: "codex",
+            summary: "Launching \(isAudit ? "audit" : "work") heartbeat \(session.heartbeatCount)",
+            runID: session.heartbeatLease?.id,
+            tool: "codex exec",
+            inputHash: CompanyEvent.inputHash(for: prompt),
+            riskTier: session.sandboxMode.rawValue,
+            approvalState: "file-gated",
+            metadata: [
+                "heartbeat": "\(session.heartbeatCount)",
+                "command": launchedCommand,
+                "cwd": session.worktreePath,
+                "promptFile": promptFile,
+                "logFile": logFile.path,
+                "sandboxProfile": session.sandboxMode == .sandbox ? sandboxProfileURL.path : ""
+            ]
+        )
         proc.standardOutput = logHandle
         proc.standardError = logHandle
         proc.terminationHandler = { [weak self] p in
@@ -552,6 +578,25 @@ final class CodexSessionManager: ObservableObject {
             sessions[idx].exitCode = -1
             sessions[idx].heartbeatLease = nil
             persistSessions()
+            appendEvent(
+                kind: .heartbeatFinished,
+                companyID: id,
+                summary: "Heartbeat launch failed: \(error.localizedDescription)",
+                runID: session.heartbeatLease?.id,
+                tool: "codex exec",
+                inputHash: CompanyEvent.inputHash(for: prompt),
+                outputSummary: error.localizedDescription,
+                latencyMS: sessions[idx].lastHeartbeatAt.map { Int(Date().timeIntervalSince($0) * 1000) },
+                riskTier: session.sandboxMode.rawValue,
+                approvalState: "file-gated",
+                metadata: [
+                    "heartbeat": "\(session.heartbeatCount)",
+                    "exitCode": "-1",
+                    "status": CodexSession.Status.failed.rawValue,
+                    "command": launchedCommand,
+                    "logFile": logFile.path
+                ]
+            )
         }
     }
 
@@ -918,6 +963,9 @@ final class CodexSessionManager: ObservableObject {
         guard let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
         processes.removeValue(forKey: id)
         let completedHeartbeat = sessions[idx].heartbeatCount
+        let runID = sessions[idx].heartbeatLease?.id
+        let startedAt = sessions[idx].lastHeartbeatAt
+        let sandboxMode = sessions[idx].sandboxMode.rawValue
 
         // Read the tail of the log to detect transient network failures from
         // the codex CLI itself (DNS hiccups, websocket drops). Don't mark the
@@ -971,16 +1019,28 @@ final class CodexSessionManager: ObservableObject {
         sessions[idx].exitCode = exitCode
         sessions[idx].heartbeatLease = nil
         persistSessions()
+        recordHandoffEvents(
+            session: sessions[idx],
+            completedHeartbeat: completedHeartbeat,
+            runID: runID
+        )
         appendEvent(
             kind: .heartbeatFinished,
             companyID: id,
             summary: "Finished heartbeat \(completedHeartbeat) with status \(sessions[idx].status.rawValue)",
+            runID: runID,
+            tool: "codex exec",
+            outputSummary: String(logTailString.suffix(1200)),
+            latencyMS: startedAt.map { Int(Date().timeIntervalSince($0) * 1000) },
+            riskTier: sandboxMode,
+            approvalState: "file-gated",
             metadata: [
                 "heartbeat": "\(completedHeartbeat)",
                 "exitCode": "\(exitCode)",
                 "terminationReason": "\(reason)",
                 "status": sessions[idx].status.rawValue,
-                "blockedReason": sessions[idx].blockedReason ?? ""
+                "blockedReason": sessions[idx].blockedReason ?? "",
+                "logFile": logPath
             ]
         )
         if sessions[idx].status == .blocked {
@@ -990,6 +1050,57 @@ final class CodexSessionManager: ObservableObject {
         if sessions[idx].status == .idle || sessions[idx].status == .queued {
             scheduleHeartbeat(id: id)
         }
+    }
+
+    private struct HandoffCommandRun: Decodable {
+        let cmd: String
+        let exit_code: Int?
+        let stdout_snippet: String?
+    }
+
+    private struct HandoffRecord: Decodable {
+        let action_summary: String?
+        let commands_run: [HandoffCommandRun]?
+    }
+
+    private func recordHandoffEvents(session: CodexSession, completedHeartbeat: Int, runID: String?) {
+        let handoffPath = URL(fileURLWithPath: session.worktreePath)
+            .appendingPathComponent("handoff.json")
+        guard let data = try? Data(contentsOf: handoffPath) else { return }
+        let decoder = JSONDecoder()
+        guard let handoff = try? decoder.decode(HandoffRecord.self, from: data) else { return }
+
+        for command in handoff.commands_run ?? [] {
+            appendEvent(
+                kind: .externalSideEffect,
+                companyID: session.id,
+                actor: "codex",
+                summary: command.cmd,
+                runID: runID,
+                tool: "shell",
+                inputHash: CompanyEvent.inputHash(for: command.cmd),
+                outputSummary: command.stdout_snippet,
+                riskTier: session.sandboxMode.rawValue,
+                approvalState: approvalState(for: session),
+                metadata: [
+                    "heartbeat": "\(completedHeartbeat)",
+                    "command": command.cmd,
+                    "exitCode": command.exit_code.map(String.init) ?? "",
+                    "handoff": handoffPath.path,
+                    "actionSummary": handoff.action_summary ?? ""
+                ]
+            )
+        }
+    }
+
+    private func approvalState(for session: CodexSession) -> String {
+        if FileManager.default.fileExists(atPath: session.approvalGrantPath) {
+            return "granted"
+        }
+        if FileManager.default.fileExists(atPath: session.approvalRequestPath) {
+            return "requested"
+        }
+        return "file-gated"
     }
 
     private func updateLifecycleAfterHeartbeat(id: String) {
@@ -1392,6 +1503,14 @@ final class CodexSessionManager: ObservableObject {
         companyID: String? = nil,
         actor: String = "os1",
         summary: String,
+        runID: String? = nil,
+        tool: String? = nil,
+        inputHash: String? = nil,
+        outputSummary: String? = nil,
+        costUSD: Double? = nil,
+        latencyMS: Int? = nil,
+        riskTier: String? = nil,
+        approvalState: String? = nil,
         metadata: [String: String] = [:]
     ) {
         let event = CompanyEvent(
@@ -1399,6 +1518,14 @@ final class CodexSessionManager: ObservableObject {
             actor: actor,
             kind: kind,
             summary: summary,
+            runID: runID,
+            tool: tool,
+            inputHash: inputHash,
+            outputSummary: outputSummary,
+            costUSD: costUSD,
+            latencyMS: latencyMS,
+            riskTier: riskTier,
+            approvalState: approvalState,
             metadata: metadata
         )
         logQueue.async { [eventLogURL] in
@@ -1429,6 +1556,25 @@ final class CodexSessionManager: ObservableObject {
                 return try? decoder.decode(CompanyEvent.self, from: data)
             }
             .reversed()
+    }
+
+    func eventTimeline(companyID: String, limit: Int = 50) -> [CompanyEvent] {
+        recentEvents(limit: 10_000)
+            .filter { $0.companyID == companyID }
+            .prefix(max(0, limit))
+            .map { $0 }
+    }
+
+    func metricsSnapshot(companyID: String? = nil) -> CompanyMetricsSnapshot {
+        let events = recentEvents(limit: 10_000)
+            .filter { companyID == nil || $0.companyID == companyID }
+        let selectedSessions = sessions.filter { companyID == nil || $0.id == companyID }
+        let money = selectedSessions
+            .map { ledgerSummary(for: $0) }
+            .reduce((revenue: 0.0, cost: 0.0)) { partial, summary in
+                (partial.revenue + summary.revenueUSD, partial.cost + summary.costUSD)
+            }
+        return CompanyMetricsSnapshot.summarize(events: events, revenueUSD: money.revenue, costUSD: money.cost)
     }
 
     @discardableResult
