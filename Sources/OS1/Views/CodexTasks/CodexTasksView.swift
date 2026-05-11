@@ -52,7 +52,8 @@ struct CodexTasksView: View {
     // MARK: - Header
 
     private var header: some View {
-        HStack(spacing: 10) {
+        let status = manager.fleetStatus()
+        return HStack(spacing: 10) {
             Image(systemName: "square.grid.2x2.fill")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(theme.palette.onCoralPrimary)
@@ -83,13 +84,28 @@ struct CodexTasksView: View {
             .buttonStyle(.os1Secondary)
             .disabled(!manager.sessions.contains(where: { $0.status == .paused }))
 
-            Text(L10n.string("running %lld", manager.sessions.filter { $0.status == .running }.count))
+            Text(L10n.string("running %lld", status.active))
                 .os1Style(theme.typography.label)
                 .foregroundStyle(theme.palette.onCoralMuted)
-            if manager.sessions.contains(where: { $0.status == .queued }) {
-                Text(L10n.string("queued %lld", manager.sessions.filter { $0.status == .queued }.count))
+            if status.queued > 0 {
+                Text(L10n.string("queued %lld", status.queued))
                     .os1Style(theme.typography.label)
                     .foregroundStyle(theme.palette.onCoralMuted)
+            }
+            if status.blocked > 0 {
+                Text("blocked \(status.blocked)")
+                    .os1Style(theme.typography.label)
+                    .foregroundStyle(.orange)
+            }
+            if status.failed > 0 {
+                Text("failed \(status.failed)")
+                    .os1Style(theme.typography.label)
+                    .foregroundStyle(theme.palette.danger)
+            }
+            if status.profitable > 0 {
+                Text("profitable \(status.profitable)")
+                    .os1Style(theme.typography.label)
+                    .foregroundStyle(.green)
             }
         }
         .padding(.horizontal, 18)
@@ -453,6 +469,7 @@ struct CodexTasksView: View {
 
     private var metricsStrip: some View {
         let metrics = manager.metricsSnapshot()
+        let plan = manager.schedulerPlan()
         return HStack(spacing: 10) {
             Label("observability", systemImage: "chart.xyaxis.line")
             Text("events \(metrics.eventCount)")
@@ -461,6 +478,12 @@ struct CodexTasksView: View {
             Text("avg \(latencyLabel(metrics.averageLatencyMS))")
             Text("manual \(metrics.manualInterventionCount)")
             Text("profit \(moneyLabel(metrics.profitUSD))")
+            Text("scheduler start \(plan.startNowIDs.count)")
+            Text("queue \(plan.queuedIDs.count)")
+            if !plan.backpressureReasons.isEmpty {
+                Text("backpressure \(plan.backpressureReasons.joined(separator: ","))")
+                    .foregroundStyle(.orange)
+            }
             Spacer()
         }
         .font(.system(.caption2, design: .monospaced))
@@ -650,6 +673,8 @@ struct CodexTasksView: View {
                 Label(session.lifecycleStage.rawValue, systemImage: "flag.checkered")
                     .font(.caption)
                 Label(session.sandboxMode.rawValue, systemImage: "lock.shield")
+                    .font(.caption)
+                Label(session.assignedRunnerID, systemImage: "cpu")
                     .font(.caption)
             }
             .foregroundStyle(theme.palette.onCoralMuted)

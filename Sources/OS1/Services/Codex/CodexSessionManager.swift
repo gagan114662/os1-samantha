@@ -105,6 +105,7 @@ struct CodexSession: Identifiable, Codable, Hashable {
     var sandboxMode: SandboxMode = .sandbox
     var credentialAllowlist: [String] = []
     var heartbeatLease: HeartbeatLease? = nil
+    var assignedRunnerID: String = CompanyScaleScheduler.localRunnerID
 
     enum Status: String, Codable {
         case running       // a heartbeat is currently executing
@@ -164,6 +165,7 @@ extension CodexSession {
         case sandboxMode
         case credentialAllowlist
         case heartbeatLease
+        case assignedRunnerID
         case blockedReason
     }
 
@@ -190,6 +192,7 @@ extension CodexSession {
         sandboxMode = try container.decodeIfPresent(SandboxMode.self, forKey: .sandboxMode) ?? .sandbox
         credentialAllowlist = try container.decodeIfPresent([String].self, forKey: .credentialAllowlist) ?? []
         heartbeatLease = try container.decodeIfPresent(HeartbeatLease.self, forKey: .heartbeatLease)
+        assignedRunnerID = try container.decodeIfPresent(String.self, forKey: .assignedRunnerID) ?? CompanyScaleScheduler.localRunnerID
         blockedReason = try container.decodeIfPresent(String.self, forKey: .blockedReason)
     }
 }
@@ -335,7 +338,8 @@ final class CodexSessionManager: ObservableObject {
             lifecycleStage: .validating,
             sandboxMode: .sandbox,
             credentialAllowlist: [],
-            heartbeatLease: nil
+            heartbeatLease: nil,
+            assignedRunnerID: CompanyScaleScheduler.localRunnerID
         )
         var persistedSession = session
         if startPaused {
@@ -1682,6 +1686,35 @@ final class CodexSessionManager: ObservableObject {
                 (partial.revenue + summary.revenueUSD, partial.cost + summary.costUSD)
             }
         return CompanyMetricsSnapshot.summarize(events: events, revenueUSD: money.revenue, costUSD: money.cost)
+    }
+
+    func schedulerPlan(now: Date = Date()) -> CompanyHeartbeatSchedulePlan {
+        CompanyScaleScheduler.plan(sessions: sessions, now: now)
+    }
+
+    func fleetStatus() -> CompanyFleetStatus {
+        let profitable = Set(sessions.compactMap { session -> String? in
+            let summary = ledgerSummary(for: session)
+            return summary.hasVerifiedRevenue && summary.netUSD > 0 ? session.id : nil
+        })
+        return CompanyScaleScheduler.fleetStatus(sessions: sessions, profitableCompanyIDs: profitable)
+    }
+
+    func migrateCompany(id: String, toRunnerID runnerID: String) {
+        guard let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
+        let previous = sessions[idx].assignedRunnerID
+        sessions[idx] = CompanyScaleScheduler.migrate(sessions[idx], toRunnerID: runnerID)
+        persistSessions()
+        appendEvent(
+            kind: .lifecycleChanged,
+            companyID: id,
+            actor: "user",
+            summary: "Company runner changed from \(previous) to \(sessions[idx].assignedRunnerID)",
+            metadata: [
+                "fromRunnerID": previous,
+                "toRunnerID": sessions[idx].assignedRunnerID
+            ]
+        )
     }
 
     @discardableResult
