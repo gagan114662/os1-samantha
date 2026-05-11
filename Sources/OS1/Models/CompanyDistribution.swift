@@ -27,12 +27,14 @@ struct CompanyGrowthCampaign: Codable, Hashable, Identifiable {
     var spendLimitUSD: Double
     var approvalState: ApprovalState
     var complianceChecks: [String]
+    var complianceMetadata: CompanyComplianceMetadata?
+    var complianceDecision: CompanyComplianceDecision
     var rateLimitPerDay: Int
     var suppressionList: [String]
     var nextAction: String
 
     var canExecute: Bool {
-        approvalState == .approved && complianceChecks.isEmpty == false
+        approvalState == .approved && complianceChecks.isEmpty == false && complianceDecision.canRun
     }
 }
 
@@ -58,6 +60,54 @@ struct CompanyDistributionSummary: Codable, Hashable {
     var blocked: [CompanyGrowthCampaign]
     var nextRecommendedAction: String
     var revenueLedgerEntries: [CompanyLedgerEntry]
+}
+
+extension CompanyGrowthCampaign {
+    enum CodingKeys: String, CodingKey {
+        case id
+        case companyID
+        case channel
+        case audience
+        case creative
+        case spendLimitUSD
+        case approvalState
+        case complianceChecks
+        case complianceMetadata
+        case complianceDecision
+        case rateLimitPerDay
+        case suppressionList
+        case nextAction
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        companyID = try container.decode(String.self, forKey: .companyID)
+        channel = try container.decode(Channel.self, forKey: .channel)
+        audience = try container.decode(String.self, forKey: .audience)
+        creative = try container.decode(String.self, forKey: .creative)
+        spendLimitUSD = try container.decode(Double.self, forKey: .spendLimitUSD)
+        approvalState = try container.decode(ApprovalState.self, forKey: .approvalState)
+        complianceChecks = try container.decode([String].self, forKey: .complianceChecks)
+        complianceMetadata = try container.decodeIfPresent(CompanyComplianceMetadata.self, forKey: .complianceMetadata)
+        complianceDecision = try container.decodeIfPresent(CompanyComplianceDecision.self, forKey: .complianceDecision)
+            ?? CompanyComplianceEngine.evaluate(
+                action: CompanyComplianceAction(
+                    companyID: companyID,
+                    channel: CompanyDistributionEngine.complianceChannel(for: channel),
+                    proposedAction: creative,
+                    content: audience,
+                    metadata: complianceMetadata,
+                    browserPolicy: nil,
+                    targetDomain: nil,
+                    browserAction: nil,
+                    requestedCredential: nil
+                )
+            )
+        rateLimitPerDay = try container.decode(Int.self, forKey: .rateLimitPerDay)
+        suppressionList = try container.decode([String].self, forKey: .suppressionList)
+        nextAction = try container.decode(String.self, forKey: .nextAction)
+    }
 }
 
 enum CompanyDistributionEngine {
@@ -90,12 +140,28 @@ enum CompanyDistributionEngine {
         return approved
     }
 
+    static func attachCompliance(
+        to campaign: CompanyGrowthCampaign,
+        metadata: CompanyComplianceMetadata,
+        browserPolicy: CompanyBrowserAutomationPolicy? = nil
+    ) -> CompanyGrowthCampaign {
+        var checked = campaign
+        checked.complianceMetadata = metadata
+        checked.complianceDecision = complianceDecision(
+            campaign: checked,
+            metadata: metadata,
+            browserPolicy: browserPolicy
+        )
+        return checked
+    }
+
     static func blocksSend(
         campaign: CompanyGrowthCampaign,
         recipient: String,
         sentToday: Int
     ) -> Bool {
         campaign.approvalState != .approved ||
+        !campaign.complianceDecision.canRun ||
         campaign.suppressionList.contains(recipient.lowercased()) ||
         sentToday >= campaign.rateLimitPerDay
     }
@@ -118,6 +184,8 @@ enum CompanyDistributionEngine {
             spendLimitUSD: spend,
             approvalState: approval,
             complianceChecks: complianceChecks(channel: channel),
+            complianceMetadata: nil,
+            complianceDecision: complianceDecision(campaignChannel: channel, companyID: companyID, audience: audience, creative: creative),
             rateLimitPerDay: channel == .emailDrafts || channel == .partnerOutreach ? 25 : 5,
             suppressionList: suppressionList.map { $0.lowercased() },
             nextAction: approval == .approvalRequired ? "Request approval before \(channel.rawValue)" : "Prepare \(channel.rawValue) draft"
@@ -146,6 +214,57 @@ enum CompanyDistributionEngine {
             return ["budget approval", "ad policy review", "tracking disclosure"]
         case .seoPages, .directories:
             return ["privacy-safe analytics", "claims review", "no fake reviews"]
+        }
+    }
+
+    private static func complianceDecision(
+        campaign: CompanyGrowthCampaign,
+        metadata: CompanyComplianceMetadata,
+        browserPolicy: CompanyBrowserAutomationPolicy?
+    ) -> CompanyComplianceDecision {
+        complianceDecision(
+            campaignChannel: campaign.channel,
+            companyID: campaign.companyID,
+            audience: campaign.audience,
+            creative: campaign.creative,
+            metadata: metadata,
+            browserPolicy: browserPolicy
+        )
+    }
+
+    private static func complianceDecision(
+        campaignChannel: CompanyGrowthCampaign.Channel,
+        companyID: String,
+        audience: String,
+        creative: String,
+        metadata: CompanyComplianceMetadata? = nil,
+        browserPolicy: CompanyBrowserAutomationPolicy? = nil
+    ) -> CompanyComplianceDecision {
+        CompanyComplianceEngine.evaluate(
+            action: CompanyComplianceAction(
+                companyID: companyID,
+                channel: complianceChannel(for: campaignChannel),
+                proposedAction: creative,
+                content: audience,
+                metadata: metadata,
+                browserPolicy: browserPolicy,
+                targetDomain: nil,
+                browserAction: nil,
+                requestedCredential: nil
+            )
+        )
+    }
+
+    static func complianceChannel(for channel: CompanyGrowthCampaign.Channel) -> CompanyComplianceChannel {
+        switch channel {
+        case .emailDrafts, .partnerOutreach, .warmIntros:
+            return .email
+        case .marketplace:
+            return .marketplace
+        case .contentPosts, .seoPages, .directories:
+            return .publicContent
+        case .paidExperiment:
+            return .payments
         }
     }
 

@@ -5,7 +5,7 @@ import Testing
 struct CompanyDistributionEngineTests {
     @Test
     func everyGrowthActionHasCompanyCampaignChannelAndApprovalState() {
-        let manifest = CompanyFactory.manifest(companyID: "company", template: CompanyTemplateCatalog.all[0], worktreePath: "/tmp/company")
+        let manifest = manifest()
         let campaigns = CompanyDistributionEngine.proposedCampaigns(companyID: "company", manifest: manifest)
 
         #expect(!campaigns.isEmpty)
@@ -15,31 +15,36 @@ struct CompanyDistributionEngineTests {
             #expect(!campaign.channel.rawValue.isEmpty)
             #expect(!campaign.approvalState.rawValue.isEmpty)
             #expect(!campaign.complianceChecks.isEmpty)
+            #expect(campaign.complianceDecision.status == .blocked)
         }
     }
 
     @Test
     func unapprovedOutboundMessagesAreBlocked() {
-        let manifest = CompanyFactory.manifest(companyID: "company", template: CompanyTemplateCatalog.all[0], worktreePath: "/tmp/company")
-        let email = CompanyDistributionEngine.proposedCampaigns(companyID: "company", manifest: manifest)
+        let email = CompanyDistributionEngine.proposedCampaigns(companyID: "company", manifest: manifest())
             .first { $0.channel == .emailDrafts }!
 
         #expect(email.approvalState == .approvalRequired)
         #expect(CompanyDistributionEngine.blocksSend(campaign: email, recipient: "buyer@example.com", sentToday: 0))
 
         let approved = CompanyDistributionEngine.approve(email)
-        #expect(!CompanyDistributionEngine.blocksSend(campaign: approved, recipient: "buyer@example.com", sentToday: 0))
+        #expect(CompanyDistributionEngine.blocksSend(campaign: approved, recipient: "buyer@example.com", sentToday: 0))
+
+        let compliant = CompanyDistributionEngine.attachCompliance(to: approved, metadata: compliantMetadata())
+        #expect(!CompanyDistributionEngine.blocksSend(campaign: compliant, recipient: "buyer@example.com", sentToday: 0))
     }
 
     @Test
     func suppressionListAndRateLimitBlockApprovedCampaigns() {
-        let manifest = CompanyFactory.manifest(companyID: "company", template: CompanyTemplateCatalog.all[0], worktreePath: "/tmp/company")
-        let campaign = CompanyDistributionEngine.approve(
-            CompanyDistributionEngine.proposedCampaigns(
-                companyID: "company",
-                manifest: manifest,
-                suppressionList: ["optout@example.com"]
-            ).first { $0.channel == .emailDrafts }!
+        let campaign = CompanyDistributionEngine.attachCompliance(
+            to: CompanyDistributionEngine.approve(
+                CompanyDistributionEngine.proposedCampaigns(
+                    companyID: "company",
+                    manifest: manifest(),
+                    suppressionList: ["optout@example.com"]
+                ).first { $0.channel == .emailDrafts }!
+            ),
+            metadata: compliantMetadata()
         )
 
         #expect(CompanyDistributionEngine.blocksSend(campaign: campaign, recipient: "optout@example.com", sentToday: 0))
@@ -48,8 +53,9 @@ struct CompanyDistributionEngineTests {
 
     @Test
     func resultsProduceLedgerEntriesAndSummaryMetrics() {
-        let manifest = CompanyFactory.manifest(companyID: "company", template: CompanyTemplateCatalog.all[0], worktreePath: "/tmp/company")
-        let campaigns = CompanyDistributionEngine.proposedCampaigns(companyID: "company", manifest: manifest).map(CompanyDistributionEngine.approve)
+        let campaigns = CompanyDistributionEngine.proposedCampaigns(companyID: "company", manifest: manifest())
+            .map(CompanyDistributionEngine.approve)
+            .map { CompanyDistributionEngine.attachCompliance(to: $0, metadata: compliantMetadata()) }
         let result = CompanyGrowthResult(
             companyID: "company",
             campaignID: campaigns[0].id,
@@ -68,5 +74,57 @@ struct CompanyDistributionEngineTests {
         #expect(summary.revenueLedgerEntries.contains { $0.kind == .revenue && $0.amountUSD == 50 })
         #expect(summary.revenueLedgerEntries.contains { $0.kind == .cost && $0.amountUSD == 10 })
         #expect(result.conversionRate == 0.1)
+    }
+
+    @Test
+    func outboundCampaignsCannotExecuteWithoutPassingCompliancePolicy() {
+        let email = CompanyDistributionEngine.proposedCampaigns(companyID: "company", manifest: manifest())
+            .first { $0.channel == .emailDrafts }!
+
+        let approvedOnly = CompanyDistributionEngine.approve(email)
+        let compliant = CompanyDistributionEngine.attachCompliance(to: approvedOnly, metadata: compliantMetadata())
+
+        #expect(!approvedOnly.canExecute)
+        #expect(approvedOnly.complianceDecision.status == .blocked)
+        #expect(compliant.canExecute)
+    }
+
+    @Test
+    func legacyCampaignsDecodeWithComplianceDecisionDefaults() throws {
+        let json = """
+        {
+          "id": "company-emailDrafts",
+          "companyID": "company",
+          "channel": "emailDrafts",
+          "audience": "Small business owners",
+          "creative": "Draft first 25 customer emails without sending.",
+          "spendLimitUSD": 0,
+          "approvalState": "approved",
+          "complianceChecks": ["CAN-SPAM footer"],
+          "rateLimitPerDay": 25,
+          "suppressionList": [],
+          "nextAction": "Prepare emailDrafts draft"
+        }
+        """.data(using: .utf8)!
+
+        let decoded = try JSONDecoder().decode(CompanyGrowthCampaign.self, from: json)
+
+        #expect(decoded.complianceDecision.status == .blocked)
+        #expect(!decoded.canExecute)
+    }
+
+    private func manifest() -> CompanyFactoryManifest {
+        CompanyFactory.manifest(companyID: "company", template: nil, worktreePath: "/tmp/company")
+    }
+
+    private func compliantMetadata() -> CompanyComplianceMetadata {
+        CompanyComplianceMetadata(
+            legalBasis: "legitimate-interest",
+            unsubscribePath: "Reply unsubscribe or use /unsubscribe",
+            disclosureText: "Commercial outreach from the company",
+            targetAudience: "Small business owners",
+            contactSource: "manually sourced first-party list",
+            dataRetentionPolicy: "Delete non-responders after 30 days"
+        )
     }
 }

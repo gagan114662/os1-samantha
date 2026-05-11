@@ -415,7 +415,8 @@ struct CodexTasksView: View {
     }
 
     private func approvalCard(_ request: CompanyApprovalRequest) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let compliance = manager.complianceDecision(for: request)
+        return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Image(systemName: "exclamationmark.shield")
                     .foregroundStyle(approvalColor(request.riskTier))
@@ -451,11 +452,25 @@ struct CodexTasksView: View {
             .foregroundStyle(theme.palette.onCoralMuted)
             .lineLimit(1)
 
+            if compliance.status != .approved {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label(compliance.status.rawValue, systemImage: "shield.lefthalf.filled.badge.checkmark")
+                        .foregroundStyle(compliance.status == .blocked ? theme.palette.danger : .orange)
+                    ForEach(compliance.findings.prefix(2)) { finding in
+                        Text(finding.fix)
+                            .font(.caption2)
+                            .foregroundStyle(theme.palette.onCoralSecondary)
+                            .lineLimit(2)
+                    }
+                }
+            }
+
             HStack(spacing: 6) {
                 Button(L10n.string("Approve 4h")) {
                     manager.approve(request: request, hours: 4)
                 }
                 .buttonStyle(.os1Primary)
+                .disabled(compliance.status == .blocked)
 
                 Button(L10n.string("Deny")) {
                     manager.deny(request: request)
@@ -981,12 +996,20 @@ struct CodexTasksView: View {
                             .foregroundStyle(theme.palette.onCoralMuted)
                     }
                     ForEach(campaigns.prefix(4)) { campaign in
-                        HStack {
-                            Label(campaign.channel.rawValue, systemImage: campaign.canExecute ? "paperplane.circle" : "lock.circle")
-                            Spacer()
-                            Text(campaign.approvalState.rawValue)
-                                .font(.system(.caption2, design: .monospaced))
-                                .foregroundStyle(campaign.canExecute ? .green : .orange)
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack {
+                                Label(campaign.channel.rawValue, systemImage: campaign.canExecute ? "paperplane.circle" : "lock.circle")
+                                Spacer()
+                                Text(campaign.complianceDecision.status.rawValue)
+                                    .font(.system(.caption2, design: .monospaced))
+                                    .foregroundStyle(campaign.canExecute ? .green : .orange)
+                            }
+                            if let fix = campaign.complianceDecision.fixes.first {
+                                Text(fix)
+                                    .font(.caption2)
+                                    .foregroundStyle(theme.palette.onCoralSecondary)
+                                    .lineLimit(1)
+                            }
                         }
                     }
                     Text(distribution.nextRecommendedAction)
@@ -1307,6 +1330,8 @@ struct CodexTasksView: View {
         case .companyResumed, .fleetResumed: return "arrow.clockwise.circle"
         case .companyKilled: return "xmark.octagon"
         case .secretAccessed: return "key"
+        case .complianceChecked: return "shield.checkered"
+        case .complianceBlocked: return "shield.slash"
         case .approvalRequested: return "checkmark.shield"
         case .approvalApproved: return "checkmark.seal"
         case .approvalDenied: return "xmark.shield"
@@ -1318,7 +1343,7 @@ struct CodexTasksView: View {
 
     private func eventColor(_ kind: CompanyEvent.Kind) -> Color {
         switch kind {
-        case .budgetBlocked, .companyKilled, .approvalDenied:
+        case .budgetBlocked, .companyKilled, .approvalDenied, .complianceBlocked:
             return theme.palette.danger
         case .heartbeatQueued, .externalSideEffect:
             return .purple
@@ -1326,7 +1351,7 @@ struct CodexTasksView: View {
             return .orange
         case .heartbeatStarted:
             return .yellow
-        case .heartbeatFinished, .lifecycleChanged, .companyResumed, .fleetResumed, .approvalApproved, .stateBackupCreated, .ledgerEntryRecorded:
+        case .heartbeatFinished, .lifecycleChanged, .companyResumed, .fleetResumed, .approvalApproved, .stateBackupCreated, .ledgerEntryRecorded, .complianceChecked:
             return .green
         case .companyCreated, .userInstruction, .secretAccessed:
             return theme.palette.onCoralMuted
