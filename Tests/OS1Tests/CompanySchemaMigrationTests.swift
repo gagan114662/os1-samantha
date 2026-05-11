@@ -90,6 +90,19 @@ struct CompanySchemaMigrationTests {
         #expect(document.contains("rollback copy"))
     }
 
+    @Test
+    func migrationRegistryTracksNoopMigrationsAndDowngradeQuarantine() throws {
+        let envelope = CompanyPersistedArtifactEnvelope(version: 1, schema: "CompanyLedgerEntry", payload: ["id": "ledger-1"])
+        let data = try JSONEncoder().encode(envelope)
+        let decoded = try JSONDecoder().decode(CompanyPersistedArtifactEnvelope<[String: String]>.self, from: data)
+        let registry = CompanySchemaMigrationRegistry.current
+
+        #expect(decoded.schema == "CompanyLedgerEntry")
+        #expect(registry.pendingMigrationCount(schema: "CodexSession", version: 2) >= 1)
+        #expect(registry.quarantineMessage(schema: "CodexSession", version: 99)?.contains("supports up to v3") == true)
+        #expect(registry.migrations.contains { $0.schema == "CompanyLedgerEntry" && $0.fromVersion == $0.toVersion })
+    }
+
     private func fixtureSession(id: String) -> CodexSession {
         CodexSession(
             id: id,

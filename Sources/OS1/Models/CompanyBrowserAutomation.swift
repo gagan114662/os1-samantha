@@ -37,6 +37,10 @@ struct CompanyBrowserSafetyPolicy: Codable, Hashable {
         return .browser
     }
 
+    static func requiresStealth(for domain: String) -> Bool {
+        consumerPlatformDomains.contains(normalizeDomain(domain))
+    }
+
     static func normalizeDomain(_ domain: String) -> String {
         let trimmed = domain
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -51,15 +55,72 @@ struct CompanyBrowserSafetyPolicy: Codable, Hashable {
     }
 
     private static let apiFirstDomains: Set<String> = [
+        "api.linkedin.com",
+        "api.twitter.com",
         "api.github.com",
+        "graph.facebook.com",
         "github.com",
         "gmail.com",
         "googleapis.com",
+        "linkedin.com",
+        "oauth.reddit.com",
+        "open.tiktokapis.com",
+        "reddit.com",
         "slack.com",
         "stripe.com",
         "shopify.com",
+        "twitter.com",
+        "x.com",
+        "youtube.com",
+        "youtubei.googleapis.com",
         "youtube.googleapis.com"
     ]
+
+    private static let consumerPlatformDomains: Set<String> = [
+        "x.com",
+        "twitter.com",
+        "instagram.com",
+        "tiktok.com",
+        "linkedin.com",
+        "pinterest.com",
+        "reddit.com"
+    ]
+}
+
+struct CompanyBrowserStealthProfile: Codable, Hashable {
+    enum HumanPaceProfile: String, Codable, CaseIterable, Hashable {
+        case fast
+        case normal
+        case deliberate
+
+        var delayRangeSeconds: ClosedRange<Double> {
+            switch self {
+            case .fast: return 0.7...1.8
+            case .normal: return 1.8...4.5
+            case .deliberate: return 4.0...9.0
+            }
+        }
+    }
+
+    enum CaptchaHandoff: String, Codable, CaseIterable, Hashable {
+        case abortAndAskOperator
+        case manualAnnotate
+    }
+
+    var companyID: String
+    var userAgentPool: [String]
+    var proxyEndpoint: URL?
+    var humanPaceProfile: HumanPaceProfile
+    var cookieJarPath: URL
+    var captchaHandoff: CaptchaHandoff
+
+    func userAgent(forSessionOrdinal ordinal: Int) -> String {
+        guard !userAgentPool.isEmpty else {
+            return "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15"
+        }
+        let index = abs(ordinal) % userAgentPool.count
+        return userAgentPool[index]
+    }
 }
 
 struct CompanyBrowserAction: Codable, Hashable, Identifiable {
@@ -95,6 +156,8 @@ struct CompanyBrowserActionPlan: Codable, Hashable {
     var blockers: [String]
     var traceRequirement: CompanyBrowserTraceRequirement
     var recovery: CompanyBrowserRecovery
+    var stealthProfileRequired: Bool
+    var selectedUserAgent: String?
 
     var canExecuteWithBrowser: Bool {
         status == .ready && blockers.isEmpty
@@ -172,7 +235,9 @@ struct CompanyBrowserRecovery: Codable, Hashable {
 enum CompanyBrowserAutomationEngine {
     static func plan(
         action: CompanyBrowserAction,
-        policy: CompanyBrowserSafetyPolicy
+        policy: CompanyBrowserSafetyPolicy,
+        stealthProfile: CompanyBrowserStealthProfile? = nil,
+        sessionOrdinal: Int = 0
     ) -> CompanyBrowserActionPlan {
         var blockers: [String] = []
         if !policy.approvedDomains.map(CompanyBrowserSafetyPolicy.normalizeDomain).contains(CompanyBrowserSafetyPolicy.normalizeDomain(action.domain)) {
@@ -184,6 +249,11 @@ enum CompanyBrowserAutomationEngine {
         if (action.selector?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
             && action.semanticTarget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             blockers.append("Browser action needs a selector or semantic element target.")
+        }
+        let normalizedDomain = CompanyBrowserSafetyPolicy.normalizeDomain(action.domain)
+        let stealthRequired = CompanyBrowserSafetyPolicy.requiresStealth(for: normalizedDomain)
+        if stealthRequired, stealthProfile == nil {
+            blockers.append("stealth profile required")
         }
 
         let preferred = policy.preferredIntegration(for: action.domain)
@@ -202,7 +272,9 @@ enum CompanyBrowserAutomationEngine {
             preferredIntegration: preferred,
             blockers: blockers,
             traceRequirement: .replayable,
-            recovery: status == .blocked ? recovery(for: .domainDenied) : recovery(for: .unknown)
+            recovery: status == .blocked ? recovery(for: .domainDenied) : recovery(for: .unknown),
+            stealthProfileRequired: stealthRequired,
+            selectedUserAgent: stealthProfile?.userAgent(forSessionOrdinal: sessionOrdinal)
         )
     }
 
@@ -250,4 +322,51 @@ enum CompanyBrowserAutomationEngine {
             return .init(decision: .blockedNeedsHuman, reason: "Unknown browser failure", nextAction: "Attach screenshot and DOM context before asking for review.", requiresHuman: true)
         }
     }
+
+    static func captchaHandoff(
+        trace: CompanyBrowserTrace,
+        approvalsDirectory: URL,
+        now: Date = Date()
+    ) throws -> (approvalFile: URL, event: CompanyEvent) {
+        try FileManager.default.createDirectory(at: approvalsDirectory, withIntermediateDirectories: true)
+        let approvalFile = approvalsDirectory.appendingPathComponent("captcha-\(trace.sessionID).json")
+        let payload = CaptchaApprovalRequest(
+            id: "captcha-\(trace.sessionID)",
+            companyID: trace.companyID,
+            sessionID: trace.sessionID,
+            domain: trace.domain,
+            screenshotPath: trace.screenshotPath,
+            domSnapshotPath: trace.domSnapshotPath,
+            createdAt: now,
+            status: "paused"
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(payload).write(to: approvalFile, options: .atomic)
+        let event = CompanyEvent(
+            occurredAt: now,
+            companyID: trace.companyID,
+            kind: .companyPaused,
+            summary: "Company paused for captcha handoff on \(trace.domain)",
+            tool: "browser-automation",
+            approvalState: "captcha-handoff",
+            metadata: [
+                "sessionID": trace.sessionID,
+                "domain": trace.domain,
+                "approvalFile": approvalFile.path
+            ]
+        )
+        return (approvalFile, event)
+    }
+}
+
+struct CaptchaApprovalRequest: Codable, Hashable, Identifiable {
+    var id: String
+    var companyID: String
+    var sessionID: String
+    var domain: String
+    var screenshotPath: String?
+    var domSnapshotPath: String?
+    var createdAt: Date
+    var status: String
 }

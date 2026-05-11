@@ -130,4 +130,21 @@ struct CompanyAccessControlTests {
             #expect(CompanyPermissionGate.authorize(actor: actor, action: action).isAllowed == shouldAllow)
         }
     }
+
+    @Test
+    func mediaProviderAllowlistBlocksUnapprovedModalities() {
+        let locked = CompanyAccessControl.lockedDown(companyID: "co-1")
+        #expect(!locked.allowsMediaProvider("elevenlabs-tts", modality: .tts))
+
+        let allowed = CompanyAccessControl(
+            companyID: "co-1",
+            mediaProviderAllowlist: ["elevenlabs-tts"],
+            seoProviderAllowlist: [],
+            embeddingProviderAllowlist: [],
+            experimentationEnabled: false
+        )
+
+        #expect(allowed.allowsMediaProvider("elevenlabs-tts", modality: .tts))
+        #expect(!allowed.allowsMediaProvider("elevenlabs-tts", modality: .video))
+    }
 }

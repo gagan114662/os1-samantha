@@ -43,6 +43,9 @@ final class ConnectorsViewModel: ObservableObject {
         let slug: String
         let name: String
         let description: String?
+        let tag: ComposioToolkitMeta.Tag
+        let riskTier: ComposioToolkitMeta.RiskTier
+        let requiredScopes: [String]
         let status: ToolkitConnectionStatus
         let accounts: [ComposioConnectedAccountSummary]
 
@@ -257,6 +260,9 @@ final class ConnectorsViewModel: ObservableObject {
                         slug: kit.slug,
                         name: kit.name,
                         description: kit.description,
+                        tag: kit.tag,
+                        riskTier: kit.riskTier,
+                        requiredScopes: kit.requiredScopes,
                         status: status,
                         accounts: accounts
                     )
@@ -271,6 +277,13 @@ final class ConnectorsViewModel: ObservableObject {
                 // Keep prior toolkits visible so a transient error
                 // doesn't blank the panel out.
             }
+        }
+    }
+
+    var groupedToolkits: [(tag: ComposioToolkitMeta.Tag, toolkits: [ToolkitDisplay])] {
+        ComposioToolkitMeta.Tag.allCases.compactMap { tag in
+            let kits = toolkits.filter { $0.tag == tag }
+            return kits.isEmpty ? nil : (tag, kits)
         }
     }
 

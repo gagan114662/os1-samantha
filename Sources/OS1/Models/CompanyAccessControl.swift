@@ -329,3 +329,48 @@ enum CompanyPermissionGate {
         )
     }
 }
+
+struct CompanyAccessControl: Codable, Hashable {
+    var companyID: String
+    var mediaProviderAllowlist: Set<String>
+    var seoProviderAllowlist: Set<String>
+    var embeddingProviderAllowlist: Set<String>
+    var analyticsSourceAllowlist: Set<String> = []
+    var paymentProviderAllowlist: Set<String> = []
+    var espProviderAllowlist: Set<String> = []
+    var marketplaceAllowlist: Set<String> = []
+    var hostingProviderAllowlist: Set<String> = []
+    var registrarAllowlist: Set<String> = []
+    var crmProviderAllowlist: Set<String> = []
+    var supportProviderAllowlist: Set<String> = []
+    var storageProviderAllowlist: Set<String> = []
+    var adProviderAllowlist: Set<String> = []
+    var enrichmentProviderAllowlist: Set<String> = []
+    var bookingProviderAllowlist: Set<String> = []
+    var voiceProviderAllowlist: Set<String> = []
+    var courseCommunityProviderAllowlist: Set<String> = []
+    var reviewProviderAllowlist: Set<String> = []
+    var referralPayoutProviderAllowlist: Set<String> = []
+    var entityProviderAllowlist: Set<String> = []
+    var bankingProviderAllowlist: Set<String> = []
+    var clientDataAccessAllowlist: Set<String> = []
+    var experimentationEnabled: Bool
+
+    static func lockedDown(companyID: String) -> CompanyAccessControl {
+        CompanyAccessControl(
+            companyID: companyID,
+            mediaProviderAllowlist: [],
+            seoProviderAllowlist: [],
+            embeddingProviderAllowlist: [],
+            experimentationEnabled: false
+        )
+    }
+
+    func allowsMediaProvider(_ slug: String, modality: ProviderCatalogEntry.Modality? = nil) -> Bool {
+        guard mediaProviderAllowlist.contains(slug) else { return false }
+        if let modality, let entry = ProviderCatalog.entry(for: slug) {
+            return entry.modality == modality
+        }
+        return true
+    }
+}

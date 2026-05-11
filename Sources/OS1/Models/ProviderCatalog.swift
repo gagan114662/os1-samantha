@@ -30,11 +30,46 @@ struct ProviderCatalogEntry: Identifiable, Equatable, Sendable {
     enum Kind: Equatable, Sendable {
         case builtin(typeKey: String)
         case customProvider(configName: String)
+        case mediaProvider(modality: Modality, freeTierQuota: Quota?)
+    }
+
+    enum Modality: String, CaseIterable, Equatable, Sendable {
+        case text
+        case image
+        case video
+        case tts
+        case voiceClone
+        case music
+        case avatar
+        case render
+    }
+
+    struct Quota: Equatable, Sendable {
+        let unit: String
+        let amount: Int
     }
 
     enum Validation: Equatable, Sendable {
         case modelsEndpoint(path: String)
         case skip(reason: String)
+    }
+
+    var modality: Modality {
+        switch kind {
+        case .builtin, .customProvider:
+            return .text
+        case .mediaProvider(let modality, _):
+            return modality
+        }
+    }
+
+    var freeTierQuota: Quota? {
+        switch kind {
+        case .builtin, .customProvider:
+            return nil
+        case .mediaProvider(_, let quota):
+            return quota
+        }
     }
 }
 
@@ -132,6 +167,104 @@ enum ProviderCatalog {
             // the base URL so the path is "/models" (the suffix appends
             // to baseURL.path).
             validation: .modelsEndpoint(path: "/models"),
+            supportsOAuth: false
+        ),
+        ProviderCatalogEntry(
+            slug: "fal-ai",
+            displayName: "Fal AI",
+            tagline: "Gateway for image and video generation models.",
+            symbolName: "film.stack",
+            keyPrefixHint: "fal_…",
+            dashboardURL: URL(string: "https://fal.ai/dashboard/keys")!,
+            docsURL: URL(string: "https://fal.ai/docs")!,
+            envVar: "FAL_KEY",
+            baseURL: URL(string: "https://fal.run")!,
+            kind: .mediaProvider(modality: .video, freeTierQuota: .init(unit: "credits", amount: 0)),
+            validation: .skip(reason: "Fal provider validation is model-specific; save and probe at first call."),
+            supportsOAuth: false
+        ),
+        ProviderCatalogEntry(
+            slug: "replicate",
+            displayName: "Replicate",
+            tagline: "Hosted image, video, and audio model inference.",
+            symbolName: "square.stack.3d.up",
+            keyPrefixHint: "r8_…",
+            dashboardURL: URL(string: "https://replicate.com/account/api-tokens")!,
+            docsURL: URL(string: "https://replicate.com/docs")!,
+            envVar: "REPLICATE_API_TOKEN",
+            baseURL: URL(string: "https://api.replicate.com/v1")!,
+            kind: .mediaProvider(modality: .image, freeTierQuota: nil),
+            validation: .modelsEndpoint(path: "/models"),
+            supportsOAuth: false
+        ),
+        ProviderCatalogEntry(
+            slug: "elevenlabs-tts",
+            displayName: "ElevenLabs TTS",
+            tagline: "Text-to-speech for narration and voiceover assets.",
+            symbolName: "waveform",
+            keyPrefixHint: "sk_…",
+            dashboardURL: URL(string: "https://elevenlabs.io/app/settings/api-keys")!,
+            docsURL: URL(string: "https://elevenlabs.io/docs/api-reference/introduction")!,
+            envVar: "ELEVENLABS_API_KEY",
+            baseURL: URL(string: "https://api.elevenlabs.io/v1")!,
+            kind: .mediaProvider(modality: .tts, freeTierQuota: .init(unit: "characters", amount: 10000)),
+            validation: .modelsEndpoint(path: "/models"),
+            supportsOAuth: false
+        ),
+        ProviderCatalogEntry(
+            slug: "elevenlabs-voice-clone",
+            displayName: "ElevenLabs Voice Clone",
+            tagline: "Approved voice cloning workflows with per-company allowlists.",
+            symbolName: "person.wave.2.fill",
+            keyPrefixHint: "sk_…",
+            dashboardURL: URL(string: "https://elevenlabs.io/app/settings/api-keys")!,
+            docsURL: URL(string: "https://elevenlabs.io/docs/api-reference/voices")!,
+            envVar: "ELEVENLABS_VOICE_CLONE_API_KEY",
+            baseURL: URL(string: "https://api.elevenlabs.io/v1")!,
+            kind: .mediaProvider(modality: .voiceClone, freeTierQuota: nil),
+            validation: .modelsEndpoint(path: "/voices"),
+            supportsOAuth: false
+        ),
+        ProviderCatalogEntry(
+            slug: "suno",
+            displayName: "Suno",
+            tagline: "Music generation provider for short-form content assets.",
+            symbolName: "music.note",
+            keyPrefixHint: "…",
+            dashboardURL: URL(string: "https://suno.com/account")!,
+            docsURL: URL(string: "https://docs.sunoapi.org")!,
+            envVar: "SUNO_API_KEY",
+            baseURL: URL(string: "https://api.sunoapi.org/api/v1")!,
+            kind: .mediaProvider(modality: .music, freeTierQuota: nil),
+            validation: .skip(reason: "Suno-compatible gateways vary; validate during provider-specific calls."),
+            supportsOAuth: false
+        ),
+        ProviderCatalogEntry(
+            slug: "heygen",
+            displayName: "HeyGen",
+            tagline: "Avatar and talking-head video generation.",
+            symbolName: "person.crop.rectangle.stack",
+            keyPrefixHint: "…",
+            dashboardURL: URL(string: "https://app.heygen.com/settings?nav=API")!,
+            docsURL: URL(string: "https://docs.heygen.com")!,
+            envVar: "HEYGEN_API_KEY",
+            baseURL: URL(string: "https://api.heygen.com/v2")!,
+            kind: .mediaProvider(modality: .avatar, freeTierQuota: nil),
+            validation: .skip(reason: "HeyGen health probes require account-specific API permissions."),
+            supportsOAuth: false
+        ),
+        ProviderCatalogEntry(
+            slug: "json2video",
+            displayName: "JSON2Video",
+            tagline: "Render orchestrator for assembling short-form videos from structured timelines.",
+            symbolName: "timeline.selection",
+            keyPrefixHint: "…",
+            dashboardURL: URL(string: "https://json2video.com/dashboard")!,
+            docsURL: URL(string: "https://json2video.com/docs")!,
+            envVar: "JSON2VIDEO_API_KEY",
+            baseURL: URL(string: "https://api.json2video.com/v2")!,
+            kind: .mediaProvider(modality: .render, freeTierQuota: nil),
+            validation: .skip(reason: "Render validation should be a dry-run render, not a save-time probe."),
             supportsOAuth: false
         )
     ]

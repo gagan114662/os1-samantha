@@ -9,6 +9,11 @@ enum CompanyIntegrationDomain: String, Codable, CaseIterable, Hashable {
     case hosting
     case domains
     case support
+    case social
+    case video
+    case audio
+    case affiliate
+    case marketplace
 }
 
 enum CompanyIntegrationPathKind: String, Codable, CaseIterable, Hashable {

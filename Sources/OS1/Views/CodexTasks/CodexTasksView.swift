@@ -10,6 +10,7 @@ struct CodexTasksView: View {
     @State private var newCompanyName: String = ""
     @State private var newCadenceMinutes: Int = 15
     @State private var templateSearchText: String = ""
+    @State private var selectedTemplatePlatform: String = "all"
     @State private var selectedTemplateID: String = CompanyTemplateCatalog.all.first?.id ?? ""
     @State private var bulkLaunchLimit: Int = 10
     @State private var bulkLaunchStartPaused: Bool = true
@@ -202,6 +203,14 @@ struct CodexTasksView: View {
                     )
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
+                Picker("Platform", selection: $selectedTemplatePlatform) {
+                    Text("All").tag("all")
+                    ForEach(CompanyTemplate.Platform.allCases, id: \.self) { platform in
+                        Text(platform.rawValue).tag(platform.rawValue)
+                    }
+                }
+                .frame(width: 130)
+
                 Picker(L10n.string("Template"), selection: $selectedTemplateID) {
                     ForEach(filteredTemplates) { template in
                         Text(template.title).tag(template.id)
@@ -288,8 +297,11 @@ struct CodexTasksView: View {
 
     private var filteredTemplates: [CompanyTemplate] {
         let query = templateSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else { return CompanyTemplateCatalog.all }
-        return CompanyTemplateCatalog.all.filter { $0.searchText.contains(query) }
+        return CompanyTemplateCatalog.all.filter { template in
+            let platformMatches = selectedTemplatePlatform == "all" || template.platform?.rawValue == selectedTemplatePlatform
+            let queryMatches = query.isEmpty || template.searchText.contains(query)
+            return platformMatches && queryMatches
+        }
     }
 
     private var selectedTemplate: CompanyTemplate? {
@@ -1592,6 +1604,8 @@ struct CodexTasksView: View {
         case .stateBackupCreated: return "externaldrive.badge.checkmark"
         case .ledgerEntryRecorded: return "dollarsign.circle"
         case .untrustedContentInfluencedDecision: return "exclamationmark.shield"
+        case .driftDetected: return "point.3.connected.trianglepath.dotted"
+        case .experimentDecided: return "chart.line.uptrend.xyaxis"
         }
     }
 
@@ -1602,13 +1616,15 @@ struct CodexTasksView: View {
         case .heartbeatQueued, .externalSideEffect, .permissionChanged, .governanceDecisionRecorded:
             return .purple
         case .companyPaused, .fleetPaused, .approvalRequested, .approvalChangesRequested,
-             .untrustedContentInfluencedDecision, .permissionEscalated:
+             .untrustedContentInfluencedDecision, .permissionEscalated, .driftDetected:
             return .orange
         case .heartbeatStarted:
             return .yellow
         case .heartbeatFinished, .lifecycleChanged, .companyResumed, .fleetResumed, .approvalApproved,
              .stateBackupCreated, .ledgerEntryRecorded, .complianceChecked:
             return .green
+        case .experimentDecided:
+            return .blue
         case .companyCreated, .userInstruction, .secretAccessed:
             return theme.palette.onCoralMuted
         }

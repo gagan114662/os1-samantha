@@ -333,9 +333,16 @@ struct ConnectorsView: View {
                             .foregroundStyle(theme.palette.onCoralSecondary)
                     }
                 } else {
-                    VStack(spacing: 8) {
-                        ForEach(viewModel.toolkits) { kit in
-                            toolkitRow(kit)
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(viewModel.groupedToolkits, id: \.tag) { group in
+                            Text(group.tag.rawValue.capitalized)
+                                .os1Style(theme.typography.smallCaps)
+                                .foregroundStyle(theme.palette.onCoralMuted)
+                            VStack(spacing: 8) {
+                                ForEach(group.toolkits) { kit in
+                                    toolkitRow(kit)
+                                }
+                            }
                         }
                     }
                     if case .failed(let message) = viewModel.toolkitListState {

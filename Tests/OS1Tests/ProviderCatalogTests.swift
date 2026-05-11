@@ -104,4 +104,20 @@ struct ProviderCatalogTests {
         #expect(payload.data.map(\.id) == ["a", "b"])
         #expect(payload.data[1].displayName == "Beta")
     }
+
+    @Test
+    func mediaProvidersCoverEveryRequiredModality() {
+        let required: Set<ProviderCatalogEntry.Modality> = [.video, .image, .tts, .voiceClone, .music, .avatar, .render]
+        let actual = Set(ProviderCatalog.entries.map(\.modality))
+
+        #expect(required.isSubset(of: actual))
+        for modality in required {
+            let entries = ProviderCatalog.entries.filter { $0.modality == modality }
+            #expect(!entries.isEmpty, "\(modality.rawValue) needs at least one provider")
+            for entry in entries {
+                #expect(entry.dashboardURL.scheme == "https")
+                #expect(entry.docsURL?.scheme == "https")
+            }
+        }
+    }
 }

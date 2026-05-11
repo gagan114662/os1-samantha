@@ -124,6 +124,70 @@ struct CompanyBrowserAutomationTests {
         #expect(plan.blockers.contains { $0.contains("selector or semantic") })
     }
 
+    @Test
+    func consumerPlatformBrowserActionsRequireStealthProfile() {
+        let policy = CompanyBrowserSafetyPolicy(
+            companyID: "company",
+            approvedDomains: ["instagram.com"],
+            allowedActions: ["publish-draft"],
+            preferredIntegrations: ["instagram.com": .browser]
+        )
+        let action = browserAction(domain: "instagram.com", actionName: "publish-draft")
+
+        let blocked = CompanyBrowserAutomationEngine.plan(action: action, policy: policy)
+        #expect(blocked.status == .blocked)
+        #expect(blocked.blockers.contains("stealth profile required"))
+
+        let profile = CompanyBrowserStealthProfile(
+            companyID: "company",
+            userAgentPool: ["ua-1", "ua-2", "ua-3"],
+            proxyEndpoint: nil,
+            humanPaceProfile: .normal,
+            cookieJarPath: URL(fileURLWithPath: "/tmp/company/instagram.cookies"),
+            captchaHandoff: .abortAndAskOperator
+        )
+        let ready = CompanyBrowserAutomationEngine.plan(action: action, policy: policy, stealthProfile: profile, sessionOrdinal: 4)
+        #expect(ready.status == .ready)
+        #expect(ready.selectedUserAgent == "ua-2")
+    }
+
+    @Test
+    func userAgentRotationUsesMultipleProfiles() {
+        let profile = CompanyBrowserStealthProfile(
+            companyID: "company",
+            userAgentPool: ["ua-1", "ua-2", "ua-3", "ua-4"],
+            proxyEndpoint: nil,
+            humanPaceProfile: .normal,
+            cookieJarPath: URL(fileURLWithPath: "/tmp/company/x.cookies"),
+            captchaHandoff: .manualAnnotate
+        )
+
+        let agents = Set((0..<10).map { profile.userAgent(forSessionOrdinal: $0) })
+        #expect(agents.count >= 3)
+    }
+
+    @Test
+    func captchaHandoffWritesApprovalFileAndPausesCompany() throws {
+        let action = browserAction(domain: "tiktok.com", actionName: "publish-draft")
+        let trace = CompanyBrowserAutomationEngine.trace(
+            action: action,
+            sessionID: "session-1",
+            outcome: .failed,
+            screenshotPath: "captcha.png",
+            domSnapshotPath: "captcha.html",
+            failureKind: .captcha
+        )
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("captcha-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let result = try CompanyBrowserAutomationEngine.captchaHandoff(trace: trace, approvalsDirectory: directory)
+
+        #expect(FileManager.default.fileExists(atPath: result.approvalFile.path))
+        #expect(result.event.kind == .companyPaused)
+        #expect(result.event.approvalState == "captcha-handoff")
+    }
+
     private func browserAction(
         domain: String = "example.com",
         actionName: String = "read-public-page"

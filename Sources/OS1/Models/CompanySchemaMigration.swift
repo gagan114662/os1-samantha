@@ -36,6 +36,59 @@ struct CompanySchemaMigrationReport: Codable, Hashable {
     var rollbackPath: String?
 }
 
+struct CompanyPersistedArtifactEnvelope<Payload: Codable & Hashable>: Codable, Hashable {
+    var version: Int
+    var schema: String
+    var payload: Payload
+}
+
+struct CompanySchemaMigration: Hashable, Sendable {
+    var schema: String
+    var fromVersion: Int
+    var toVersion: Int
+    var migrate: @Sendable (Data) throws -> Data
+
+    static func == (lhs: CompanySchemaMigration, rhs: CompanySchemaMigration) -> Bool {
+        lhs.schema == rhs.schema && lhs.fromVersion == rhs.fromVersion && lhs.toVersion == rhs.toVersion
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(schema)
+        hasher.combine(fromVersion)
+        hasher.combine(toVersion)
+    }
+}
+
+struct CompanySchemaMigrationRegistry: Sendable {
+    var supportedVersions: [String: Int]
+    var migrations: [CompanySchemaMigration]
+
+    static let current = CompanySchemaMigrationRegistry(
+        supportedVersions: [
+            "CodexSession": CompanyDurableStateEnvelope.currentSchemaVersion,
+            "CompanyEvent": 1,
+            "CompanyLedgerEntry": 1,
+            "CompanyApproval": 1,
+            "CompanyKnowledgeBase": 1
+        ],
+        migrations: [
+            CompanySchemaMigration(schema: "CodexSession", fromVersion: 3, toVersion: 3) { $0 },
+            CompanySchemaMigration(schema: "CompanyEvent", fromVersion: 1, toVersion: 1) { $0 },
+            CompanySchemaMigration(schema: "CompanyLedgerEntry", fromVersion: 1, toVersion: 1) { $0 }
+        ]
+    )
+
+    func pendingMigrationCount(schema: String, version: Int) -> Int {
+        guard let target = supportedVersions[schema], version < target else { return 0 }
+        return migrations.filter { $0.schema == schema && $0.fromVersion >= version && $0.toVersion <= target }.count
+    }
+
+    func quarantineMessage(schema: String, version: Int) -> String? {
+        guard let supported = supportedVersions[schema], version > supported else { return nil }
+        return "\(schema) is on schema v\(version); this OS1 build supports up to v\(supported). Upgrade OS1 or restore from a compatible backup."
+    }
+}
+
 enum CompanySchemaMigrationError: Error, LocalizedError, Equatable {
     case unsupportedVersion(Int)
     case unreadablePayload

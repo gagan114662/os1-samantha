@@ -131,6 +131,191 @@ struct CompanyContentReviewDecision: Codable, Hashable {
     var approvalDecisionID: String?
 }
 
+struct CompanyContentQualityScore: Codable, Hashable {
+    var originalityScore: Double
+    var hookStrength: Double
+    var claimSafety: Double
+    var brandFit: Double
+    var readability: Double
+    var plagiarismRisk: Double
+    var hallucinationFlags: [String]
+
+    var dimensions: [String: Double] {
+        [
+            "originalityScore": originalityScore,
+            "hookStrength": hookStrength,
+            "claimSafety": claimSafety,
+            "brandFit": brandFit,
+            "readability": readability,
+            "plagiarismRisk": plagiarismRisk
+        ]
+    }
+}
+
+struct CompanyContentQualityPolicy: Codable, Hashable {
+    var minimumOriginalityScore: Double
+    var minimumHookStrength: Double
+    var minimumClaimSafety: Double
+    var minimumBrandFit: Double
+    var minimumReadability: Double
+    var maximumPlagiarismRisk: Double
+
+    static let productionDefault = CompanyContentQualityPolicy(
+        minimumOriginalityScore: 0.55,
+        minimumHookStrength: 0.45,
+        minimumClaimSafety: 0.8,
+        minimumBrandFit: 0.5,
+        minimumReadability: 0.45,
+        maximumPlagiarismRisk: 0.35
+    )
+}
+
+struct CompanyContentQualityDecision: Codable, Hashable {
+    enum Status: String, Codable, Hashable {
+        case passed
+        case blocked
+    }
+
+    var status: Status
+    var score: CompanyContentQualityScore
+    var flags: [String]
+
+    var canApprove: Bool {
+        status == .passed
+    }
+}
+
+struct CompanyContentQualityInput: Codable, Hashable {
+    var draft: String
+    var channel: CompanyGrowthCampaign.Channel
+    var voiceProfile: String
+    var publishedCorpus: [String]
+    var knowledgeBaseCorpus: [String]
+}
+
+enum CompanyContentQualityScorer {
+    static func score(
+        input: CompanyContentQualityInput,
+        policy: CompanyContentQualityPolicy = .productionDefault
+    ) -> CompanyContentQualityDecision {
+        let draft = input.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let plagiarismRisk = maxSimilarity(draft, against: input.publishedCorpus)
+        let originality = max(0, 1 - plagiarismRisk)
+        let hook = hookStrength(draft, channel: input.channel)
+        let hallucinationFlags = hallucinationFlags(draft: draft, corpus: input.knowledgeBaseCorpus)
+        let claimSafety = claimSafety(draft: draft, channel: input.channel, hallucinationFlags: hallucinationFlags)
+        let brandFit = brandFit(draft: draft, voiceProfile: input.voiceProfile)
+        let readability = readability(draft)
+        let score = CompanyContentQualityScore(
+            originalityScore: originality,
+            hookStrength: hook,
+            claimSafety: claimSafety,
+            brandFit: brandFit,
+            readability: readability,
+            plagiarismRisk: plagiarismRisk,
+            hallucinationFlags: hallucinationFlags
+        )
+        var flags: [String] = []
+        if score.originalityScore < policy.minimumOriginalityScore { flags.append("originalityScoreBelowThreshold") }
+        if score.hookStrength < policy.minimumHookStrength { flags.append("hookStrengthBelowThreshold") }
+        if score.claimSafety < policy.minimumClaimSafety { flags.append("claimSafetyBelowThreshold") }
+        if score.brandFit < policy.minimumBrandFit { flags.append("brandFitBelowThreshold") }
+        if score.readability < policy.minimumReadability { flags.append("readabilityBelowThreshold") }
+        if score.plagiarismRisk > policy.maximumPlagiarismRisk { flags.append("plagiarismRiskAboveThreshold") }
+        flags += hallucinationFlags.map { "hallucination:\($0)" }
+
+        return CompanyContentQualityDecision(
+            status: flags.isEmpty ? .passed : .blocked,
+            score: score,
+            flags: Array(Set(flags)).sorted()
+        )
+    }
+
+    private static func maxSimilarity(_ draft: String, against corpus: [String]) -> Double {
+        corpus.map { jaccardSimilarity(tokens(draft), tokens($0)) }.max() ?? 0
+    }
+
+    private static func jaccardSimilarity(_ lhs: Set<String>, _ rhs: Set<String>) -> Double {
+        guard !lhs.isEmpty || !rhs.isEmpty else { return 0 }
+        let intersection = lhs.intersection(rhs).count
+        let union = lhs.union(rhs).count
+        return Double(intersection) / Double(max(1, union))
+    }
+
+    private static func tokens(_ value: String) -> Set<String> {
+        Set(value.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted).filter { $0.count > 2 })
+    }
+
+    private static func hookStrength(_ draft: String, channel: CompanyGrowthCampaign.Channel) -> Double {
+        let firstLine = draft.split(whereSeparator: \.isNewline).first.map(String.init) ?? draft
+        let trimmed = firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return 0 }
+        var score = 0.35
+        if trimmed.contains("?") { score += 0.2 }
+        if trimmed.count <= 120 { score += 0.2 }
+        if trimmed.range(of: #"\b(how|why|mistake|before|after|checklist|save|stop)\b"#, options: [.regularExpression, .caseInsensitive]) != nil { score += 0.15 }
+        if channel == .youtubeUpload || channel == .youtubeShort || channel == .tiktokVideo || channel == .instagramReel { score += 0.1 }
+        return min(1, score)
+    }
+
+    private static func claimSafety(
+        draft: String,
+        channel: CompanyGrowthCampaign.Channel,
+        hallucinationFlags: [String]
+    ) -> Double {
+        var score = hallucinationFlags.isEmpty ? 1.0 : 0.45
+        let lower = draft.lowercased()
+        if lower.contains("guaranteed") || lower.contains("risk-free") || lower.contains("100%") {
+            score -= 0.35
+        }
+        if lower.contains("medical advice") || lower.contains("investment advice") || lower.contains("legal advice") {
+            score -= 0.2
+        }
+        if CompanyDistributionEngine.complianceChannel(for: channel) == .socialPlatform, lower.contains("undisclosed affiliate") {
+            score -= 0.2
+        }
+        return max(0, min(1, score))
+    }
+
+    private static func brandFit(draft: String, voiceProfile: String) -> Double {
+        let profileTokens = tokens(voiceProfile)
+        guard !profileTokens.isEmpty else { return 0.6 }
+        let overlap = tokens(draft).intersection(profileTokens).count
+        return min(1, 0.35 + Double(overlap) / Double(max(1, profileTokens.count)))
+    }
+
+    private static func readability(_ draft: String) -> Double {
+        let sentences = draft.split { ".!?\n".contains($0) }.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let words = draft.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
+        guard !words.isEmpty else { return 0 }
+        let averageWords = Double(words.count) / Double(max(1, sentences.count))
+        if averageWords <= 18 { return 0.9 }
+        if averageWords <= 28 { return 0.65 }
+        return 0.35
+    }
+
+    private static func hallucinationFlags(draft: String, corpus: [String]) -> [String] {
+        let joinedCorpus = corpus.joined(separator: "\n").lowercased()
+        let patterns = [
+            #"\b\d+(?:\.\d+)?%"#,
+            #"\$\d+(?:,\d{3})*(?:\.\d+)?"#
+        ]
+        var flags: [String] = []
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            let range = NSRange(draft.startIndex..<draft.endIndex, in: draft)
+            for match in regex.matches(in: draft, range: range) {
+                guard let tokenRange = Range(match.range, in: draft) else { continue }
+                let token = String(draft[tokenRange])
+                if !joinedCorpus.contains(token.lowercased()) {
+                    flags.append("unsupported-claim-\(token)")
+                }
+            }
+        }
+        return flags.sorted()
+    }
+}
+
 enum CompanyContentReviewEngine {
     static func review(
         artifact: CompanyContentArtifact,
