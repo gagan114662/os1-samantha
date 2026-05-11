@@ -6,6 +6,7 @@ struct CompanyFactoryAsset: Codable, Hashable, Identifiable {
         case pricingPage
         case paymentLink
         case crmTable
+        case suppressionList
         case supportInbox
         case supportEscalationPolicy
         case supportTickets
@@ -76,6 +77,7 @@ enum CompanyFactory {
             (.pricingPage, "pricing-page.md", true, true),
             (.paymentLink, "payments-sandbox.md", true, true),
             (.crmTable, "crm.csv", true, false),
+            (.suppressionList, "suppression-list.csv", true, false),
             (.supportInbox, "support-inbox.md", true, false),
             (.supportEscalationPolicy, "support-escalation-policy.md", true, true),
             (.supportTickets, "support-tickets.json", true, false),
@@ -146,7 +148,9 @@ enum CompanyFactory {
         case .paymentLink:
             return "# Payments sandbox\n\nUse Stripe test mode only. No live charges without approval.\n"
         case .crmTable:
-            return "name,email,source,status,consent,notes\n"
+            return "name,email,source,status,consent,account_id,owner,notes\n"
+        case .suppressionList:
+            return "email,reason,source_company_id,recorded_at\n"
         case .supportInbox:
             return "# Support inbox\n\nTrack customer requests, refunds, and escalation notes here.\n"
         case .supportEscalationPolicy:
@@ -210,6 +214,7 @@ enum CompanyFactory {
         case .pricingPage: return "Pricing page"
         case .paymentLink: return "Sandbox payment link"
         case .crmTable: return "CRM table"
+        case .suppressionList: return "Global suppression list"
         case .supportInbox: return "Support inbox"
         case .supportEscalationPolicy: return "Support escalation policy"
         case .supportTickets: return "Support tickets"
