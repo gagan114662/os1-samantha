@@ -36,14 +36,16 @@ final class OrgoCatalogService: @unchecked Sendable {
     /// inline editor doesn't need to expose the full /computers POST surface
     /// in v1 — power users can use the Orgo dashboard for custom specs.
     func createComputer(workspaceID: String, computerName: String) async throws -> OrgoComputerSummary {
+        // 4GB/1CPU/20GB fits the free tier — power users on team/enterprise plans
+        // can resize via the Orgo dashboard or use the inline editor's size picker.
         let body = CreateComputerRequest(
             workspace_id: workspaceID,
             name: computerName,
             os: "linux",
-            ram: 8,
-            cpu: 4,
+            ram: 4,
+            cpu: 1,
             gpu: "none",
-            disk_size_gb: 50,
+            disk_size_gb: 20,
             resolution: "1280x720x24"
         )
 
