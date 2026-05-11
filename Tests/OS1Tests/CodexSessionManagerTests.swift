@@ -342,6 +342,120 @@ struct CodexSessionManagerTests {
         #expect(recovered.nextHeartbeatAt == now.addingTimeInterval(10))
     }
 
+    @Test
+    func duplicateLaunchdStartsCannotAcquireSameHeartbeatLock() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("os1-lock-test-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let lockURL = root.appendingPathComponent("company.lock.json")
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let lease = CodexSession.HeartbeatLease(
+            id: "lease-1",
+            heartbeatCount: 1,
+            acquiredAt: now,
+            expiresAt: now.addingTimeInterval(600),
+            ownerPID: 111
+        )
+        let duplicate = CodexSession.HeartbeatLease(
+            id: "lease-2",
+            heartbeatCount: 1,
+            acquiredAt: now,
+            expiresAt: now.addingTimeInterval(600),
+            ownerPID: 222
+        )
+
+        #expect(CodexSessionManager.tryAcquireHeartbeatLock(lockURL: lockURL, companyID: "company", lease: lease, now: now))
+        #expect(!CodexSessionManager.tryAcquireHeartbeatLock(lockURL: lockURL, companyID: "company", lease: duplicate, now: now))
+
+        let record = try #require(CodexSessionManager.heartbeatLockRecord(at: lockURL))
+        #expect(record.leaseID == "lease-1")
+        #expect(record.ownerPID == 111)
+    }
+
+    @Test
+    func expiredHeartbeatLockCanBeReacquiredAfterProcessKill() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("os1-stale-lock-test-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let lockURL = root.appendingPathComponent("company.lock.json")
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let expired = CodexSession.HeartbeatLease(
+            id: "expired",
+            heartbeatCount: 2,
+            acquiredAt: now.addingTimeInterval(-900),
+            expiresAt: now.addingTimeInterval(-60),
+            ownerPID: 111
+        )
+        let replacement = CodexSession.HeartbeatLease(
+            id: "replacement",
+            heartbeatCount: 3,
+            acquiredAt: now,
+            expiresAt: now.addingTimeInterval(600),
+            ownerPID: 222
+        )
+
+        #expect(CodexSessionManager.tryAcquireHeartbeatLock(lockURL: lockURL, companyID: "company", lease: expired, now: now.addingTimeInterval(-120)))
+        #expect(CodexSessionManager.tryAcquireHeartbeatLock(lockURL: lockURL, companyID: "company", lease: replacement, now: now))
+
+        let record = try #require(CodexSessionManager.heartbeatLockRecord(at: lockURL))
+        #expect(record.leaseID == "replacement")
+        #expect(record.heartbeatCount == 3)
+    }
+
+    @Test
+    func processKillAndRestartRecoveryPreservesStateUntilLeaseExpires() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        var killedMidRun = CodexSession(
+            id: "killed",
+            title: "killed",
+            task: "run",
+            worktreePath: "/tmp/killed",
+            branch: "company/killed",
+            status: .running,
+            startedAt: now.addingTimeInterval(-60)
+        )
+        killedMidRun.heartbeatCount = 9
+        killedMidRun.pid = 9999
+        killedMidRun.heartbeatLease = CodexSession.HeartbeatLease(
+            id: "lease",
+            heartbeatCount: 9,
+            acquiredAt: now.addingTimeInterval(-60),
+            expiresAt: now.addingTimeInterval(300),
+            ownerPID: 9999
+        )
+
+        let recovered = CodexSessionManager.recoverSessionAfterRestart(killedMidRun, now: now, retryJitterSeconds: 30)
+
+        #expect(recovered.status == .queued)
+        #expect(recovered.heartbeatCount == 9)
+        #expect(recovered.pid == nil)
+        #expect(recovered.heartbeatLease?.id == "lease")
+        #expect(recovered.nextHeartbeatAt == now.addingTimeInterval(330))
+    }
+
+    @Test
+    func heartbeatFailureAssessmentProvidesActionableRetryStatus() {
+        let transient = CodexSessionManager.heartbeatFailureAssessment(
+            exitCode: 1,
+            logTail: "failed to connect to websocket"
+        )
+        #expect(transient.isTransient)
+        #expect(transient.kind == "transientNetwork")
+        #expect(transient.operatorAction.contains("retry"))
+
+        let auth = CodexSessionManager.heartbeatFailureAssessment(
+            exitCode: 1,
+            logTail: "401 unauthorized"
+        )
+        #expect(!auth.isTransient)
+        #expect(auth.kind == "authentication")
+        #expect(auth.operatorAction.contains("credential"))
+    }
+
     // MARK: - Status colour mapping (lightweight UI invariant)
 
     @Test

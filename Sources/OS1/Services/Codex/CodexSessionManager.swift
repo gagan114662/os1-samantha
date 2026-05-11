@@ -1,5 +1,6 @@
-import Foundation
 import Combine
+import Darwin
+import Foundation
 
 /// An autonomous "company" — a long-running mission executed by repeatedly
 /// invoking `codex exec` on a heartbeat. Each company has its own git
@@ -63,6 +64,19 @@ struct CodexSession: Identifiable, Codable, Hashable {
         let acquiredAt: Date
         let expiresAt: Date
         var ownerPID: Int32?
+
+        var isExpired: Bool {
+            expiresAt <= Date()
+        }
+    }
+
+    struct HeartbeatLockRecord: Codable, Hashable {
+        let companyID: String
+        let leaseID: String
+        let heartbeatCount: Int
+        let ownerPID: Int32
+        let acquiredAt: Date
+        let expiresAt: Date
 
         var isExpired: Bool {
             expiresAt <= Date()
@@ -196,6 +210,7 @@ final class CodexSessionManager: ObservableObject {
     private let logDir: URL
     private let lessonsDir: URL
     private let sandboxDir: URL
+    private let heartbeatLockDir: URL
     /// Compact JOURNAL.md every N heartbeats — uses `claude -p` (your Claude
     /// Code subscription) to distill old entries into a SUMMARY block.
     /// Hard-enforced in Swift, not a prompt nudge codex might ignore.
@@ -223,10 +238,12 @@ final class CodexSessionManager: ObservableObject {
         self.logDir = home.appendingPathComponent(".os1/codex-tasks/logs", isDirectory: true)
         self.lessonsDir = home.appendingPathComponent(".os1/codex-tasks/lessons", isDirectory: true)
         self.sandboxDir = home.appendingPathComponent(".os1/codex-tasks/sandboxes", isDirectory: true)
+        self.heartbeatLockDir = home.appendingPathComponent(".os1/codex-tasks/heartbeat-locks", isDirectory: true)
         try? FileManager.default.createDirectory(at: sessionsDir, withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(at: lessonsDir, withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(at: sandboxDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: heartbeatLockDir, withIntermediateDirectories: true)
         // Initialize portfolio lessons file if missing
         let portfolioLessons = lessonsDir.appendingPathComponent("portfolio.md").path
         if !FileManager.default.fileExists(atPath: portfolioLessons) {
@@ -409,19 +426,49 @@ final class CodexSessionManager: ObservableObject {
             return
         }
 
-        guard enforceBudgetBeforeHeartbeat(id: id) else { return }
-        guard let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
+        let now = Date()
+        let candidateLease = CodexSession.HeartbeatLease(
+            id: UUID().uuidString,
+            heartbeatCount: sessions[idx].heartbeatCount + 1,
+            acquiredAt: now,
+            expiresAt: now.addingTimeInterval(heartbeatLeaseSeconds),
+            ownerPID: ProcessInfo.processInfo.processIdentifier
+        )
+        if !Self.tryAcquireHeartbeatLock(
+            lockURL: heartbeatLockURL(id: id),
+            companyID: id,
+            lease: candidateLease,
+            now: now
+        ) {
+            sessions[idx].status = .queued
+            sessions[idx].nextHeartbeatAt = now.addingTimeInterval(queueRetryBaseSeconds + Double.random(in: 0...maxJitterSeconds))
+            persistSessions()
+            appendEvent(
+                kind: .heartbeatQueued,
+                companyID: id,
+                summary: "Heartbeat queued because another OS1 process owns the company lock",
+                metadata: [
+                    "retrySeconds": "\(Int(sessions[idx].nextHeartbeatAt?.timeIntervalSince(now) ?? queueRetryBaseSeconds))",
+                    "lockFile": heartbeatLockURL(id: id).path
+                ]
+            )
+            scheduleHeartbeat(id: id)
+            return
+        }
+
+        guard enforceBudgetBeforeHeartbeat(id: id) else {
+            Self.releaseHeartbeatLock(lockURL: heartbeatLockURL(id: id), leaseID: candidateLease.id)
+            return
+        }
+        guard let idx = sessions.firstIndex(where: { $0.id == id }) else {
+            Self.releaseHeartbeatLock(lockURL: heartbeatLockURL(id: id), leaseID: candidateLease.id)
+            return
+        }
 
         sessions[idx].status = .running
-        sessions[idx].lastHeartbeatAt = Date()
-        sessions[idx].heartbeatCount += 1
-        sessions[idx].heartbeatLease = CodexSession.HeartbeatLease(
-            id: UUID().uuidString,
-            heartbeatCount: sessions[idx].heartbeatCount,
-            acquiredAt: sessions[idx].lastHeartbeatAt ?? Date(),
-            expiresAt: Date(timeIntervalSinceNow: heartbeatLeaseSeconds),
-            ownerPID: nil
-        )
+        sessions[idx].lastHeartbeatAt = candidateLease.acquiredAt
+        sessions[idx].heartbeatCount = candidateLease.heartbeatCount
+        sessions[idx].heartbeatLease = candidateLease
         let session = sessions[idx]
         persistSessions()
         appendEvent(
@@ -523,6 +570,7 @@ final class CodexSessionManager: ObservableObject {
                 sessions[idx].exitCode = -1
                 sessions[idx].heartbeatLease = nil
                 persistSessions()
+                Self.releaseHeartbeatLock(lockURL: heartbeatLockURL(id: id), leaseID: candidateLease.id)
                 appendEvent(
                     kind: .heartbeatFinished,
                     companyID: id,
@@ -594,6 +642,7 @@ final class CodexSessionManager: ObservableObject {
             sessions[idx].exitCode = -1
             sessions[idx].heartbeatLease = nil
             persistSessions()
+            Self.releaseHeartbeatLock(lockURL: heartbeatLockURL(id: id), leaseID: candidateLease.id)
             appendEvent(
                 kind: .heartbeatFinished,
                 companyID: id,
@@ -991,13 +1040,7 @@ final class CodexSessionManager: ObservableObject {
             guard let data = FileManager.default.contents(atPath: logPath) else { return "" }
             return String(data: data.suffix(8000), encoding: .utf8) ?? ""
         }()
-        let isTransientNetwork = exitCode != 0 && (
-            logTailString.contains("failed to lookup address information") ||
-            logTailString.contains("failed to connect to websocket") ||
-            logTailString.contains("stream disconnected before completion") ||
-            logTailString.contains("ECONNREFUSED") ||
-            logTailString.contains("nodename nor servname provided")
-        )
+        let failureAssessment = Self.heartbeatFailureAssessment(exitCode: exitCode, logTail: logTailString)
 
         // Parse markers from the most recent output. For audit heartbeats this
         // is AUDIT.md; for work heartbeats it's JOURNAL.md.
@@ -1011,7 +1054,7 @@ final class CodexSessionManager: ObservableObject {
 
         if reason == .uncaughtSignal {
             sessions[idx].status = .killed
-        } else if isTransientNetwork {
+        } else if failureAssessment.isTransient {
             // Treat as idle, retry in 60s with jitter — mac DNS resolver
             // often recovers on its own (e.g. after wake from sleep).
             sessions[idx].status = .idle
@@ -1035,6 +1078,9 @@ final class CodexSessionManager: ObservableObject {
         sessions[idx].exitCode = exitCode
         sessions[idx].heartbeatLease = nil
         persistSessions()
+        if let runID {
+            Self.releaseHeartbeatLock(lockURL: heartbeatLockURL(id: id), leaseID: runID)
+        }
         recordHandoffEvents(
             session: sessions[idx],
             completedHeartbeat: completedHeartbeat,
@@ -1056,7 +1102,9 @@ final class CodexSessionManager: ObservableObject {
                 "terminationReason": "\(reason)",
                 "status": sessions[idx].status.rawValue,
                 "blockedReason": sessions[idx].blockedReason ?? "",
-                "logFile": logPath
+                "logFile": logPath,
+                "failureKind": failureAssessment.kind,
+                "operatorAction": failureAssessment.operatorAction
             ]
         )
         if sessions[idx].status == .blocked {
@@ -1443,6 +1491,10 @@ final class CodexSessionManager: ObservableObject {
         sandboxDir.appendingPathComponent("\(id).sb")
     }
 
+    private func heartbeatLockURL(id: String) -> URL {
+        heartbeatLockDir.appendingPathComponent("\(id).lock.json")
+    }
+
     private func makeSandboxProfile(session: CodexSession, logFile: String, promptFile: String) -> CompanySandboxProfile {
         CompanySandboxProfile(
             companyID: session.id,
@@ -1755,6 +1807,52 @@ final class CodexSessionManager: ObservableObject {
         CompanyLedgerParser.summarize(revenueMarkdown: revenueDocument).hasVerifiedRevenue
     }
 
+    nonisolated static func heartbeatFailureAssessment(
+        exitCode: Int32,
+        logTail: String
+    ) -> (isTransient: Bool, kind: String, operatorAction: String) {
+        guard exitCode != 0 else {
+            return (false, "none", "")
+        }
+
+        let transientPatterns = [
+            "failed to lookup address information",
+            "failed to connect to websocket",
+            "stream disconnected before completion",
+            "ECONNREFUSED",
+            "nodename nor servname provided"
+        ]
+        if transientPatterns.contains(where: { logTail.contains($0) }) {
+            return (
+                true,
+                "transientNetwork",
+                "OS1 will retry automatically; check network/DNS if this repeats."
+            )
+        }
+
+        if logTail.contains("401") || logTail.localizedCaseInsensitiveContains("unauthorized") {
+            return (
+                false,
+                "authentication",
+                "Refresh or revoke the affected credential, then rerun the heartbeat."
+            )
+        }
+
+        if logTail.contains("429") || logTail.localizedCaseInsensitiveContains("rate limit") {
+            return (
+                true,
+                "rateLimited",
+                "OS1 will retry with backoff; reduce concurrency or increase provider quota if repeated."
+            )
+        }
+
+        return (
+            false,
+            "processFailure",
+            "Open the company run timeline and heartbeat log, then rerun after fixing the command failure."
+        )
+    }
+
     nonisolated static func recoverSessionAfterRestart(
         _ session: CodexSession,
         now: Date,
@@ -1775,6 +1873,69 @@ final class CodexSessionManager: ObservableObject {
         recovered.heartbeatLease = nil
         recovered.nextHeartbeatAt = now.addingTimeInterval(retryJitterSeconds)
         return recovered
+    }
+
+    nonisolated static func tryAcquireHeartbeatLock(
+        lockURL: URL,
+        companyID: String,
+        lease: CodexSession.HeartbeatLease,
+        now: Date = Date()
+    ) -> Bool {
+        try? FileManager.default.createDirectory(
+            at: lockURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+
+        let record = CodexSession.HeartbeatLockRecord(
+            companyID: companyID,
+            leaseID: lease.id,
+            heartbeatCount: lease.heartbeatCount,
+            ownerPID: lease.ownerPID ?? ProcessInfo.processInfo.processIdentifier,
+            acquiredAt: lease.acquiredAt,
+            expiresAt: lease.expiresAt
+        )
+
+        for _ in 0..<2 {
+            let fd = open(lockURL.path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR)
+            if fd >= 0 {
+                defer { close(fd) }
+                let encoder = JSONEncoder()
+                encoder.dateEncodingStrategy = .iso8601
+                guard let data = try? encoder.encode(record) else {
+                    unlink(lockURL.path)
+                    return false
+                }
+                let wrote = data.withUnsafeBytes { buffer -> Int in
+                    guard let base = buffer.baseAddress else { return 0 }
+                    return write(fd, base, data.count)
+                }
+                if wrote == data.count {
+                    return true
+                }
+                unlink(lockURL.path)
+                return false
+            }
+
+            guard errno == EEXIST else { return false }
+            guard let existing = heartbeatLockRecord(at: lockURL), existing.expiresAt <= now else {
+                return false
+            }
+            unlink(lockURL.path)
+        }
+
+        return false
+    }
+
+    nonisolated static func releaseHeartbeatLock(lockURL: URL, leaseID: String) {
+        guard let existing = heartbeatLockRecord(at: lockURL), existing.leaseID == leaseID else { return }
+        unlink(lockURL.path)
+    }
+
+    nonisolated static func heartbeatLockRecord(at lockURL: URL) -> CodexSession.HeartbeatLockRecord? {
+        guard let data = try? Data(contentsOf: lockURL) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(CodexSession.HeartbeatLockRecord.self, from: data)
     }
 
     private static func shortID() -> String {
