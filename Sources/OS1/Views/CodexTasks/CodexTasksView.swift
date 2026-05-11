@@ -1311,6 +1311,7 @@ struct CodexTasksView: View {
         case .approvalApproved: return "checkmark.seal"
         case .approvalDenied: return "xmark.shield"
         case .approvalChangesRequested: return "arrow.uturn.left.circle"
+        case .governanceDecisionRecorded: return "doc.badge.clock"
         case .stateBackupCreated: return "externaldrive.badge.checkmark"
         case .ledgerEntryRecorded: return "dollarsign.circle"
         }
@@ -1320,13 +1321,14 @@ struct CodexTasksView: View {
         switch kind {
         case .budgetBlocked, .companyKilled, .approvalDenied:
             return theme.palette.danger
-        case .heartbeatQueued, .externalSideEffect:
+        case .heartbeatQueued, .externalSideEffect, .governanceDecisionRecorded:
             return .purple
         case .companyPaused, .fleetPaused, .approvalRequested, .approvalChangesRequested:
             return .orange
         case .heartbeatStarted:
             return .yellow
-        case .heartbeatFinished, .lifecycleChanged, .companyResumed, .fleetResumed, .approvalApproved, .stateBackupCreated, .ledgerEntryRecorded:
+        case .heartbeatFinished, .lifecycleChanged, .companyResumed, .fleetResumed, .approvalApproved,
+             .stateBackupCreated, .ledgerEntryRecorded:
             return .green
         case .companyCreated, .userInstruction, .secretAccessed:
             return theme.palette.onCoralMuted

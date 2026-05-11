@@ -21,6 +21,7 @@ struct CompanyEvent: Codable, Hashable, Identifiable {
         case approvalApproved
         case approvalDenied
         case approvalChangesRequested
+        case governanceDecisionRecorded
         case stateBackupCreated
         case ledgerEntryRecorded
     }
@@ -149,7 +150,11 @@ struct CompanyMetricsSnapshot: Codable, Hashable {
     let profitUSD: Double
     let lastEventAt: Date?
 
-    static func summarize(events: [CompanyEvent], revenueUSD: Double = 0, costUSD: Double = 0) -> CompanyMetricsSnapshot {
+    static func summarize(
+        events: [CompanyEvent],
+        revenueUSD: Double = 0,
+        costUSD: Double = 0
+    ) -> CompanyMetricsSnapshot {
         let started = events.filter { $0.kind == .heartbeatStarted }.count
         let finished = events.filter { $0.kind == .heartbeatFinished }
         let failed = finished.filter(\.isFailedHeartbeat).count
