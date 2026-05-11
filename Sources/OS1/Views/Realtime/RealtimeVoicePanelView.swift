@@ -9,15 +9,17 @@ struct RealtimeVoicePanelView: View {
     let onClose: () -> Void
 
     init(
-        openAIAPIKey: String? = nil,
+        elevenLabsAPIKey: String? = nil,
+        elevenLabsAgentID: String? = nil,
         orgoAPIKey: String? = nil,
         orgoDefaultComputerID: String? = nil,
         onClose: @escaping () -> Void
     ) {
         _server = StateObject(wrappedValue: RealtimeVoiceSessionServer(
-            openAIAPIKeyProvider: { openAIAPIKey },
-            orgoAPIKeyProvider: { orgoAPIKey },
-            orgoDefaultComputerIDProvider: { orgoDefaultComputerID }
+            elevenLabsAPIKeyProvider: { elevenLabsAPIKey ?? ProcessInfo.processInfo.environment["ELEVENLABS_API_KEY"] },
+            agentIDProvider: { elevenLabsAgentID ?? ProcessInfo.processInfo.environment["ELEVENLABS_AGENT_ID"] },
+            orgoAPIKeyProvider: { orgoAPIKey ?? ProcessInfo.processInfo.environment["ORGO_API_KEY"] },
+            orgoDefaultComputerIDProvider: { orgoDefaultComputerID ?? ProcessInfo.processInfo.environment["ORGO_DEFAULT_COMPUTER_ID"] }
         ))
         self.onClose = onClose
     }
@@ -97,15 +99,17 @@ struct RealtimeVoiceRuntimeView: View {
     let onStatus: (String) -> Void
 
     init(
-        openAIAPIKey: String? = nil,
+        elevenLabsAPIKey: String? = nil,
+        elevenLabsAgentID: String? = nil,
         orgoAPIKey: String? = nil,
         orgoDefaultComputerID: String? = nil,
         onStatus: @escaping (String) -> Void
     ) {
         _server = StateObject(wrappedValue: RealtimeVoiceSessionServer(
-            openAIAPIKeyProvider: { openAIAPIKey },
-            orgoAPIKeyProvider: { orgoAPIKey },
-            orgoDefaultComputerIDProvider: { orgoDefaultComputerID }
+            elevenLabsAPIKeyProvider: { elevenLabsAPIKey ?? ProcessInfo.processInfo.environment["ELEVENLABS_API_KEY"] },
+            agentIDProvider: { elevenLabsAgentID ?? ProcessInfo.processInfo.environment["ELEVENLABS_AGENT_ID"] },
+            orgoAPIKeyProvider: { orgoAPIKey ?? ProcessInfo.processInfo.environment["ORGO_API_KEY"] },
+            orgoDefaultComputerIDProvider: { orgoDefaultComputerID ?? ProcessInfo.processInfo.environment["ORGO_DEFAULT_COMPUTER_ID"] }
         ))
         self.onStatus = onStatus
     }

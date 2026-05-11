@@ -27,7 +27,6 @@ private extension Data {
         appendString("\r\n")
     }
 
-    mutating func appendString(_ string: String) {
-        append(contentsOf: string.utf8)
-    }
+    // appendString lives in RealtimeVoiceHTTP.swift (shared utility for the
+    // realtime voice server). Removed from here to avoid duplicate-symbol.
 }
