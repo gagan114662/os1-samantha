@@ -70,13 +70,15 @@ struct CompanyLifecycleEngineTests {
             support: CompanySupportReadiness(
                 companyID: "company",
                 blockers: ["Support contact is required."]
-            )
+            ),
+            payments: approvedPaymentsRisk()
         ))
         let approved = CompanyLifecycleEngine.decide(snapshot(
             stage: .building,
             distribution: activeDistribution(),
             legal: approvedLegalReadiness(),
-            support: CompanySupportReadiness(companyID: "company", blockers: [])
+            support: CompanySupportReadiness(companyID: "company", blockers: []),
+            payments: approvedPaymentsRisk()
         ))
 
         #expect(legalBlocked.action == .hold)
@@ -110,6 +112,7 @@ struct CompanyLifecycleEngineTests {
         distribution: CompanyDistributionSummary? = nil,
         legal: CompanyLegalReadiness? = nil,
         support: CompanySupportReadiness? = nil,
+        payments: CompanyPaymentsRiskReport? = nil,
         failures: Int = 0,
         risk: CompanyIdea.RiskTier = .low,
         artifacts: [String] = []
@@ -137,6 +140,7 @@ struct CompanyLifecycleEngineTests {
             distribution: distribution,
             legalReadiness: legal,
             supportReadiness: support,
+            paymentsRisk: payments,
             failureCount: failures,
             complianceRisk: risk,
             overrideReason: nil,
@@ -175,6 +179,20 @@ struct CompanyLifecycleEngineTests {
             policyLinks: [:],
             reviewedAt: Date(timeIntervalSince1970: 1_800_000_000),
             approvalRequestID: "approval-legal"
+        )
+    }
+
+    private func approvedPaymentsRisk() -> CompanyPaymentsRiskReport {
+        CompanyPaymentsRiskReport(
+            companyID: "company",
+            accountHealth: .healthy,
+            canEnableLiveBilling: true,
+            shouldPauseCompany: false,
+            blockers: [],
+            fraudSignals: [],
+            supportTasks: [],
+            approvalRequests: [],
+            ledgerAdjustments: []
         )
     }
 }
