@@ -60,7 +60,11 @@ enum CompanyScaleScheduler {
         runners: [CompanyRunner] = [.local],
         ledgerSummaries: [String: CompanyLedgerSummary] = [:],
         profitabilityPolicy: CompanyProfitabilityPolicy = .productionDefault,
-        budgetReports: [String: CompanyBudgetReport] = [:]
+        budgetReports: [String: CompanyBudgetReport] = [:],
+        portfolioProfiles: [String: CompanyPortfolioProfile] = [:],
+        portfolioRules: CompanyPortfolioRules = .productionDefault,
+        emergencyStop: CompanyEmergencyStop? = nil,
+        integrationReports: [String: CompanyIntegrationHealthReport] = [:]
     ) -> CompanyHeartbeatSchedulePlan {
         let activeCount = sessions.filter { $0.status == .running }.count
         let queuedCount = sessions.filter { $0.status == .queued }.count
@@ -82,6 +86,13 @@ enum CompanyScaleScheduler {
             })
             : budgetReports
         let globalBudgetReport = CompanyBudgetGuardian.globalReport(summaries: Array(ledgerSummaries.values))
+        let portfolioAllocations = portfolioProfiles.isEmpty
+            ? [:]
+            : CompanyPortfolioStrategyEngine.dashboard(
+                profiles: Array(portfolioProfiles.values),
+                rules: portfolioRules
+            )
+            .allocationByCompanyID
 
         if queuedCount > limits.maxQueuedCompaniesBeforeBackpressure {
             backpressure.append("queueDepth")
@@ -93,6 +104,19 @@ enum CompanyScaleScheduler {
             backpressure.append("globalBudgetWarning")
         } else if globalBudgetReport.shouldBlockHeartbeat {
             backpressure.append("globalBudgetHardStop")
+        }
+        if CompanyIncidentResponseEngine.shouldBlock(
+            action: .companyHeartbeat,
+            emergencyStop: emergencyStop,
+            now: now
+        ) {
+            backpressure.append("emergencyStop")
+        }
+        if integrationReports.values.contains(where: \.hasRateLimitPressure) {
+            backpressure.append("connectorRateLimit")
+        }
+        if integrationReports.values.contains(where: { $0.blockedReason != nil }) {
+            backpressure.append("connectorBlocked")
         }
 
         var runnerCapacity = Dictionary(uniqueKeysWithValues: runners.map {
@@ -122,12 +146,20 @@ enum CompanyScaleScheduler {
                 let rhsDate = rhs.nextHeartbeatAt ?? rhs.startedAt
                 let lhsBudget = budgetPriority(computedBudgetReports[lhs.id])
                 let rhsBudget = budgetPriority(computedBudgetReports[rhs.id])
+                let lhsPortfolio = portfolioPriority(portfolioAllocations[lhs.id])
+                let rhsPortfolio = portfolioPriority(portfolioAllocations[rhs.id])
                 if lhsBudget != rhsBudget { return lhsBudget < rhsBudget }
+                if lhsPortfolio != rhsPortfolio { return lhsPortfolio < rhsPortfolio }
                 if lhsDate == rhsDate { return lhs.id < rhs.id }
                 return lhsDate < rhsDate
             }
 
         for session in eligible {
+            if portfolioAllocations[session.id]?.canStartHeartbeat == false {
+                blocked.append(session.id)
+                continue
+            }
+
             if globalBudgetReport.shouldBlockHeartbeat {
                 blocked.append(session.id)
                 continue
@@ -141,6 +173,12 @@ enum CompanyScaleScheduler {
                 if report.isNearLimit {
                     budgetWarningIDs.append(session.id)
                 }
+            }
+
+            if let integrationReport = integrationReports[session.id],
+               integrationReport.blockedReason != nil {
+                blocked.append(session.id)
+                continue
             }
 
             if pauseSet.contains(session.id) {
@@ -233,5 +271,9 @@ enum CompanyScaleScheduler {
         case .hardStop: return 2
         case .emergencyShutdown: return 3
         }
+    }
+
+    private static func portfolioPriority(_ allocation: CompanyPortfolioAllocation?) -> Int {
+        allocation?.rank ?? Int.max
     }
 }

@@ -97,3 +97,12 @@ Production-impacting changes must link to:
 - Test or verification output.
 - Release note or deployment checklist entry when shipped.
 
+## Schema Migration Release Checklist
+
+Before a release that changes durable OS1 state, the release owner must verify:
+
+- Current state files declare a schema version before startup code uses them.
+- Migration tests cover the previous two durable-state versions.
+- Failed migrations keep the original file and write a rollback copy.
+- Migration validation errors are visible in events or release notes.
+- Backup/restore verification has passed before running the migrated build against production company state.

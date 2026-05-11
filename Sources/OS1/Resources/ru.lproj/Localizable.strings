@@ -1017,6 +1017,9 @@
 "Close" = "Close";
 "Company name" = "Company name";
 "Company templates" = "Company templates";
+"4h" = "4h";
+"Always ask" = "Always ask";
+"Budget" = "Budget";
 "Deny" = "Deny";
 "Event log" = "Event log";
 "Hire" = "Hire";
@@ -1031,6 +1034,7 @@
 "No ~/.os1/voice-port file" = "No ~/.os1/voice-port file";
 "Not installed or not on PATH." = "Not installed or not on PATH.";
 "Not reachable on :7891" = "Not reachable on :7891";
+"Once" = "Once";
 "OS1 looked for `%@` on PATH but didn't find it. Install it before agentic features that depend on it will work." = "OS1 looked for `%@` on PATH but didn't find it. Install it before agentic features that depend on it will work.";
 "OS1's voice server writes its TCP port here when it starts. Missing file = voice runtime never mounted (boot animation didn't finish, or the voice section was disabled)." = "OS1's voice server writes its TCP port here when it starts. Missing file = voice runtime never mounted (boot animation didn't finish, or the voice section was disabled).";
 "Open journal in Finder" = "Open journal in Finder";
@@ -1092,3 +1096,9 @@
 "Missing required sections: %@" = "Missing required sections: %@";
 "Create docs/production-operating-model.md before live autonomy." = "Create docs/production-operating-model.md before live autonomy.";
 "docs/production-operating-model.md maps autonomy, risk tiers, approvals, live checklist, emergency stop, and non-autonomous areas." = "docs/production-operating-model.md maps autonomy, risk tiers, approvals, live checklist, emergency stop, and non-autonomous areas.";
+
+// MARK: - Evaluation harness doctor check
+"Agent eval harness" = "Agent eval harness";
+"No non-live eval report found" = "No non-live eval report found";
+"Eval suite %@: %lld/%lld passed, score %.1f" = "Eval suite %@: %lld/%lld passed, score %.1f";
+"Run `python3 scripts/run-evals.py` to create artifacts/evals/non-live-report.json. CI runs this on every PR and uploads the report artifact." = "Run `python3 scripts/run-evals.py` to create artifacts/evals/non-live-report.json. CI runs this on every PR and uploads the report artifact.";

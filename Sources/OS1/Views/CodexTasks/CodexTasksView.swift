@@ -30,6 +30,8 @@ struct CodexTasksView: View {
             spawnBar
             templateBar
             ideaBacklog
+            portfolioDashboard
+            reputationConsole
             approvalConsole
             eventConsole
             metricsStrip
@@ -299,7 +301,11 @@ struct CodexTasksView: View {
     }
 
     private var rankedIdeas: [CompanyIdea] {
-        CompanyIdeaEngine.topIdeas(count: 10, from: CompanyIdeaEngine.candidates(limit: 50))
+        CompanyIdeaEngine.topIdeas(
+            count: 10,
+            from: CompanyIdeaEngine.candidates(limit: 50),
+            preservedLearnings: manager.portfolioDashboard().preservedLearnings
+        )
     }
 
     private var rankedIdeaPlans: [(idea: CompanyIdea, plan: CompanyValidationPlan)] {
@@ -384,6 +390,188 @@ struct CodexTasksView: View {
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
+    // MARK: - Portfolio dashboard
+
+    @ViewBuilder
+    private var portfolioDashboard: some View {
+        let dashboard = manager.portfolioDashboard()
+        if dashboard.totalCompanies > 0 {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Label("Portfolio", systemImage: "chart.pie")
+                        .os1Style(theme.typography.label)
+                        .foregroundStyle(theme.palette.onCoralPrimary)
+                    Text("EV \(moneyLabel(dashboard.expectedValueUSD))")
+                    Text("channels \(dashboard.channelCount)")
+                    Text("risks \(dashboard.concentrationRisks.count)")
+                    Text("learnings \(dashboard.preservedLearnings.count)")
+                    Spacer()
+                }
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundStyle(theme.palette.onCoralMuted)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .top, spacing: 8) {
+                        ForEach(dashboard.allocations.prefix(8)) { allocation in
+                            portfolioAllocationCard(allocation)
+                        }
+                        ForEach(dashboard.concentrationRisks.prefix(6)) { risk in
+                            portfolioRiskCard(risk)
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.bottom, 10)
+        }
+    }
+
+    private func portfolioAllocationCard(_ allocation: CompanyPortfolioAllocation) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text("#\(allocation.rank)")
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.green)
+                Text(allocation.companyID.prefix(8))
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(theme.palette.onCoralMuted)
+                Spacer()
+                Image(systemName: allocation.canStartHeartbeat ? "play.circle.fill" : "pause.circle.fill")
+                    .foregroundStyle(allocation.canStartHeartbeat ? .green : .orange)
+            }
+            Text("score \(allocation.priorityScore, specifier: "%.1f")")
+                .os1Style(theme.typography.label)
+                .foregroundStyle(theme.palette.onCoralPrimary)
+            HStack(spacing: 6) {
+                Label(moneyLabel(allocation.recommendedBudgetUSD), systemImage: "banknote")
+                Label("\(allocation.computeSlots)x", systemImage: "cpu")
+            }
+            .font(.caption2)
+            .foregroundStyle(theme.palette.onCoralMuted)
+            Text(allocation.reasons.joined(separator: ", "))
+                .font(.caption2)
+                .foregroundStyle(theme.palette.onCoralSecondary)
+                .lineLimit(2)
+        }
+        .padding(10)
+        .frame(width: 210, alignment: .leading)
+        .background(theme.palette.glassFill.opacity(0.78))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(theme.palette.glassBorder, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func portfolioRiskCard(_ risk: CompanyPortfolioConcentrationRisk) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text(risk.dimension.rawValue)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.orange)
+                Spacer()
+            }
+            Text(risk.value)
+                .os1Style(theme.typography.label)
+                .foregroundStyle(theme.palette.onCoralPrimary)
+                .lineLimit(1)
+            Text("\(risk.count)/\(risk.limit) companies")
+                .font(.caption2)
+                .foregroundStyle(theme.palette.onCoralMuted)
+            Text(risk.companyIDs.prefix(4).joined(separator: ", "))
+                .font(.caption2)
+                .foregroundStyle(theme.palette.onCoralSecondary)
+                .lineLimit(2)
+        }
+        .padding(10)
+        .frame(width: 210, alignment: .leading)
+        .background(Color.orange.opacity(0.16))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color.orange.opacity(0.55), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    // MARK: - Reputation console
+
+    @ViewBuilder
+    private var reputationConsole: some View {
+        let dashboard = manager.reputationDashboard()
+        let risky = dashboard.allHealth.filter { $0.risk == .high || $0.risk == .critical }
+        if !dashboard.allHealth.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Label("Reputation", systemImage: "person.badge.shield.checkmark")
+                        .os1Style(theme.typography.label)
+                        .foregroundStyle(theme.palette.onCoralPrimary)
+                    Text("\(dashboard.allHealth.count) assets")
+                    Text("\(dashboard.sharedAssetHealth.count) shared")
+                    Text("\(risky.count) risky")
+                    Text("\(dashboard.escalationTasks.count) escalations")
+                    Spacer()
+                }
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundStyle(theme.palette.onCoralMuted)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .top, spacing: 8) {
+                        ForEach(dashboard.allHealth.prefix(10)) { health in
+                            reputationCard(health)
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.bottom, 10)
+        }
+    }
+
+    private func reputationCard(_ health: CompanyReputationHealth) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: reputationIcon(health))
+                    .foregroundStyle(reputationColor(health))
+                Text(health.kind.rawValue)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(reputationColor(health))
+                Spacer()
+                Text(health.status.rawValue)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(theme.palette.onCoralMuted)
+            }
+            Text(health.label)
+                .os1Style(theme.typography.label)
+                .foregroundStyle(theme.palette.onCoralPrimary)
+                .lineLimit(1)
+            HStack(spacing: 6) {
+                Text("bounce \(percentLabel(health.bounceRate))")
+                Text("complaint \(percentLabel(health.complaintRate))")
+            }
+            .font(.caption2)
+            .foregroundStyle(theme.palette.onCoralMuted)
+            if let review = health.reviewAverage {
+                Text("reviews \(review, specifier: "%.1f")")
+                    .font(.caption2)
+                    .foregroundStyle(theme.palette.onCoralMuted)
+            }
+            Text(health.warnings.prefix(2).joined(separator: ", "))
+                .font(.caption2)
+                .foregroundStyle(health.warnings.isEmpty ? theme.palette.onCoralMuted : .orange)
+                .lineLimit(2)
+        }
+        .padding(10)
+        .frame(width: 240, alignment: .leading)
+        .background(theme.palette.glassFill.opacity(0.78))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(reputationColor(health).opacity(0.55), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
     // MARK: - Approval console
 
     @ViewBuilder
@@ -415,7 +603,8 @@ struct CodexTasksView: View {
     }
 
     private func approvalCard(_ request: CompanyApprovalRequest) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let compliance = manager.complianceDecision(for: request)
+        return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Image(systemName: "exclamationmark.shield")
                     .foregroundStyle(approvalColor(request.riskTier))
@@ -451,14 +640,46 @@ struct CodexTasksView: View {
             .foregroundStyle(theme.palette.onCoralMuted)
             .lineLimit(1)
 
+            if compliance.status != .approved {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label(compliance.status.rawValue, systemImage: "shield.lefthalf.filled.badge.checkmark")
+                        .foregroundStyle(compliance.status == .blocked ? theme.palette.danger : .orange)
+                    ForEach(compliance.findings.prefix(2)) { finding in
+                        Text(finding.fix)
+                            .font(.caption2)
+                            .foregroundStyle(theme.palette.onCoralSecondary)
+                            .lineLimit(2)
+                    }
+                }
+            }
+
             HStack(spacing: 6) {
-                Button(L10n.string("Approve 4h")) {
+                Button(L10n.string("Once")) {
+                    manager.approveOnce(request: request)
+                }
+                .buttonStyle(.os1Secondary)
+
+                Button(L10n.string("4h")) {
                     manager.approve(request: request, hours: 4)
                 }
                 .buttonStyle(.os1Primary)
+                .disabled(compliance.status == .blocked)
 
+                Button(L10n.string("Budget")) {
+                    manager.approveWithinBudget(request: request, hours: 4)
+                }
+                .buttonStyle(.os1Secondary)
+                .disabled(request.estimatedCostUSD == nil)
+            }
+
+            HStack(spacing: 6) {
                 Button(L10n.string("Deny")) {
                     manager.deny(request: request)
+                }
+                .buttonStyle(.os1Secondary)
+
+                Button(L10n.string("Always ask")) {
+                    manager.alwaysRequireApproval(request: request)
                 }
                 .buttonStyle(.os1Secondary)
             }
@@ -981,12 +1202,20 @@ struct CodexTasksView: View {
                             .foregroundStyle(theme.palette.onCoralMuted)
                     }
                     ForEach(campaigns.prefix(4)) { campaign in
-                        HStack {
-                            Label(campaign.channel.rawValue, systemImage: campaign.canExecute ? "paperplane.circle" : "lock.circle")
-                            Spacer()
-                            Text(campaign.approvalState.rawValue)
-                                .font(.system(.caption2, design: .monospaced))
-                                .foregroundStyle(campaign.canExecute ? .green : .orange)
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack {
+                                Label(campaign.channel.rawValue, systemImage: campaign.canExecute ? "paperplane.circle" : "lock.circle")
+                                Spacer()
+                                Text(campaign.complianceDecision.status.rawValue)
+                                    .font(.system(.caption2, design: .monospaced))
+                                    .foregroundStyle(campaign.canExecute ? .green : .orange)
+                            }
+                            if let fix = campaign.complianceDecision.fixes.first {
+                                Text(fix)
+                                    .font(.caption2)
+                                    .foregroundStyle(theme.palette.onCoralSecondary)
+                                    .lineLimit(1)
+                            }
                         }
                     }
                     Text(distribution.nextRecommendedAction)
@@ -1264,6 +1493,26 @@ struct CodexTasksView: View {
         }
     }
 
+    private func reputationIcon(_ health: CompanyReputationHealth) -> String {
+        if health.status == .retired { return "archivebox" }
+        if health.status == .quarantined || health.status == .banned { return "exclamationmark.octagon" }
+        switch health.kind {
+        case .senderDomain, .emailAccount: return "envelope.badge.shield.half.filled"
+        case .socialAccount: return "person.2"
+        case .marketplaceAccount: return "storefront"
+        case .brandProfile: return "person.text.rectangle"
+        }
+    }
+
+    private func reputationColor(_ health: CompanyReputationHealth) -> Color {
+        switch health.risk {
+        case .low: return .green
+        case .medium: return .yellow
+        case .high: return .orange
+        case .critical: return theme.palette.danger
+        }
+    }
+
     private func moneyLabel(_ amount: Double) -> String {
         let sign = amount < 0 ? "-" : ""
         return "\(sign)$\(String(format: "%.2f", abs(amount)))"
@@ -1307,26 +1556,35 @@ struct CodexTasksView: View {
         case .companyResumed, .fleetResumed: return "arrow.clockwise.circle"
         case .companyKilled: return "xmark.octagon"
         case .secretAccessed: return "key"
+        case .complianceChecked: return "shield.checkered"
+        case .complianceBlocked: return "shield.slash"
         case .approvalRequested: return "checkmark.shield"
         case .approvalApproved: return "checkmark.seal"
         case .approvalDenied: return "xmark.shield"
         case .approvalChangesRequested: return "arrow.uturn.left.circle"
+        case .permissionChanged: return "person.crop.circle.badge.gearshape"
+        case .permissionDenied: return "lock.shield"
+        case .permissionEscalated: return "exclamationmark.shield"
+        case .governanceDecisionRecorded: return "doc.badge.clock"
         case .stateBackupCreated: return "externaldrive.badge.checkmark"
         case .ledgerEntryRecorded: return "dollarsign.circle"
+        case .untrustedContentInfluencedDecision: return "exclamationmark.shield"
         }
     }
 
     private func eventColor(_ kind: CompanyEvent.Kind) -> Color {
         switch kind {
-        case .budgetBlocked, .companyKilled, .approvalDenied:
+        case .budgetBlocked, .companyKilled, .approvalDenied, .complianceBlocked, .permissionDenied:
             return theme.palette.danger
-        case .heartbeatQueued, .externalSideEffect:
+        case .heartbeatQueued, .externalSideEffect, .permissionChanged, .governanceDecisionRecorded:
             return .purple
-        case .companyPaused, .fleetPaused, .approvalRequested, .approvalChangesRequested:
+        case .companyPaused, .fleetPaused, .approvalRequested, .approvalChangesRequested,
+             .untrustedContentInfluencedDecision, .permissionEscalated:
             return .orange
         case .heartbeatStarted:
             return .yellow
-        case .heartbeatFinished, .lifecycleChanged, .companyResumed, .fleetResumed, .approvalApproved, .stateBackupCreated, .ledgerEntryRecorded:
+        case .heartbeatFinished, .lifecycleChanged, .companyResumed, .fleetResumed, .approvalApproved,
+             .stateBackupCreated, .ledgerEntryRecorded, .complianceChecked:
             return .green
         case .companyCreated, .userInstruction, .secretAccessed:
             return theme.palette.onCoralMuted

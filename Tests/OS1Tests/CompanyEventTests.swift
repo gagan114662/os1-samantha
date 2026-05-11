@@ -53,6 +53,28 @@ struct CompanyEventTests {
     }
 
     @Test
+    func complianceDecisionsAreRepresentedInEventLogKinds() throws {
+        let original = CompanyEvent(
+            companyID: "company-1",
+            kind: .complianceBlocked,
+            summary: "Compliance blocked: Send bought-list email",
+            metadata: [
+                "requestID": "req-1",
+                "status": CompanyComplianceDecision.Status.blocked.rawValue,
+                "findingIDs": "spam-risk,missing-outbound-metadata",
+                "fixes": "Use opt-in contacts"
+            ]
+        )
+
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(CompanyEvent.self, from: data)
+
+        #expect(decoded.kind == .complianceBlocked)
+        #expect(decoded.metadata["status"] == "blocked")
+        #expect(decoded.metadata["findingIDs"]?.contains("spam-risk") == true)
+    }
+
+    @Test
     func inputHashIsStableSHA256() {
         #expect(CompanyEvent.inputHash(for: "prompt") == "cf07194ee232eb531e15f690000d19846dea69cf05504782658afcfacb9228a2")
     }

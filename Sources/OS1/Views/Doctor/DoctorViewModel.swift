@@ -159,10 +159,113 @@ final class DoctorViewModel: ObservableObject {
         async let launchd = makeLaunchdCheck()
         async let voicePort = makeVoicePortCheck()
         async let keychain = makeKeychainCheck()
+        async let connectorHealth = makeConnectorHealthCheck()
         async let sharedCredentials = makeSharedCredentialScopeCheck()
         async let notarization = makeNotarizationCheck()
         async let productionGates = makeProductionGatesCheck()
-        return await [codex, claude, wuphf, launchd, voicePort, keychain, sharedCredentials, notarization, productionGates]
+        async let evalHarness = makeEvaluationHarnessCheck()
+        async let dataGovernance = makeDataGovernanceCheck()
+        async let stateBackups = makeStateBackupCheck()
+        return await [
+            codex,
+            claude,
+            wuphf,
+            launchd,
+            voicePort,
+            keychain,
+            connectorHealth,
+            sharedCredentials,
+            notarization,
+            productionGates,
+            evalHarness,
+            dataGovernance,
+            stateBackups,
+        ]
+    }
+
+    private func makeStateBackupCheck() async -> Check {
+        guard let latest = Self.latestStateBackupManifest() else {
+            return Check(
+                id: "company-state-backups",
+                title: "Company state backups",
+                severity: .warn,
+                summary: "No state backup manifest found",
+                detail: "Create a backup before relying on autonomous company recovery.",
+                actions: []
+            )
+        }
+
+        let integrity = CompanyStateBackupBuilder.verifyManifest(latest.manifest, backupRoot: latest.root)
+        let problems = Self.stateBackupProblems(
+            latestManifest: latest.manifest,
+            integrityReport: integrity,
+            now: Date()
+        )
+        if problems.isEmpty {
+            return Check(
+                id: "company-state-backups",
+                title: "Company state backups",
+                severity: .ok,
+                summary: "Latest backup is current and integrity-checked",
+                detail: "Backup \(latest.manifest.backupID) has \(integrity.verifiedEntryCount) verified entries.",
+                actions: []
+            )
+        }
+
+        return Check(
+            id: "company-state-backups",
+            title: "Company state backups",
+            severity: integrity.isPassing ? .warn : .error,
+            summary: "Backup needs attention",
+            detail: problems.joined(separator: "\n"),
+            actions: []
+        )
+    }
+
+    private func makeConnectorHealthCheck() async -> Check {
+        let reports = CodexSessionManager.shared.sessions.map { session in
+            CompanyIntegrationPlanner.healthReport(
+                companyID: session.id,
+                workflowPlans: CompanyIntegrationPlanner.defaultWorkflowInventory(companyID: session.id)
+            )
+        }
+        let problems = Self.connectorHealthProblems(reports: reports)
+        if problems.isEmpty {
+            return Check(
+                id: "api-first-connectors",
+                title: "API-first connectors",
+                severity: .ok,
+                summary: "No connector auth or rate-limit failures recorded",
+                detail: "Browser automation is treated as a high-fragility fallback path.",
+                actions: []
+            )
+        }
+        return Check(
+            id: "api-first-connectors",
+            title: "API-first connectors",
+            severity: .warn,
+            summary: "Connector issues can block company workflows",
+            detail: problems.joined(separator: "\n"),
+            actions: []
+        )
+    }
+
+    nonisolated static func connectorHealthProblems(reports: [CompanyIntegrationHealthReport]) -> [String] {
+        reports.flatMap { report -> [String] in
+            var problems: [String] = []
+            if let blocked = report.blockedReason {
+                problems.append("\(report.companyID): \(blocked)")
+            }
+            if report.hasRateLimitPressure {
+                problems.append("\(report.companyID): connector rate limit pressure")
+            }
+            if !report.browserFallbackWorkflowIDs.isEmpty {
+                problems.append(
+                    "\(report.companyID): browser fallback workflows \(report.browserFallbackWorkflowIDs.joined(separator: ", "))"
+                )
+            }
+            return problems
+        }.sorted()
     }
 
     private func makeProductionGatesCheck() async -> Check {
@@ -214,6 +317,58 @@ final class DoctorViewModel: ObservableObject {
         return required.filter { !document.contains($0) }
     }
 
+    private func makeDataGovernanceCheck() async -> Check {
+        let docURL = Self.dataGovernanceURL()
+        guard let document = try? String(contentsOf: docURL, encoding: .utf8) else {
+            return Check(
+                id: "data-governance",
+                title: "Data governance",
+                severity: .warn,
+                summary: "Missing data governance configuration",
+                detail: """
+                Create docs/data-governance.md with categories, retention, deletion, prompt redaction, and breach \
+                response.
+                """,
+                actions: []
+            )
+        }
+
+        let missing = Self.dataGovernanceMissingSections(in: document)
+        if missing.isEmpty {
+            return Check(
+                id: "data-governance",
+                title: "Data governance",
+                severity: .ok,
+                summary: "Retention, deletion, prompt redaction, and breach response configured",
+                detail: docURL.path,
+                actions: []
+            )
+        }
+
+        return Check(
+            id: "data-governance",
+            title: "Data governance",
+            severity: .warn,
+            summary: "Missing required sections: \(missing.joined(separator: ", "))",
+            detail: docURL.path,
+            actions: []
+        )
+    }
+
+    nonisolated static func dataGovernanceMissingSections(in document: String) -> [String] {
+        let required = [
+            "Version:",
+            "## Data Categories",
+            "## Retention Policies",
+            "## Customer Export Workflow",
+            "## Customer Deletion Workflow",
+            "## Prompt Redaction Rules",
+            "## Breach Response Checklist",
+            "## Doctor Configuration",
+        ]
+        return required.filter { !document.contains($0) }
+    }
+
     private nonisolated static func productionOperatingModelURL() -> URL {
         let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let cwdDoc = cwd.appendingPathComponent("docs/production-operating-model.md")
@@ -221,6 +376,121 @@ final class DoctorViewModel: ObservableObject {
             return cwdDoc
         }
         return URL(fileURLWithPath: "/Users/gaganarora/Desktop/my projects/hermes-desktop-os1/docs/production-operating-model.md")
+    }
+
+    private func makeEvaluationHarnessCheck() async -> Check {
+        let reportURL = Self.evaluationReportURL()
+        guard let summary = Self.evaluationReportSummary(at: reportURL) else {
+            return Check(
+                id: "evaluation-harness",
+                title: L10n.string("Agent eval harness"),
+                severity: .warn,
+                summary: L10n.string("No non-live eval report found"),
+                detail: L10n.string("Run `python3 scripts/run-evals.py` to create artifacts/evals/non-live-report.json. CI runs this on every PR and uploads the report artifact."),
+                actions: []
+            )
+        }
+
+        return Check(
+            id: "evaluation-harness",
+            title: L10n.string("Agent eval harness"),
+            severity: summary.passed ? .ok : .error,
+            summary: L10n.string(
+                "Eval suite %@: %lld/%lld passed, score %.1f",
+                summary.suite,
+                summary.passedCount,
+                summary.totalCount,
+                summary.averageScore
+            ),
+            detail: reportURL.path,
+            actions: []
+        )
+    }
+
+    struct EvaluationReportSummary: Decodable, Equatable {
+        let suite: String
+        let passed: Bool
+        let passedCount: Int
+        let totalCount: Int
+        let averageScore: Double
+    }
+
+    nonisolated static func evaluationReportSummary(at url: URL) -> EvaluationReportSummary? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(EvaluationReportSummary.self, from: data)
+    }
+
+    private nonisolated static func evaluationReportURL() -> URL {
+        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let cwdReport = cwd.appendingPathComponent("artifacts/evals/non-live-report.json")
+        if FileManager.default.fileExists(atPath: cwdReport.path) {
+            return cwdReport
+        }
+        return URL(fileURLWithPath: "/Users/gaganarora/Desktop/my projects/hermes-desktop-os1/artifacts/evals/non-live-report.json")
+    }
+
+    private nonisolated static func dataGovernanceURL() -> URL {
+        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let cwdDoc = cwd.appendingPathComponent("docs/data-governance.md")
+        if FileManager.default.fileExists(atPath: cwdDoc.path) {
+            return cwdDoc
+        }
+        return URL(fileURLWithPath: "/Users/gaganarora/Desktop/my projects/hermes-desktop-os1/docs/data-governance.md")
+    }
+
+    nonisolated static func stateBackupProblems(
+        latestManifest: CompanyStateBackupManifest?,
+        integrityReport: CompanyBackupIntegrityReport?,
+        now: Date
+    ) -> [String] {
+        guard let latestManifest else { return ["No state backup manifest found."] }
+        var problems: [String] = []
+        let ageHours = now.timeIntervalSince(latestManifest.createdAt) / 3_600
+        if ageHours > Double(latestManifest.recoveryPointObjectiveHours) {
+            problems.append(
+                "Latest backup is \(Int(ageHours))h old; RPO is \(latestManifest.recoveryPointObjectiveHours)h."
+            )
+        }
+        guard let integrityReport else {
+            problems.append("Backup integrity has not been checked.")
+            return problems
+        }
+        if !integrityReport.missingPaths.isEmpty {
+            problems.append("Missing backup paths: \(integrityReport.missingPaths.joined(separator: ", ")).")
+        }
+        if !integrityReport.checksumMismatches.isEmpty {
+            problems.append(
+                "Checksum mismatches: \(integrityReport.checksumMismatches.joined(separator: ", "))."
+            )
+        }
+        return problems
+    }
+
+    private nonisolated static func latestStateBackupManifest()
+        -> (manifest: CompanyStateBackupManifest, root: URL)? {
+        let root = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".os1/codex-tasks/backups", isDirectory: true)
+        guard let children = try? FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else { return nil }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return children
+            .compactMap { backupRoot -> (CompanyStateBackupManifest, URL, Date)? in
+                let manifestURL = backupRoot.appendingPathComponent("manifest.json")
+                guard let data = try? Data(contentsOf: manifestURL),
+                      let manifest = try? decoder.decode(CompanyStateBackupManifest.self, from: data)
+                else { return nil }
+                let values = try? manifestURL.resourceValues(forKeys: [.contentModificationDateKey])
+                let modified = values?.contentModificationDate ?? manifest.createdAt
+                return (manifest, backupRoot, modified)
+            }
+            .sorted { $0.2 > $1.2 }
+            .first
+            .map { ($0.0, $0.1) }
     }
 
     /// Reports whether the built OS1.app bundle is Developer-ID-signed +

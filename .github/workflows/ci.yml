@@ -28,6 +28,26 @@ jobs:
           python -m pip install PyYAML
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
+      - name: Run non-live agent evals
+        run: |
+          python3 scripts/run-evals.py \
+            --json-report artifacts/evals/non-live-report.json \
+            --markdown-report artifacts/evals/non-live-report.md
+
+      - name: Publish eval report summary
+        if: always()
+        run: |
+          if [ -f artifacts/evals/non-live-report.md ]; then
+            cat artifacts/evals/non-live-report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload eval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: os1-non-live-eval-report
+          path: artifacts/evals/
+
       - name: Test
         run: swift test
 

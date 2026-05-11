@@ -17,13 +17,23 @@ struct CompanyFactoryTests {
         #expect(kinds.contains(.pricingPage))
         #expect(kinds.contains(.paymentLink))
         #expect(kinds.contains(.crmTable))
+        #expect(kinds.contains(.suppressionList))
         #expect(kinds.contains(.supportInbox))
+        #expect(kinds.contains(.supportEscalationPolicy))
+        #expect(kinds.contains(.supportTickets))
         #expect(kinds.contains(.analyticsPlan))
         #expect(kinds.contains(.deploymentChecklist))
         #expect(kinds.contains(.brandGuide))
         #expect(kinds.contains(.onboardingFlow))
         #expect(kinds.contains(.refundPolicy))
+        #expect(kinds.contains(.termsOfService))
+        #expect(kinds.contains(.privacyPolicy))
+        #expect(kinds.contains(.acceptableUsePolicy))
+        #expect(kinds.contains(.legalMetadata))
+        #expect(kinds.contains(.taxChecklist))
         #expect(kinds.contains(.salesScript))
+        #expect(kinds.contains(.compliancePolicy))
+        #expect(kinds.contains(.browserPolicy))
     }
 
     @Test
@@ -35,10 +45,14 @@ struct CompanyFactoryTests {
         )
         let payment = manifest.assets.first { $0.kind == .paymentLink }
         let analytics = manifest.assets.first { $0.kind == .analyticsPlan }
+        let legalMetadata = manifest.assets.first { $0.kind == .legalMetadata }
+        let escalation = manifest.assets.first { $0.kind == .supportEscalationPolicy }
 
         #expect(payment?.sandboxTestable == true)
         #expect(analytics?.sandboxTestable == true)
         #expect(payment?.requiresApprovalBeforePublish == true)
+        #expect(legalMetadata?.requiresApprovalBeforePublish == true)
+        #expect(escalation?.requiresApprovalBeforePublish == true)
     }
 
     @Test
@@ -71,5 +85,31 @@ struct CompanyFactoryTests {
         for gate in manifest.gates {
             #expect(checklist.contains(gate.title))
         }
+        #expect(manifest.gates.contains { $0.kind == .legal })
+        #expect(manifest.gates.contains { $0.kind == .support })
+    }
+
+    @Test
+    func complianceAndBrowserPolicyStartersDefineAutomationControls() throws {
+        let manifest = CompanyFactory.manifest(
+            companyID: "company-1",
+            template: nil,
+            worktreePath: "/tmp/company-1"
+        )
+        let compliancePolicy = try #require(manifest.assets.first { $0.kind == .compliancePolicy })
+        let complianceStarter = CompanyFactory.starterContent(for: compliancePolicy, manifest: manifest)
+
+        #expect(complianceStarter.contains("\"legalBasis\""))
+        #expect(complianceStarter.contains("\"dataRetentionPolicy\""))
+        #expect(complianceStarter.contains("\"allowedDomains\""))
+        #expect(complianceStarter.contains("\"allowedActions\""))
+
+        let browserPolicy = try #require(manifest.assets.first { $0.kind == .browserPolicy })
+        let browserStarter = CompanyFactory.starterContent(for: browserPolicy, manifest: manifest)
+
+        #expect(browserStarter.contains("\"companyID\": \"company-1\""))
+        #expect(browserStarter.contains("\"approvedDomains\""))
+        #expect(browserStarter.contains("\"allowedActions\""))
+        #expect(browserStarter.contains("\"preferredIntegrations\""))
     }
 }
