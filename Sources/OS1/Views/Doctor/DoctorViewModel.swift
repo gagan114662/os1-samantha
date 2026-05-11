@@ -160,7 +160,66 @@ final class DoctorViewModel: ObservableObject {
         async let voicePort = makeVoicePortCheck()
         async let keychain = makeKeychainCheck()
         async let notarization = makeNotarizationCheck()
-        return await [codex, claude, wuphf, launchd, voicePort, keychain, notarization]
+        async let productionGates = makeProductionGatesCheck()
+        return await [codex, claude, wuphf, launchd, voicePort, keychain, notarization, productionGates]
+    }
+
+    private func makeProductionGatesCheck() async -> Check {
+        let docURL = Self.productionOperatingModelURL()
+        guard let document = try? String(contentsOf: docURL, encoding: .utf8) else {
+            return Check(
+                id: "production-gates",
+                title: L10n.string("Production gates"),
+                severity: .warn,
+                summary: L10n.string("Missing production operating model"),
+                detail: L10n.string("Create docs/production-operating-model.md before live autonomy."),
+                actions: []
+            )
+        }
+
+        let missing = Self.productionOperatingModelMissingSections(in: document)
+        if missing.isEmpty {
+            return Check(
+                id: "production-gates",
+                title: L10n.string("Production gates"),
+                severity: .ok,
+                summary: L10n.string("Production operating model configured"),
+                detail: L10n.string("docs/production-operating-model.md maps autonomy, risk tiers, approvals, live checklist, emergency stop, and non-autonomous areas."),
+                actions: []
+            )
+        }
+
+        return Check(
+            id: "production-gates",
+            title: L10n.string("Production gates"),
+            severity: .warn,
+            summary: L10n.string("Missing required sections: %@", missing.joined(separator: ", ")),
+            detail: docURL.path,
+            actions: []
+        )
+    }
+
+    nonisolated static func productionOperatingModelMissingSections(in document: String) -> [String] {
+        let required = [
+            "Version:",
+            "## Autonomy Levels",
+            "## Risk Tiers",
+            "## Tool / Action Approval Matrix",
+            "## Sandbox to Live Revenue Checklist",
+            "## Emergency Stop",
+            "## Non-Autonomous Areas",
+            "## GitHub / Release Linkage",
+        ]
+        return required.filter { !document.contains($0) }
+    }
+
+    private nonisolated static func productionOperatingModelURL() -> URL {
+        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let cwdDoc = cwd.appendingPathComponent("docs/production-operating-model.md")
+        if FileManager.default.fileExists(atPath: cwdDoc.path) {
+            return cwdDoc
+        }
+        return URL(fileURLWithPath: "/Users/gaganarora/Desktop/my projects/hermes-desktop-os1/docs/production-operating-model.md")
     }
 
     /// Reports whether the built OS1.app bundle is Developer-ID-signed +

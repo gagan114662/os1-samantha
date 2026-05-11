@@ -1083,3 +1083,11 @@
 "To ship: set OS1_CODESIGN_IDENTITY to a Developer ID Application cert and re-run scripts/build-macos-app.sh, then run scripts/notarize.sh. See the script header for the one-time `xcrun notarytool store-credentials` setup." = "To ship: set OS1_CODESIGN_IDENTITY to a Developer ID Application cert and re-run scripts/build-macos-app.sh, then run scripts/notarize.sh. See the script header for the one-time `xcrun notarytool store-credentials` setup.";
 "Signed but not notarized" = "Signed but not notarized";
 "Hardened runtime: %@. Notarized: %@. Stapled: %@. Run scripts/notarize.sh to complete the chain." = "Hardened runtime: %@. Notarized: %@. Stapled: %@. Run scripts/notarize.sh to complete the chain.";
+
+// MARK: - Production gates doctor check
+"Production gates" = "Production gates";
+"Production operating model configured" = "Production operating model configured";
+"Missing production operating model" = "Missing production operating model";
+"Missing required sections: %@" = "Missing required sections: %@";
+"Create docs/production-operating-model.md before live autonomy." = "Create docs/production-operating-model.md before live autonomy.";
+"docs/production-operating-model.md maps autonomy, risk tiers, approvals, live checklist, emergency stop, and non-autonomous areas." = "docs/production-operating-model.md maps autonomy, risk tiers, approvals, live checklist, emergency stop, and non-autonomous areas.";
