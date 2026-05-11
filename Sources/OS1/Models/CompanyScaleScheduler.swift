@@ -63,7 +63,8 @@ enum CompanyScaleScheduler {
         budgetReports: [String: CompanyBudgetReport] = [:],
         portfolioProfiles: [String: CompanyPortfolioProfile] = [:],
         portfolioRules: CompanyPortfolioRules = .productionDefault,
-        emergencyStop: CompanyEmergencyStop? = nil
+        emergencyStop: CompanyEmergencyStop? = nil,
+        integrationReports: [String: CompanyIntegrationHealthReport] = [:]
     ) -> CompanyHeartbeatSchedulePlan {
         let activeCount = sessions.filter { $0.status == .running }.count
         let queuedCount = sessions.filter { $0.status == .queued }.count
@@ -110,6 +111,12 @@ enum CompanyScaleScheduler {
             now: now
         ) {
             backpressure.append("emergencyStop")
+        }
+        if integrationReports.values.contains(where: \.hasRateLimitPressure) {
+            backpressure.append("connectorRateLimit")
+        }
+        if integrationReports.values.contains(where: { $0.blockedReason != nil }) {
+            backpressure.append("connectorBlocked")
         }
 
         var runnerCapacity = Dictionary(uniqueKeysWithValues: runners.map {
@@ -166,6 +173,12 @@ enum CompanyScaleScheduler {
                 if report.isNearLimit {
                     budgetWarningIDs.append(session.id)
                 }
+            }
+
+            if let integrationReport = integrationReports[session.id],
+               integrationReport.blockedReason != nil {
+                blocked.append(session.id)
+                continue
             }
 
             if pauseSet.contains(session.id) {

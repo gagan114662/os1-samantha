@@ -159,6 +159,7 @@ final class DoctorViewModel: ObservableObject {
         async let launchd = makeLaunchdCheck()
         async let voicePort = makeVoicePortCheck()
         async let keychain = makeKeychainCheck()
+        async let connectorHealth = makeConnectorHealthCheck()
         async let sharedCredentials = makeSharedCredentialScopeCheck()
         async let notarization = makeNotarizationCheck()
         async let productionGates = makeProductionGatesCheck()
@@ -172,6 +173,7 @@ final class DoctorViewModel: ObservableObject {
             launchd,
             voicePort,
             keychain,
+            connectorHealth,
             sharedCredentials,
             notarization,
             productionGates,
@@ -218,6 +220,52 @@ final class DoctorViewModel: ObservableObject {
             detail: problems.joined(separator: "\n"),
             actions: []
         )
+    }
+
+    private func makeConnectorHealthCheck() async -> Check {
+        let reports = CodexSessionManager.shared.sessions.map { session in
+            CompanyIntegrationPlanner.healthReport(
+                companyID: session.id,
+                workflowPlans: CompanyIntegrationPlanner.defaultWorkflowInventory(companyID: session.id)
+            )
+        }
+        let problems = Self.connectorHealthProblems(reports: reports)
+        if problems.isEmpty {
+            return Check(
+                id: "api-first-connectors",
+                title: "API-first connectors",
+                severity: .ok,
+                summary: "No connector auth or rate-limit failures recorded",
+                detail: "Browser automation is treated as a high-fragility fallback path.",
+                actions: []
+            )
+        }
+        return Check(
+            id: "api-first-connectors",
+            title: "API-first connectors",
+            severity: .warn,
+            summary: "Connector issues can block company workflows",
+            detail: problems.joined(separator: "\n"),
+            actions: []
+        )
+    }
+
+    nonisolated static func connectorHealthProblems(reports: [CompanyIntegrationHealthReport]) -> [String] {
+        reports.flatMap { report -> [String] in
+            var problems: [String] = []
+            if let blocked = report.blockedReason {
+                problems.append("\(report.companyID): \(blocked)")
+            }
+            if report.hasRateLimitPressure {
+                problems.append("\(report.companyID): connector rate limit pressure")
+            }
+            if !report.browserFallbackWorkflowIDs.isEmpty {
+                problems.append(
+                    "\(report.companyID): browser fallback workflows \(report.browserFallbackWorkflowIDs.joined(separator: ", "))"
+                )
+            }
+            return problems
+        }.sorted()
     }
 
     private func makeProductionGatesCheck() async -> Check {
