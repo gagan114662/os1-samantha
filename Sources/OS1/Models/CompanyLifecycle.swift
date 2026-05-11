@@ -7,6 +7,7 @@ struct CompanyEvidenceSnapshot: Codable, Hashable {
     var ledger: CompanyLedgerSummary
     var budgetReport: CompanyBudgetReport?
     var distribution: CompanyDistributionSummary?
+    var paymentsRisk: CompanyPaymentsRiskReport? = nil
     var failureCount: Int
     var complianceRisk: CompanyIdea.RiskTier
     var overrideReason: String?
@@ -20,6 +21,9 @@ struct CompanyEvidenceSnapshot: Codable, Hashable {
         if distribution?.active.isEmpty == false { score += 10 }
         if budgetReport?.status == .warning { score -= 8 }
         if budgetReport?.shouldBlockHeartbeat == true { score -= 25 }
+        if paymentsRisk?.accountHealth == .healthy { score += 8 }
+        if paymentsRisk?.canEnableLiveBilling == false { score -= 8 }
+        if paymentsRisk?.shouldPauseCompany == true { score -= 25 }
         score -= failureCount * 3
         if complianceRisk == .high || complianceRisk == .critical { score -= 10 }
         return max(0, score)
@@ -56,40 +60,134 @@ struct CompanyPortfolioRank: Codable, Hashable, Identifiable {
 enum CompanyLifecycleEngine {
     static func decide(_ evidence: CompanyEvidenceSnapshot) -> CompanyLifecycleDecision {
         if let override = evidence.overrideReason, !override.isEmpty {
-            return .init(action: .promote, from: evidence.stage, to: nextStage(after: evidence.stage), rationale: "Override recorded: \(override)", requiresOverride: false, evidence: evidence)
+            return .init(
+                action: .promote,
+                from: evidence.stage,
+                to: nextStage(after: evidence.stage),
+                rationale: "Override recorded: \(override)",
+                requiresOverride: false,
+                evidence: evidence
+            )
         }
         if evidence.complianceRisk == .critical {
-            return .init(action: .kill, from: evidence.stage, to: .killed, rationale: "Critical compliance risk.", requiresOverride: false, evidence: evidence)
+            return .init(
+                action: .kill,
+                from: evidence.stage,
+                to: .killed,
+                rationale: "Critical compliance risk.",
+                requiresOverride: false,
+                evidence: evidence
+            )
         }
         if evidence.failureCount >= 5 {
-            return .init(action: .pause, from: evidence.stage, to: .paused, rationale: "Repeated failures breached lifecycle guard.", requiresOverride: false, evidence: evidence)
+            return .init(
+                action: .pause,
+                from: evidence.stage,
+                to: .paused,
+                rationale: "Repeated failures breached lifecycle guard.",
+                requiresOverride: false,
+                evidence: evidence
+            )
         }
         if evidence.budgetReport?.status == .emergencyShutdown {
-            return .init(action: .kill, from: evidence.stage, to: .killed, rationale: "Emergency budget shutdown threshold reached.", requiresOverride: false, evidence: evidence)
+            return .init(
+                action: .kill,
+                from: evidence.stage,
+                to: .killed,
+                rationale: "Emergency budget shutdown threshold reached.",
+                requiresOverride: false,
+                evidence: evidence
+            )
         }
         if evidence.budgetReport?.status == .hardStop {
-            return .init(action: .pause, from: evidence.stage, to: .paused, rationale: "Hard budget limit reached.", requiresOverride: false, evidence: evidence)
+            return .init(
+                action: .pause,
+                from: evidence.stage,
+                to: .paused,
+                rationale: "Hard budget limit reached.",
+                requiresOverride: false,
+                evidence: evidence
+            )
+        }
+        if evidence.paymentsRisk?.shouldPauseCompany == true {
+            return .init(
+                action: .pause,
+                from: evidence.stage,
+                to: .paused,
+                rationale: "Unresolved payments risk requires pause.",
+                requiresOverride: false,
+                evidence: evidence
+            )
         }
         let profitability = CompanyProfitabilityGuard.evaluate(summary: evidence.ledger)
         if profitability.shouldPause {
-            return .init(action: .pause, from: evidence.stage, to: .paused, rationale: "Budget or unit economics guard: \(profitability.reasons.joined(separator: ","))", requiresOverride: false, evidence: evidence)
+            return .init(
+                action: .pause,
+                from: evidence.stage,
+                to: .paused,
+                rationale: "Budget or unit economics guard: \(profitability.reasons.joined(separator: ","))",
+                requiresOverride: false,
+                evidence: evidence
+            )
         }
         if evidence.stage == .validating && evidence.validationDecision == .rejected {
-            return .init(action: .kill, from: .validating, to: .killed, rationale: "Validation rejected the idea.", requiresOverride: false, evidence: evidence)
+            return .init(
+                action: .kill,
+                from: .validating,
+                to: .killed,
+                rationale: "Validation rejected the idea.",
+                requiresOverride: false,
+                evidence: evidence
+            )
         }
         if evidence.stage == .validating && evidence.validationDecision == .readyToBuild {
-            return .init(action: .promote, from: .validating, to: .building, rationale: "Validation met ready-to-build thresholds.", requiresOverride: false, evidence: evidence)
+            return .init(
+                action: .promote,
+                from: .validating,
+                to: .building,
+                rationale: "Validation met ready-to-build thresholds.",
+                requiresOverride: false,
+                evidence: evidence
+            )
         }
         if evidence.stage == .building && evidence.distribution?.active.isEmpty == false {
-            return .init(action: .promote, from: .building, to: .launched, rationale: "Launch assets and active distribution exist.", requiresOverride: false, evidence: evidence)
+            return .init(
+                action: .promote,
+                from: .building,
+                to: .launched,
+                rationale: "Launch assets and active distribution exist.",
+                requiresOverride: false,
+                evidence: evidence
+            )
         }
         if evidence.ledger.canMarkProfitable && evidence.stage == .launched {
-            return .init(action: .promote, from: .launched, to: .revenuePositive, rationale: "Verified or override-qualified revenue is positive.", requiresOverride: false, evidence: evidence)
+            return .init(
+                action: .promote,
+                from: .launched,
+                to: .revenuePositive,
+                rationale: "Verified or override-qualified revenue is positive.",
+                requiresOverride: false,
+                evidence: evidence
+            )
         }
         if evidence.ledger.netUSD > 100 && evidence.stage == .revenuePositive {
-            return .init(action: .scale, from: .revenuePositive, to: .scaling, rationale: "Profit threshold supports scaling.", requiresOverride: false, evidence: evidence)
+            return .init(
+                action: .scale,
+                from: .revenuePositive,
+                to: .scaling,
+                rationale: "Profit threshold supports scaling.",
+                requiresOverride: false,
+                evidence: evidence
+            )
         }
-        return .init(action: .hold, from: evidence.stage, to: evidence.stage, rationale: "Configured gates are not yet satisfied.", requiresOverride: true, evidence: evidence)
+        return .init(
+            action: .hold,
+            from: evidence.stage,
+            to: evidence.stage,
+            rationale: "Configured gates are not yet satisfied.",
+            requiresOverride: true,
+            evidence: evidence
+        )
     }
 
     static func rankPortfolio(_ snapshots: [CompanyEvidenceSnapshot]) -> [CompanyPortfolioRank] {
