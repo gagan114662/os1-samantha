@@ -892,6 +892,8 @@ struct CodexTasksView: View {
             .foregroundStyle(theme.palette.onCoralMuted)
 
             if let manifest = manager.factoryManifest(id: session.id) {
+                let campaigns = CompanyDistributionEngine.proposedCampaigns(companyID: session.id, manifest: manifest)
+                let distribution = CompanyDistributionEngine.summarize(campaigns: campaigns, results: [])
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
                         Text("Factory assets")
@@ -915,6 +917,32 @@ struct CodexTasksView: View {
                                 .foregroundStyle(gate.passed ? .green : .orange)
                         }
                     }
+                }
+                .font(.caption)
+                .foregroundStyle(theme.palette.onCoralMuted)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("Distribution")
+                            .os1Style(theme.typography.label)
+                            .foregroundStyle(theme.palette.onCoralMuted)
+                        Spacer()
+                        Text("active \(distribution.active.count) · blocked \(distribution.blocked.count)")
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(theme.palette.onCoralMuted)
+                    }
+                    ForEach(campaigns.prefix(4)) { campaign in
+                        HStack {
+                            Label(campaign.channel.rawValue, systemImage: campaign.canExecute ? "paperplane.circle" : "lock.circle")
+                            Spacer()
+                            Text(campaign.approvalState.rawValue)
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundStyle(campaign.canExecute ? .green : .orange)
+                        }
+                    }
+                    Text(distribution.nextRecommendedAction)
+                        .font(.caption2)
+                        .foregroundStyle(theme.palette.onCoralMuted)
                 }
                 .font(.caption)
                 .foregroundStyle(theme.palette.onCoralMuted)
