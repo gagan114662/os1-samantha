@@ -1831,6 +1831,29 @@ final class CodexSessionManager: ObservableObject {
         return CompanyScaleScheduler.fleetStatus(sessions: sessions, profitableCompanyIDs: profitable)
     }
 
+    func portfolioRanks() -> [CompanyPortfolioRank] {
+        let events = recentEvents(limit: 10_000)
+        let snapshots = sessions.map { session in
+            CompanyEvidenceSnapshot(
+                companyID: session.id,
+                stage: session.lifecycleStage,
+                validationDecision: nil,
+                ledger: ledgerSummary(for: session),
+                distribution: factoryManifest(id: session.id).map {
+                    CompanyDistributionEngine.summarize(
+                        campaigns: CompanyDistributionEngine.proposedCampaigns(companyID: session.id, manifest: $0),
+                        results: []
+                    )
+                },
+                failureCount: events.filter { $0.companyID == session.id && $0.isFailedHeartbeat }.count,
+                complianceRisk: session.sandboxMode == .sandbox ? .low : .medium,
+                overrideReason: nil,
+                artifactPaths: [session.journalPath, session.revenuePath, session.ledgerPath, session.assetRegistryPath]
+            )
+        }
+        return CompanyLifecycleEngine.rankPortfolio(snapshots)
+    }
+
     func migrateCompany(id: String, toRunnerID runnerID: String) {
         guard let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
         let previous = sessions[idx].assignedRunnerID

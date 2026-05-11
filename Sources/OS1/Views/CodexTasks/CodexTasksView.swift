@@ -556,6 +556,7 @@ struct CodexTasksView: View {
     private var metricsStrip: some View {
         let metrics = manager.metricsSnapshot()
         let plan = manager.schedulerPlan()
+        let topPortfolio = manager.portfolioRanks().first
         return HStack(spacing: 10) {
             Label("observability", systemImage: "chart.xyaxis.line")
             Text("events \(metrics.eventCount)")
@@ -566,6 +567,9 @@ struct CodexTasksView: View {
             Text("profit \(moneyLabel(metrics.profitUSD))")
             Text("scheduler start \(plan.startNowIDs.count)")
             Text("queue \(plan.queuedIDs.count)")
+            if let topPortfolio {
+                Text("top \(topPortfolio.companyID.prefix(6)) score \(topPortfolio.evidenceScore)")
+            }
             if !plan.backpressureReasons.isEmpty {
                 Text("backpressure \(plan.backpressureReasons.joined(separator: ","))")
                     .foregroundStyle(.orange)
