@@ -20,11 +20,11 @@ import sys
 import time
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 PID_FILE = os.path.expanduser("~/.os1/coo/coo.pid")
 STATE_FILE = os.path.expanduser("~/.os1/coo/state.json")
-INTERVAL = int(os.environ.get("OS1_COO_INTERVAL_SECONDS", "1800"))   # 30 min default
+INTERVAL = int(os.environ.get("OS1_COO_INTERVAL_SECONDS", "1800"))  # 30 min default
 FOUNDER_CHAT_ID_FILE = os.path.expanduser("~/.os1/coo/founder_chat_id")
 
 COO_PROMPT = """You are Samantha, COO of the user's portfolio of autonomous AI companies.
@@ -77,8 +77,8 @@ def load_state() -> dict:
     try:
         with open(STATE_FILE) as f:
             data = json.load(f)
-            data.setdefault("last_escalations", {})        # company_id -> {text, ts}
-            data.setdefault("consecutive_strikes", {})     # company_id -> int
+            data.setdefault("last_escalations", {})  # company_id -> {text, ts}
+            data.setdefault("consecutive_strikes", {})  # company_id -> int
             return data
     except (OSError, json.JSONDecodeError):
         return {"last_escalations": {}, "consecutive_strikes": {}}
@@ -89,8 +89,8 @@ def normalize_question(q: str) -> str:
     return re.sub(r"[^a-z0-9 ]", "", q.lower())[:200]
 
 
-COOLDOWN_SECONDS = 3600   # don't escalate same company more than 1x/hour
-STRIKE_LIMIT = 3          # 3 escalations in a row → auto-pause
+COOLDOWN_SECONDS = 3600  # don't escalate same company more than 1x/hour
+STRIKE_LIMIT = 3  # 3 escalations in a row → auto-pause
 
 
 def save_state(state: dict) -> None:
@@ -114,9 +114,9 @@ def os1_call(method: str, path: str, body: dict | None = None) -> dict:
     url = f"http://127.0.0.1:{port}{path}"
     data = json.dumps(body).encode() if body is not None else None
     headers = {"Content-Type": "application/json"} if body is not None else {}
-    req = urllib.request.Request(url, data=data, method=method, headers=headers)
+    req = urllib.request.Request(url, data=data, method=method, headers=headers)  # noqa: S310
     try:
-        with urllib.request.urlopen(req, timeout=20) as r:
+        with urllib.request.urlopen(req, timeout=20) as r:  # noqa: S310
             return json.loads(r.read())
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -126,7 +126,9 @@ def claude(prompt: str) -> str:
     try:
         proc = subprocess.run(
             ["claude", "-p", "--output-format", "text", prompt],
-            capture_output=True, text=True, timeout=180,
+            capture_output=True,
+            text=True,
+            timeout=180,
         )
         if proc.returncode != 0:
             return ""
@@ -139,21 +141,25 @@ def send_telegram(text: str) -> None:
     """Best-effort DM to the founder. Reads chat_id from a file the bot writes
     on first message (so we know which Telegram chat is the founder)."""
     if not os.path.exists(FOUNDER_CHAT_ID_FILE):
-        print(f"[coo] no founder chat_id yet (text @samantha114bot once); buffered: {text[:80]}", flush=True)
+        print(
+            f"[coo] no founder chat_id yet (text @samantha114bot once); buffered: {text[:80]}",
+            flush=True,
+        )
         return
     try:
         with open(FOUNDER_CHAT_ID_FILE) as f:
             chat_id = f.read().strip()
         token_proc = subprocess.run(
             ["security", "find-generic-password", "-s", "org.telegram.bot-token", "-w"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         token = token_proc.stdout.strip()
         if not token:
             return
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         body = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode()
-        urllib.request.urlopen(urllib.request.Request(url, data=body), timeout=15).read()
+        urllib.request.urlopen(urllib.request.Request(url, data=body), timeout=15).read()  # noqa: S310
         print(f"[coo] -> founder: {text[:80]}", flush=True)
     except Exception as e:
         print(f"[coo] telegram send failed: {e}", flush=True)
@@ -172,18 +178,20 @@ def build_snapshot() -> str:
         if s.get("status") in ("paused", "killed", "completed"):
             continue  # human-managed states; don't second-guess them
         tail = os1_call("POST", "/codex-tail", {"id": s["id"]})
-        rows.append({
-            "id": s["id"],
-            "title": s.get("title"),
-            "status": s.get("status"),
-            "branch": s.get("branch"),
-            "exit_code": s.get("exit_code"),
-            "started_at": s.get("started_at"),
-            "journal_tail_2k": (tail.get("tail") or "")[-2000:],
-        })
+        rows.append(
+            {
+                "id": s["id"],
+                "title": s.get("title"),
+                "status": s.get("status"),
+                "branch": s.get("branch"),
+                "exit_code": s.get("exit_code"),
+                "started_at": s.get("started_at"),
+                "journal_tail_2k": (tail.get("tail") or "")[-2000:],
+            }
+        )
     if not rows:
         return ""  # nothing to think about → skip the Claude call entirely
-    return json.dumps({"companies": rows, "now": datetime.now(timezone.utc).isoformat()}, indent=2)
+    return json.dumps({"companies": rows, "now": datetime.now(UTC).isoformat()}, indent=2)
 
 
 def main() -> None:
@@ -194,11 +202,16 @@ def main() -> None:
     while True:
         snapshot = build_snapshot()
         if not snapshot:
-            print("[coo] nothing to think about (no active companies or OS1 unreachable), sleeping", flush=True)
+            print(
+                "[coo] nothing to think about (no active companies or OS1 unreachable), sleeping",
+                flush=True,
+            )
             time.sleep(INTERVAL)
             continue
 
-        decision_text = claude(f"{COO_PROMPT}\n\nCURRENT SNAPSHOT:\n{snapshot}\n\nReply with the JSON only.")
+        decision_text = claude(
+            f"{COO_PROMPT}\n\nCURRENT SNAPSHOT:\n{snapshot}\n\nReply with the JSON only."
+        )
         if not decision_text:
             print("[coo] claude returned empty, skipping cycle", flush=True)
             time.sleep(INTERVAL)
@@ -222,8 +235,13 @@ def main() -> None:
             if kind == "intervene":
                 instruction = action.get("instruction", "")
                 if instruction:
-                    res = os1_call("POST", "/codex-intervene", {"id": company_id, "instruction": instruction})
-                    print(f"[coo] intervene {company_id}: {instruction[:80]} -> {res.get('ok')}", flush=True)
+                    res = os1_call(
+                        "POST", "/codex-intervene", {"id": company_id, "instruction": instruction}
+                    )
+                    print(
+                        f"[coo] intervene {company_id}: {instruction[:80]} -> {res.get('ok')}",
+                        flush=True,
+                    )
                     state["consecutive_strikes"][company_id] = 0  # reset strikes when we self-act
 
             elif kind == "escalate":
@@ -232,26 +250,37 @@ def main() -> None:
                     continue
                 last = state["last_escalations"].get(company_id, {})
                 last_ts = last.get("ts", 0) if isinstance(last, dict) else 0
-                last_norm = last.get("norm", "") if isinstance(last, dict) else normalize_question(str(last))
+                last_norm = (
+                    last.get("norm", "")
+                    if isinstance(last, dict)
+                    else normalize_question(str(last))
+                )
                 norm = normalize_question(question)
 
                 # Cooldown: don't ping for same company within 1 hour
                 if (now_ts - last_ts) < COOLDOWN_SECONDS:
-                    print(f"[coo] cooldown active for {company_id} ({int(now_ts - last_ts)}s ago) — skipping escalation", flush=True)
+                    print(
+                        f"[coo] cooldown active for {company_id} ({int(now_ts - last_ts)}s ago) — skipping escalation",
+                        flush=True,
+                    )
                     continue
 
                 strikes = state["consecutive_strikes"].get(company_id, 0)
                 if norm == last_norm and strikes >= 1:
                     # Same problem repeating — auto-pause instead of pestering the founder
                     os1_call("POST", "/codex-pause", {"id": company_id})
-                    send_telegram(f"[{company_id}] paused after repeated identical escalation: {question[:140]}")
+                    send_telegram(
+                        f"[{company_id}] paused after repeated identical escalation: {question[:140]}"
+                    )
                     state["consecutive_strikes"][company_id] = 0
                     state["last_escalations"][company_id] = {"norm": norm, "ts": now_ts}
                     continue
 
                 if strikes >= STRIKE_LIMIT:
                     os1_call("POST", "/codex-pause", {"id": company_id})
-                    send_telegram(f"[{company_id}] paused after {STRIKE_LIMIT} consecutive escalations. Investigate manually.")
+                    send_telegram(
+                        f"[{company_id}] paused after {STRIKE_LIMIT} consecutive escalations. Investigate manually."
+                    )
                     state["consecutive_strikes"][company_id] = 0
                     state["last_escalations"][company_id] = {"norm": norm, "ts": now_ts}
                     continue

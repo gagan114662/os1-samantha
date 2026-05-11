@@ -18,7 +18,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
+      - name: Check dependency graph availability
+        id: dependency-graph
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          status="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.security_and_analysis.dependency_graph.status // "unavailable"' 2>/dev/null || echo unavailable)"
+          echo "status=${status}" >> "${GITHUB_OUTPUT}"
+          if [ "${status}" != "enabled" ]; then
+            echo "Dependency graph is '${status}', so dependency review is skipped for this repository." >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
       - name: Dependency Review
+        if: steps.dependency-graph.outputs.status == 'enabled'
         uses: actions/dependency-review-action@v4
         with:
           fail-on-severity: high
