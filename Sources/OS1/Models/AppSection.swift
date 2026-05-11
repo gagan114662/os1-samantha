@@ -12,6 +12,8 @@ enum AppSection: String, CaseIterable, Identifiable {
     case knowledgeBase
     case terminal
     case desktop
+    case tiles
+    case codexTasks
     case mail
     case messaging
     case connectors
@@ -48,6 +50,10 @@ enum AppSection: String, CaseIterable, Identifiable {
             "Terminal"
         case .desktop:
             "Desktop"
+        case .tiles:
+            "Tiles"
+        case .codexTasks:
+            "Tasks"
         case .mail:
             "Mail"
         case .messaging:
@@ -85,6 +91,10 @@ enum AppSection: String, CaseIterable, Identifiable {
             "terminal"
         case .desktop:
             "display"
+        case .tiles:
+            "rectangle.split.2x2"
+        case .codexTasks:
+            "square.grid.2x2.fill"
         case .mail:
             "envelope"
         case .messaging:

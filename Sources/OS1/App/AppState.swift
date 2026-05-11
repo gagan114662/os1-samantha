@@ -417,7 +417,7 @@ final class AppState: ObservableObject {
             return !isLoadingSkills && !isRefreshingSkills
         case .knowledgeBase:
             return !isLoadingKnowledgeBase && !isRefreshingKnowledgeBase
-        case .connections, .files, .terminal, .desktop, .mail, .messaging, .connectors, .providers, .doctor:
+        case .connections, .files, .terminal, .desktop, .tiles, .codexTasks, .mail, .messaging, .connectors, .providers, .doctor:
             return false
         }
     }
@@ -431,8 +431,8 @@ final class AppState: ObservableObject {
     func isSectionAvailable(_ section: AppSection) -> Bool {
         if section == .connections { return true }
         guard let connection = activeConnection else { return false }
-        // Desktop (VNC) is only meaningful for Orgo VMs.
-        if section == .desktop {
+        // Desktop and Tiles (VNC) are only meaningful for Orgo VMs.
+        if section == .desktop || section == .tiles {
             if case .orgo = connection.transport { return true }
             return false
         }
@@ -509,7 +509,7 @@ final class AppState: ObservableObject {
             await refreshSkills()
         case .knowledgeBase:
             await refreshKnowledgeBase()
-        case .connections, .files, .terminal, .desktop, .mail, .messaging, .connectors, .providers, .doctor:
+        case .connections, .files, .terminal, .desktop, .tiles, .codexTasks, .mail, .messaging, .connectors, .providers, .doctor:
             break
         }
     }
@@ -2166,8 +2166,9 @@ final class AppState: ObservableObject {
             Task { await loadKnowledgeBase() }
         case .terminal:
             ensureTerminalSession()
-        case .connections, .desktop, .mail, .messaging, .connectors, .providers, .doctor:
-            // .desktop manages its own VNC lifecycle inside DesktopView.
+        case .connections, .desktop, .tiles, .codexTasks, .mail, .messaging, .connectors, .providers, .doctor:
+            // .desktop and .tiles manage their own VNC lifecycle inside their views.
+            // .codexTasks observes CodexSessionManager.shared and doesn't need section-entry hooks.
             // .mail manages its own AgentMail setup state inside MailView.
             // .connectors manages its own Composio setup state inside ConnectorsView.
             break
@@ -2208,7 +2209,7 @@ final class AppState: ObservableObject {
 
     private func reloadSectionAfterScopeChange(_ section: AppSection) async {
         switch section {
-        case .connections, .overview, .desktop, .mail, .messaging, .connectors, .providers, .doctor:
+        case .connections, .overview, .desktop, .tiles, .codexTasks, .mail, .messaging, .connectors, .providers, .doctor:
             // Desktop reconnects on its own when the active connection changes.
             // Mail and Connectors re-evaluate setup state on their own.
             break
