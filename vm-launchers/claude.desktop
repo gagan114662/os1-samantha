@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Claude
+Comment=Anthropic's Claude — opens claude.ai as a standalone window
+Exec=sh -c 'DISPLAY=:99 google-chrome --no-sandbox --no-first-run --user-data-dir=$HOME/.chrome-claude --app=https://claude.ai/new'
+Icon=/root/Desktop/claude-icon.png
+Terminal=false
+StartupNotify=true
+Categories=Network;Office;

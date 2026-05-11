@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=ChatGPT
+Comment=OpenAI ChatGPT — opens chatgpt.com as a standalone window
+Exec=sh -c 'DISPLAY=:99 google-chrome --no-sandbox --no-first-run --user-data-dir=$HOME/.chrome-chatgpt --app=https://chatgpt.com'
+Icon=/root/Desktop/codex-icon.png
+Terminal=false
+StartupNotify=true
+Categories=Network;Office;
