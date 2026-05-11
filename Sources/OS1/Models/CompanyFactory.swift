@@ -14,6 +14,7 @@ struct CompanyFactoryAsset: Codable, Hashable, Identifiable {
         case refundPolicy
         case salesScript
         case compliancePolicy
+        case browserPolicy
     }
 
     let id: String
@@ -73,7 +74,8 @@ enum CompanyFactory {
             (.onboardingFlow, "onboarding-flow.md", true, false),
             (.refundPolicy, "refund-policy.md", true, true),
             (.salesScript, "first-sales-script.md", true, true),
-            (.compliancePolicy, "COMPLIANCE_POLICY.json", true, false)
+            (.compliancePolicy, "COMPLIANCE_POLICY.json", true, false),
+            (.browserPolicy, "BROWSER_POLICY.json", true, false)
         ]
         return CompanyFactoryManifest(
             companyID: companyID,
@@ -157,6 +159,16 @@ enum CompanyFactory {
             }
 
             """
+        case .browserPolicy:
+            return """
+            {
+              "companyID": "\(manifest.companyID)",
+              "approvedDomains": [],
+              "allowedActions": [],
+              "preferredIntegrations": {}
+            }
+
+            """
         }
     }
 
@@ -174,6 +186,7 @@ enum CompanyFactory {
         case .refundPolicy: return "Cancellation/refund policy"
         case .salesScript: return "First sales script"
         case .compliancePolicy: return "Compliance and browser policy"
+        case .browserPolicy: return "Browser automation policy"
         }
     }
 }

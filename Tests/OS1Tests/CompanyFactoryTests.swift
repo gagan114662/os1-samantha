@@ -25,6 +25,7 @@ struct CompanyFactoryTests {
         #expect(kinds.contains(.refundPolicy))
         #expect(kinds.contains(.salesScript))
         #expect(kinds.contains(.compliancePolicy))
+        #expect(kinds.contains(.browserPolicy))
     }
 
     @Test
@@ -75,18 +76,26 @@ struct CompanyFactoryTests {
     }
 
     @Test
-    func compliancePolicyStarterIncludesBrowserAllowlistSchema() throws {
+    func complianceAndBrowserPolicyStartersDefineAutomationControls() throws {
         let manifest = CompanyFactory.manifest(
             companyID: "company-1",
             template: nil,
             worktreePath: "/tmp/company-1"
         )
-        let policy = try #require(manifest.assets.first { $0.kind == .compliancePolicy })
-        let starter = CompanyFactory.starterContent(for: policy, manifest: manifest)
+        let compliancePolicy = try #require(manifest.assets.first { $0.kind == .compliancePolicy })
+        let complianceStarter = CompanyFactory.starterContent(for: compliancePolicy, manifest: manifest)
 
-        #expect(starter.contains("\"legalBasis\""))
-        #expect(starter.contains("\"dataRetentionPolicy\""))
-        #expect(starter.contains("\"allowedDomains\""))
-        #expect(starter.contains("\"allowedActions\""))
+        #expect(complianceStarter.contains("\"legalBasis\""))
+        #expect(complianceStarter.contains("\"dataRetentionPolicy\""))
+        #expect(complianceStarter.contains("\"allowedDomains\""))
+        #expect(complianceStarter.contains("\"allowedActions\""))
+
+        let browserPolicy = try #require(manifest.assets.first { $0.kind == .browserPolicy })
+        let browserStarter = CompanyFactory.starterContent(for: browserPolicy, manifest: manifest)
+
+        #expect(browserStarter.contains("\"companyID\": \"company-1\""))
+        #expect(browserStarter.contains("\"approvedDomains\""))
+        #expect(browserStarter.contains("\"allowedActions\""))
+        #expect(browserStarter.contains("\"preferredIntegrations\""))
     }
 }

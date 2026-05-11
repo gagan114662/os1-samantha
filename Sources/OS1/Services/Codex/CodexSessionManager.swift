@@ -1139,6 +1139,7 @@ final class CodexSessionManager: ObservableObject {
         8. Lifecycle discipline: validating means collect demand evidence; building means ship the smallest monetizable asset; launched means measure real users/revenue; revenuePositive means improve margin and repeatability. Do not scale without verified revenue and positive net.
         9. Approval gate: before spending money, increasing budget, creating/charging/refunding payments, publishing public content, messaging humans, deleting assets, changing credentials, signing contracts, or touching regulated/real-estate/legal/financial claims, write APPROVAL_REQUEST.json using the schema below and end with `BLOCKED: approval required for <action>`. Only execute a high-risk action when APPROVAL_GRANTED.json exists, is unexpired, and matches the action scope.
         10. Compliance gate: before outreach, publishing, payments, browser automation, scraping, or collecting personal data, update COMPLIANCE_POLICY.json and include complianceMetadata in APPROVAL_REQUEST.json. Browser automation must name an allowed domain and allowed action; if it is not listed, do not automate it.
+        11. Browser automation gate: prefer a real API or connector over UI automation. If browser automation is still needed, BROWSER_POLICY.json must approve the domain/action, use selectors or semantic element names (never blind coordinates), and write a replayable trace with screenshot and DOM snapshot. Login expiry, captcha, rate limit, popup, layout, or selector failures must end in BLOCKED with context.
 
         ## YOUR WORKSPACE
         Working directory is your cwd. Files you should know about:
@@ -1151,6 +1152,8 @@ final class CodexSessionManager: ObservableObject {
           Its approvedActionFingerprint, companyID, destinationAccount, maxCostUSD, and remainingUses must match before execution
         - APPROVAL_DECISION.json — latest operator decision; if denied or changesRequested, follow it instead of executing the original action
         - COMPLIANCE_POLICY.json — per-company policy. Keep legalBasis, unsubscribePath, disclosureText, targetAudience, contactSource, dataRetentionPolicy, and browserAutomationPolicy.allowedDomains/allowedActions current before risky actions.
+        - BROWSER_POLICY.json — approved browser domains/actions and API/connector preferences. If absent, browser automation is not approved.
+        - browser-traces/ — save replayable browser traces here. Each action trace needs selector or semantic target, screenshot path, DOM snapshot path, outcome, and recovery decision.
         - handoff.json — STRUCTURED record you MUST overwrite each heartbeat (schema below). Auditor parses this directly, not your prose
         - LESSONS.md — portfolio-wide lessons shared across ALL companies (symlink, read-mostly). If you learn something useful to other companies, append a short entry (use `flock LESSONS.md ...` to avoid races)
         - Your git HEAD was just tagged `heartbeat-pre-\(session.heartbeatCount)` before this run; run `git diff heartbeat-pre-\(session.heartbeatCount)..HEAD` at end of heartbeat to verify what you ACTUALLY changed vs claimed
