@@ -1000,3 +1000,64 @@
 "Realtime Voice" = "Realtime Voice";
 "Toggle Voice Mode" = "Toggle Voice Mode";
 "Voice" = "Voice";
+
+// MARK: - Pass 2 additions: Tasks / Tiles / Doctor (auto-appended)
+"%lld computers" = "%lld computers";
+"%lld of %lld OS1 agents loaded" = "%lld of %lld OS1 agents loaded";
+"%lld total" = "%lld total";
+"All %lld OS1 agents loaded" = "All %lld OS1 agents loaded";
+"All %lld credentials present" = "All %lld credentials present";
+"Click \"Spin up\" or ask Samantha to create a new computer." = "Click \"Spin up\" or ask Samantha to create a new computer.";
+"Close" = "Close";
+"Company name" = "Company name";
+"Hire" = "Hire";
+"Missing: %@" = "Missing: %@";
+"Mission — \"build a YouTube channel that makes $1k/mo from AI tech reviews\"" = "Mission — \"build a YouTube channel that makes $1k/mo from AI tech reviews\"";
+"No Orgo workspace selected" = "No Orgo workspace selected";
+"No computers in this workspace yet" = "No computers in this workspace yet";
+"No tasks yet" = "No tasks yet";
+"No ~/.os1/voice-port file" = "No ~/.os1/voice-port file";
+"Not installed or not on PATH." = "Not installed or not on PATH.";
+"Not reachable on :7891" = "Not reachable on :7891";
+"OS1 looked for `%@` on PATH but didn't find it. Install it before agentic features that depend on it will work." = "OS1 looked for `%@` on PATH but didn't find it. Install it before agentic features that depend on it will work.";
+"OS1's voice server writes its TCP port here when it starts. Missing file = voice runtime never mounted (boot animation didn't finish, or the voice section was disabled)." = "OS1's voice server writes its TCP port here when it starts. Missing file = voice runtime never mounted (boot animation didn't finish, or the voice section was disabled).";
+"Open journal in Finder" = "Open journal in Finder";
+"Output (last 8 KB)" = "Output (last 8 KB)";
+"Pick a host on the Host tab to run host-level checks (gateway, Hermes, Telegram)." = "Pick a host on the Host tab to run host-level checks (gateway, Hermes, Telegram).";
+"Pick an Orgo VM connection on the Host tab to view its desktop." = "Pick an Orgo VM connection on the Host tab to view its desktop.";
+"Pick an Orgo VM connection on the Host tab — Tiles shows every computer in that workspace." = "Pick an Orgo VM connection on the Host tab — Tiles shows every computer in that workspace.";
+"Port %@ (fresh, %.0fs old)" = "Port %@ (fresh, %.0fs old)";
+"Port %@ (stale, %.0f min old)" = "Port %@ (stale, %.0f min old)";
+"Reachable on :7891 — %lld channel(s)" = "Reachable on :7891 — %lld channel(s)";
+"Remove company" = "Remove company";
+"Run heartbeat now" = "Run heartbeat now";
+"Save missing ones via the Providers / Connectors tabs, or `security add-generic-password -s <service> -a default -w <secret>`." = "Save missing ones via the Providers / Connectors tabs, or `security add-generic-password -s <service> -a default -w <secret>`.";
+"Spin up" = "Spin up";
+"Start it with `launchctl load -w ~/Library/LaunchAgents/com.os1.wuphf.plist` (or run `wuphf --no-open --no-nex --pack starter` once for development). Error: %@" = "Start it with `launchctl load -w ~/Library/LaunchAgents/com.os1.wuphf.plist` (or run `wuphf --no-open --no-nex --pack starter` once for development). Error: %@";
+"Streaming" = "Streaming";
+"Tasks" = "Tasks";
+"Tell the company what to do…" = "Tell the company what to do…";
+"Tiles" = "Tiles";
+"Type a task above or ask Samantha to spawn one." = "Type a task above or ask Samantha to spawn one.";
+"Voice server hasn't refreshed its port file recently. Could be a stale file from a prior OS1 process. Restart OS1 to rewrite it." = "Voice server hasn't refreshed its port file recently. Could be a stale file from a prior OS1 process. Restart OS1 to rewrite it.";
+"now" = "now";
+"running %lld" = "running %lld";
+
+// MARK: - Desktop stream status badges
+"Stale %lld s" = "Stale %lld s";
+
+// MARK: - Sidebar group headers
+"COMPUTERS" = "COMPUTERS";
+"AGENT WORK" = "AGENT WORK";
+"KNOWLEDGE" = "KNOWLEDGE";
+"CHANNELS" = "CHANNELS";
+"CONFIGURATION" = "CONFIGURATION";
+
+// MARK: - Notarization doctor check
+"dist/OS1.app not built yet" = "dist/OS1.app not built yet";
+"Run scripts/build-macos-app.sh to produce a bundle. Then this check will report its signing + notarization state." = "Run scripts/build-macos-app.sh to produce a bundle. Then this check will report its signing + notarization state.";
+"Notarized + stapled, hardened runtime" = "Notarized + stapled, hardened runtime";
+"Ad-hoc signed only — fine for local dev, not shippable" = "Ad-hoc signed only — fine for local dev, not shippable";
+"To ship: set OS1_CODESIGN_IDENTITY to a Developer ID Application cert and re-run scripts/build-macos-app.sh, then run scripts/notarize.sh. See the script header for the one-time `xcrun notarytool store-credentials` setup." = "To ship: set OS1_CODESIGN_IDENTITY to a Developer ID Application cert and re-run scripts/build-macos-app.sh, then run scripts/notarize.sh. See the script header for the one-time `xcrun notarytool store-credentials` setup.";
+"Signed but not notarized" = "Signed but not notarized";
+"Hardened runtime: %@. Notarized: %@. Stapled: %@. Run scripts/notarize.sh to complete the chain." = "Hardened runtime: %@. Notarized: %@. Stapled: %@. Run scripts/notarize.sh to complete the chain.";
