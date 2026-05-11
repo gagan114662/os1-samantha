@@ -1102,7 +1102,18 @@ final class CodexSessionManager: ObservableObject {
         // Keep journal context bounded
         _ = journal.suffix(15_000)
         let userInstr = session.pendingUserInstruction.map {
-            "\n## CEO INSTRUCTION (from Samantha — must address this in your action):\n\($0)\n"
+            let payload = CompanyDataGovernanceEngine.promptPayload(
+                text: $0,
+                category: .prompts,
+                companyID: session.id,
+                explicitAllowed: false
+            )
+            return """
+
+            ## CEO INSTRUCTION (from Samantha — must address this in your action):
+            \(payload.sanitizedText)
+
+            """
         } ?? ""
         let credsLine = availableCreds.isEmpty
             ? "No platform credentials are exposed to this company sandbox. If your mission needs Stripe/Resend/YouTube/etc, write APPROVAL_REQUEST.json if the action is high-risk, then emit BLOCKED: <which credential/scope>."
@@ -1140,6 +1151,9 @@ final class CodexSessionManager: ObservableObject {
         9. Approval gate: before spending money, increasing budget, creating/charging/refunding payments, publishing public content, messaging humans, deleting assets, changing credentials, signing contracts, or touching regulated/real-estate/legal/financial claims, write APPROVAL_REQUEST.json using the schema below and end with `BLOCKED: approval required for <action>`. Only execute a high-risk action when APPROVAL_GRANTED.json exists, is unexpired, and matches the action scope.
         10. Compliance gate: before outreach, publishing, payments, browser automation, scraping, or collecting personal data, update COMPLIANCE_POLICY.json and include complianceMetadata in APPROVAL_REQUEST.json. Browser automation must name an allowed domain and allowed action; if it is not listed, do not automate it.
         11. Browser automation gate: prefer a real API or connector over UI automation. If browser automation is still needed, BROWSER_POLICY.json must approve the domain/action, use selectors or semantic element names (never blind coordinates), and write a replayable trace with screenshot and DOM snapshot. Login expiry, captcha, rate limit, popup, layout, or selector failures must end in BLOCKED with context.
+        12. Data governance: classify stored records by data category and apply retention policies. Do not copy
+        credentials, customer PII, payment metadata, health data, or financial data into model prompts unless an
+        explicit approved task requires it. Redact sensitive values in logs and prompt payloads.
 
         ## YOUR WORKSPACE
         Working directory is your cwd. Files you should know about:

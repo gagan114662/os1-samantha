@@ -163,7 +163,20 @@ final class DoctorViewModel: ObservableObject {
         async let notarization = makeNotarizationCheck()
         async let productionGates = makeProductionGatesCheck()
         async let evalHarness = makeEvaluationHarnessCheck()
-        return await [codex, claude, wuphf, launchd, voicePort, keychain, sharedCredentials, notarization, productionGates, evalHarness]
+        async let dataGovernance = makeDataGovernanceCheck()
+        return await [
+            codex,
+            claude,
+            wuphf,
+            launchd,
+            voicePort,
+            keychain,
+            sharedCredentials,
+            notarization,
+            productionGates,
+            evalHarness,
+            dataGovernance,
+        ]
     }
 
     private func makeProductionGatesCheck() async -> Check {
@@ -211,6 +224,58 @@ final class DoctorViewModel: ObservableObject {
             "## Emergency Stop",
             "## Non-Autonomous Areas",
             "## GitHub / Release Linkage",
+        ]
+        return required.filter { !document.contains($0) }
+    }
+
+    private func makeDataGovernanceCheck() async -> Check {
+        let docURL = Self.dataGovernanceURL()
+        guard let document = try? String(contentsOf: docURL, encoding: .utf8) else {
+            return Check(
+                id: "data-governance",
+                title: "Data governance",
+                severity: .warn,
+                summary: "Missing data governance configuration",
+                detail: """
+                Create docs/data-governance.md with categories, retention, deletion, prompt redaction, and breach \
+                response.
+                """,
+                actions: []
+            )
+        }
+
+        let missing = Self.dataGovernanceMissingSections(in: document)
+        if missing.isEmpty {
+            return Check(
+                id: "data-governance",
+                title: "Data governance",
+                severity: .ok,
+                summary: "Retention, deletion, prompt redaction, and breach response configured",
+                detail: docURL.path,
+                actions: []
+            )
+        }
+
+        return Check(
+            id: "data-governance",
+            title: "Data governance",
+            severity: .warn,
+            summary: "Missing required sections: \(missing.joined(separator: ", "))",
+            detail: docURL.path,
+            actions: []
+        )
+    }
+
+    nonisolated static func dataGovernanceMissingSections(in document: String) -> [String] {
+        let required = [
+            "Version:",
+            "## Data Categories",
+            "## Retention Policies",
+            "## Customer Export Workflow",
+            "## Customer Deletion Workflow",
+            "## Prompt Redaction Rules",
+            "## Breach Response Checklist",
+            "## Doctor Configuration",
         ]
         return required.filter { !document.contains($0) }
     }
@@ -273,6 +338,15 @@ final class DoctorViewModel: ObservableObject {
             return cwdReport
         }
         return URL(fileURLWithPath: "/Users/gaganarora/Desktop/my projects/hermes-desktop-os1/artifacts/evals/non-live-report.json")
+    }
+
+    private nonisolated static func dataGovernanceURL() -> URL {
+        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let cwdDoc = cwd.appendingPathComponent("docs/data-governance.md")
+        if FileManager.default.fileExists(atPath: cwdDoc.path) {
+            return cwdDoc
+        }
+        return URL(fileURLWithPath: "/Users/gaganarora/Desktop/my projects/hermes-desktop-os1/docs/data-governance.md")
     }
 
     /// Reports whether the built OS1.app bundle is Developer-ID-signed +
