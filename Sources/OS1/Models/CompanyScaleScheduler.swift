@@ -62,7 +62,8 @@ enum CompanyScaleScheduler {
         profitabilityPolicy: CompanyProfitabilityPolicy = .productionDefault,
         budgetReports: [String: CompanyBudgetReport] = [:],
         portfolioProfiles: [String: CompanyPortfolioProfile] = [:],
-        portfolioRules: CompanyPortfolioRules = .productionDefault
+        portfolioRules: CompanyPortfolioRules = .productionDefault,
+        emergencyStop: CompanyEmergencyStop? = nil
     ) -> CompanyHeartbeatSchedulePlan {
         let activeCount = sessions.filter { $0.status == .running }.count
         let queuedCount = sessions.filter { $0.status == .queued }.count
@@ -102,6 +103,13 @@ enum CompanyScaleScheduler {
             backpressure.append("globalBudgetWarning")
         } else if globalBudgetReport.shouldBlockHeartbeat {
             backpressure.append("globalBudgetHardStop")
+        }
+        if CompanyIncidentResponseEngine.shouldBlock(
+            action: .companyHeartbeat,
+            emergencyStop: emergencyStop,
+            now: now
+        ) {
+            backpressure.append("emergencyStop")
         }
 
         var runnerCapacity = Dictionary(uniqueKeysWithValues: runners.map {
