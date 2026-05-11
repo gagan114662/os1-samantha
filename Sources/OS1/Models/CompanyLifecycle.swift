@@ -7,6 +7,7 @@ struct CompanyEvidenceSnapshot: Codable, Hashable {
     var ledger: CompanyLedgerSummary
     var budgetReport: CompanyBudgetReport?
     var distribution: CompanyDistributionSummary?
+    var unitEconomics: CompanyUnitEconomicsReport? = nil
     var failureCount: Int
     var complianceRisk: CompanyIdea.RiskTier
     var overrideReason: String?
@@ -18,6 +19,8 @@ struct CompanyEvidenceSnapshot: Codable, Hashable {
         if ledger.canMarkProfitable { score += 30 }
         if ledger.netUSD > 0 { score += 15 }
         if distribution?.active.isEmpty == false { score += 10 }
+        if unitEconomics?.canScale == true { score += 12 }
+        if unitEconomics?.shouldReview == true { score -= 12 }
         if budgetReport?.status == .warning { score -= 8 }
         if budgetReport?.shouldBlockHeartbeat == true { score -= 25 }
         score -= failureCount * 3
@@ -74,6 +77,9 @@ enum CompanyLifecycleEngine {
         if profitability.shouldPause {
             return .init(action: .pause, from: evidence.stage, to: .paused, rationale: "Budget or unit economics guard: \(profitability.reasons.joined(separator: ","))", requiresOverride: false, evidence: evidence)
         }
+        if evidence.unitEconomics?.shouldReview == true && evidence.stage == .revenuePositive {
+            return .init(action: .pause, from: evidence.stage, to: .paused, rationale: "Poor unit economics require lifecycle review.", requiresOverride: false, evidence: evidence)
+        }
         if evidence.stage == .validating && evidence.validationDecision == .rejected {
             return .init(action: .kill, from: .validating, to: .killed, rationale: "Validation rejected the idea.", requiresOverride: false, evidence: evidence)
         }
@@ -87,6 +93,9 @@ enum CompanyLifecycleEngine {
             return .init(action: .promote, from: .launched, to: .revenuePositive, rationale: "Verified or override-qualified revenue is positive.", requiresOverride: false, evidence: evidence)
         }
         if evidence.ledger.netUSD > 100 && evidence.stage == .revenuePositive {
+            guard evidence.unitEconomics?.canScale == true else {
+                return .init(action: .hold, from: evidence.stage, to: evidence.stage, rationale: "Unit economics must meet scale thresholds before auto-scale.", requiresOverride: true, evidence: evidence)
+            }
             return .init(action: .scale, from: .revenuePositive, to: .scaling, rationale: "Profit threshold supports scaling.", requiresOverride: false, evidence: evidence)
         }
         return .init(action: .hold, from: evidence.stage, to: evidence.stage, rationale: "Configured gates are not yet satisfied.", requiresOverride: true, evidence: evidence)
