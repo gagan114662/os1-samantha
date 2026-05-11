@@ -23,3 +23,18 @@ DerivedData/
 *.cer
 *.crt
 .worktrace/
+
+# ─── OS1 + Samantha runtime state (never commit) ───
+# Live secrets and runtime data live under ~/.os1 on the user's machine.
+# Anything brought into the repo for distribution is sanitized; nothing
+# touching real keys should ever land in tracked files.
+daemons/*/bot.pid
+daemons/*/*.pid
+daemons/*/bot.log
+daemons/*/daemon.log
+daemons/*/state.json
+daemons/*/founder_chat_id
+daemons/*/.env
+launchd/*.local.plist
+.os1-runtime/
+*.credentials.json
