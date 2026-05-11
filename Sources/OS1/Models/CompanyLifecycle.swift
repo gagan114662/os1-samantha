@@ -11,6 +11,7 @@ struct CompanyEvidenceSnapshot: Codable, Hashable {
     var supportReadiness: CompanySupportReadiness? = nil
     var paymentsRisk: CompanyPaymentsRiskReport? = nil
     var experimentEvidence: CompanyExperimentResult? = nil
+    var reputationHealth: [CompanyReputationHealth] = []
     var failureCount: Int
     var complianceRisk: CompanyIdea.RiskTier
     var overrideReason: String?
@@ -24,6 +25,7 @@ struct CompanyEvidenceSnapshot: Codable, Hashable {
         if distribution?.active.isEmpty == false { score += 10 }
         if experimentEvidence?.evidenceStrength == .strong { score += 12 }
         if experimentEvidence?.evidenceStrength == .weak { score -= 10 }
+        if reputationHealth.contains(where: { $0.risk == .high || $0.risk == .critical }) { score -= 20 }
         if budgetReport?.status == .warning { score -= 8 }
         if budgetReport?.shouldBlockHeartbeat == true { score -= 25 }
         if paymentsRisk?.accountHealth == .healthy { score += 8 }
@@ -93,6 +95,12 @@ enum CompanyLifecycleEngine {
                 requiresOverride: false,
                 evidence: evidence
             )
+        }
+        if evidence.reputationHealth.contains(where: { $0.risk == .critical }) {
+            return .init(action: .pause, from: evidence.stage, to: .paused, rationale: "Critical reputation risk or account ban.", requiresOverride: false, evidence: evidence)
+        }
+        if evidence.reputationHealth.contains(where: { $0.risk == .high }) {
+            return .init(action: .pause, from: evidence.stage, to: .paused, rationale: "Outbound reputation thresholds exceeded.", requiresOverride: false, evidence: evidence)
         }
         if evidence.budgetReport?.status == .emergencyShutdown {
             return .init(

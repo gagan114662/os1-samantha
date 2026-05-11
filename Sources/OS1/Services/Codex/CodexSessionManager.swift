@@ -2196,8 +2196,16 @@ final class CodexSessionManager: ObservableObject {
         CompanyPortfolioStrategyEngine.dashboard(profiles: portfolioProfiles())
     }
 
+    func reputationDashboard() -> CompanyReputationDashboard {
+        CompanyReputationEngine.dashboard(
+            assets: reputationAssets(),
+            signals: reputationSignals()
+        )
+    }
+
     func portfolioRanks() -> [CompanyPortfolioRank] {
         let events = recentEvents(limit: 10_000)
+        let reputation = reputationDashboard().companyHealth
         let snapshots = sessions.map { session in
             CompanyEvidenceSnapshot(
                 companyID: session.id,
@@ -2211,6 +2219,7 @@ final class CodexSessionManager: ObservableObject {
                         results: []
                     )
                 },
+                reputationHealth: reputation[session.id] ?? [],
                 failureCount: events.filter { $0.companyID == session.id && $0.isFailedHeartbeat }.count,
                 complianceRisk: session.sandboxMode == .sandbox ? .low : .medium,
                 overrideReason: nil,
@@ -2288,12 +2297,69 @@ final class CodexSessionManager: ObservableObject {
     }
 
     private func portfolioToken(_ value: String) -> String {
+        normalizedCompanyToken(value)
+    }
+
+    private func reputationAssets() -> [CompanyReputationAsset] {
+        sessions.flatMap { session -> [CompanyReputationAsset] in
+            let token = reputationToken(session.title)
+            let domain = "\(token).example"
+            return [
+                CompanyReputationAsset(
+                    id: "sender-domain:\(domain)",
+                    kind: .senderDomain,
+                    label: domain,
+                    ownerCompanyIDs: [session.id],
+                    status: session.status == .killed ? .retired : .warmup,
+                    dailySendLimit: 25,
+                    notes: ["derived sender domain"]
+                ),
+                CompanyReputationAsset(
+                    id: "brand:\(token)",
+                    kind: .brandProfile,
+                    label: session.title,
+                    ownerCompanyIDs: [session.id],
+                    status: session.lifecycleStage == .killed ? .retired : .active,
+                    dailySendLimit: 0,
+                    notes: ["derived brand profile"]
+                )
+            ]
+        }
+    }
+
+    private func reputationToken(_ value: String) -> String {
+        normalizedCompanyToken(value)
+    }
+
+    private func normalizedCompanyToken(_ value: String) -> String {
         let token = value.lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
             .filter { !$0.isEmpty }
             .prefix(4)
             .joined(separator: "-")
         return token.isEmpty ? "unknown" : token
+    }
+
+    private func reputationSignals() -> [CompanyReputationSignal] {
+        recentEvents(limit: 10_000).compactMap { event in
+            guard let companyID = event.companyID,
+                  let assetID = event.metadata["reputationAssetID"]
+            else { return nil }
+            return CompanyReputationSignal(
+                id: event.id.uuidString,
+                companyID: companyID,
+                assetID: assetID,
+                sent: Int(event.metadata["sent"] ?? "0") ?? 0,
+                delivered: Int(event.metadata["delivered"] ?? "0") ?? 0,
+                bounced: Int(event.metadata["bounced"] ?? "0") ?? 0,
+                complaints: Int(event.metadata["complaints"] ?? "0") ?? 0,
+                unsubscribes: Int(event.metadata["unsubscribes"] ?? "0") ?? 0,
+                reviewAverage: Double(event.metadata["reviewAverage"] ?? ""),
+                reviewCount: Int(event.metadata["reviewCount"] ?? "0") ?? 0,
+                accountWarnings: event.metadata["accountWarning"].map { [$0] } ?? [],
+                accountBans: event.metadata["accountBan"].map { [$0] } ?? []
+            )
+        }
     }
 
     func migrateCompany(id: String, toRunnerID runnerID: String) {

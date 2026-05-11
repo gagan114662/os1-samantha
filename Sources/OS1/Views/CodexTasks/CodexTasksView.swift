@@ -31,6 +31,7 @@ struct CodexTasksView: View {
             templateBar
             ideaBacklog
             portfolioDashboard
+            reputationConsole
             approvalConsole
             eventConsole
             metricsStrip
@@ -490,6 +491,83 @@ struct CodexTasksView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .strokeBorder(Color.orange.opacity(0.55), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    // MARK: - Reputation console
+
+    @ViewBuilder
+    private var reputationConsole: some View {
+        let dashboard = manager.reputationDashboard()
+        let risky = dashboard.allHealth.filter { $0.risk == .high || $0.risk == .critical }
+        if !dashboard.allHealth.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Label("Reputation", systemImage: "person.badge.shield.checkmark")
+                        .os1Style(theme.typography.label)
+                        .foregroundStyle(theme.palette.onCoralPrimary)
+                    Text("\(dashboard.allHealth.count) assets")
+                    Text("\(dashboard.sharedAssetHealth.count) shared")
+                    Text("\(risky.count) risky")
+                    Text("\(dashboard.escalationTasks.count) escalations")
+                    Spacer()
+                }
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundStyle(theme.palette.onCoralMuted)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .top, spacing: 8) {
+                        ForEach(dashboard.allHealth.prefix(10)) { health in
+                            reputationCard(health)
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.bottom, 10)
+        }
+    }
+
+    private func reputationCard(_ health: CompanyReputationHealth) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: reputationIcon(health))
+                    .foregroundStyle(reputationColor(health))
+                Text(health.kind.rawValue)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(reputationColor(health))
+                Spacer()
+                Text(health.status.rawValue)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(theme.palette.onCoralMuted)
+            }
+            Text(health.label)
+                .os1Style(theme.typography.label)
+                .foregroundStyle(theme.palette.onCoralPrimary)
+                .lineLimit(1)
+            HStack(spacing: 6) {
+                Text("bounce \(percentLabel(health.bounceRate))")
+                Text("complaint \(percentLabel(health.complaintRate))")
+            }
+            .font(.caption2)
+            .foregroundStyle(theme.palette.onCoralMuted)
+            if let review = health.reviewAverage {
+                Text("reviews \(review, specifier: "%.1f")")
+                    .font(.caption2)
+                    .foregroundStyle(theme.palette.onCoralMuted)
+            }
+            Text(health.warnings.prefix(2).joined(separator: ", "))
+                .font(.caption2)
+                .foregroundStyle(health.warnings.isEmpty ? theme.palette.onCoralMuted : .orange)
+                .lineLimit(2)
+        }
+        .padding(10)
+        .frame(width: 240, alignment: .leading)
+        .background(theme.palette.glassFill.opacity(0.78))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(reputationColor(health).opacity(0.55), lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
@@ -1412,6 +1490,26 @@ struct CodexTasksView: View {
         case .completed: return .green
         case .failed:    return .red
         case .killed:    return .gray
+        }
+    }
+
+    private func reputationIcon(_ health: CompanyReputationHealth) -> String {
+        if health.status == .retired { return "archivebox" }
+        if health.status == .quarantined || health.status == .banned { return "exclamationmark.octagon" }
+        switch health.kind {
+        case .senderDomain, .emailAccount: return "envelope.badge.shield.half.filled"
+        case .socialAccount: return "person.2"
+        case .marketplaceAccount: return "storefront"
+        case .brandProfile: return "person.text.rectangle"
+        }
+    }
+
+    private func reputationColor(_ health: CompanyReputationHealth) -> Color {
+        switch health.risk {
+        case .low: return .green
+        case .medium: return .yellow
+        case .high: return .orange
+        case .critical: return theme.palette.danger
         }
     }
 

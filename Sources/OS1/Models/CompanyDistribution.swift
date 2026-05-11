@@ -36,6 +36,15 @@ struct CompanyGrowthCampaign: Codable, Hashable, Identifiable {
     var canExecute: Bool {
         approvalState == .approved && complianceChecks.isEmpty == false && complianceDecision.canRun
     }
+
+    var isOutbound: Bool {
+        switch channel {
+        case .partnerOutreach, .warmIntros, .emailDrafts:
+            return true
+        case .seoPages, .contentPosts, .marketplace, .directories, .paidExperiment:
+            return false
+        }
+    }
 }
 
 struct CompanyGrowthResult: Codable, Hashable {
@@ -158,12 +167,14 @@ enum CompanyDistributionEngine {
     static func blocksSend(
         campaign: CompanyGrowthCampaign,
         recipient: String,
-        sentToday: Int
+        sentToday: Int,
+        reputation: CompanyReputationHealth? = nil
     ) -> Bool {
         campaign.approvalState != .approved ||
         !campaign.complianceDecision.canRun ||
         campaign.suppressionList.contains(recipient.lowercased()) ||
-        sentToday >= campaign.rateLimitPerDay
+        sentToday >= campaign.rateLimitPerDay ||
+        CompanyReputationEngine.blocksSend(campaign: campaign, reputation: reputation)
     }
 
     private static func campaign(
