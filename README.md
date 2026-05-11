@@ -30,6 +30,51 @@ The product you touch is OS1.
   with full-text search, Kanban board, file editor with conflict
   checks, skills viewer, cron job manager, profile-aware paths,
   English / Simplified Chinese / Russian localization scaffolding.
+- **Samantha company mode**: OS1 can launch autonomous Codex-backed
+  "companies" from the Tasks tab. Each company gets a mission, its own
+  git worktree, heartbeat cadence, journal, revenue ledger, approval
+  files, event timeline, and budget guard. The built-in catalog includes
+  100 starter templates across content, digital products, SaaS,
+  services, newsletters, marketplaces, and automation agencies.
+
+## Samantha / Codex company mode
+
+The Tasks tab is the operating console for Samantha's autonomous company
+runners. A runner is not a vague chat thread: it is a durable company
+record with a scoped worktree, a heartbeat lease, a log, a journal, a
+ledger, approval state, and a run timeline.
+
+Current production-grade foundations:
+
+- **Sandbox-first execution**: new companies default to sandbox mode.
+  Codex heartbeats are wrapped by generated macOS `sandbox-exec`
+  profiles so a company can mutate only its own worktree, prompt/log
+  files, and approved shared lessons file.
+- **Least-privilege credentials**: companies start with no platform
+  credentials. You can grant or revoke specific provider credential
+  names per company. Secret reads are audited by name/count only; secret
+  values are not written into prompts, event metadata, or heartbeat log
+  headers.
+- **Approval gates**: companies must write approval request files and
+  block before spending money, publishing public content, messaging
+  people, touching credentials, making regulated claims, or changing
+  production infrastructure.
+- **Observability**: OS1 writes append-only company events with run IDs,
+  actor, tool, input hash, output summary, latency, risk tier, approval
+  state, and redacted metadata. The company detail sheet shows the run
+  timeline, command/log references, output tail, and metrics.
+- **Reliability controls**: per-company heartbeat leases and atomic lock
+  files prevent duplicate heartbeats across duplicate app/launchd starts.
+  Restart recovery queues active leases instead of replaying work
+  immediately, and stale locks can be recovered after crashes.
+- **Portfolio controls**: fleet pause/resume, per-company pause/resume,
+  kill heartbeat, remove company, local state backups, revenue/cost
+  ledger summaries, and Doctor production checks.
+
+The system is designed to make real-world autonomy inspectable and
+revocable. It does not make business success automatic, and it should
+not be allowed to perform high-risk live actions without explicit
+operator approval.
 
 ## Requirements
 
@@ -88,6 +133,11 @@ The bundle lands at `dist/OS1.app`.
 ```sh
 swift test
 ```
+
+At the time this README was updated, the local suite passed with 143
+tests, including focused coverage for company sandbox isolation,
+credential redaction, Doctor production checks, event metrics, heartbeat
+locks, stale-lock recovery, and restart recovery.
 
 ## Realtime voice mode
 
@@ -206,6 +256,15 @@ License: [MIT](LICENSE). All upstream copyrights are preserved.
 
 ## Status
 
-This is an early build. Translation polish, GitHub Pages site, and
-signing/notarization are still in progress. Open issues in this repo
-for bugs and feature requests.
+This is still an early build, but the autonomous-company path now has
+real guardrails: sandboxed Codex heartbeats, per-company credential
+allowlists, approval gates, append-only event logs, run timelines,
+revenue ledgers, budget guards, heartbeat locks, restart recovery,
+Doctor production checks, and local backups.
+
+Still in progress: translation polish, GitHub Pages site,
+certificate-backed signing/notarization, broader role-based permissions,
+schema migrations, encrypted backup/restore drills, content quality
+review, compliance policy, and production deployment channels. Track the
+open GitHub issues before relying on OS1 for unattended live revenue
+operations.
