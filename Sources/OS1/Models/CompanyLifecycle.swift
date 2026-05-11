@@ -10,6 +10,7 @@ struct CompanyEvidenceSnapshot: Codable, Hashable {
     var legalReadiness: CompanyLegalReadiness? = nil
     var supportReadiness: CompanySupportReadiness? = nil
     var paymentsRisk: CompanyPaymentsRiskReport? = nil
+    var experimentEvidence: CompanyExperimentResult? = nil
     var failureCount: Int
     var complianceRisk: CompanyIdea.RiskTier
     var overrideReason: String?
@@ -21,6 +22,8 @@ struct CompanyEvidenceSnapshot: Codable, Hashable {
         if ledger.canMarkProfitable { score += 30 }
         if ledger.netUSD > 0 { score += 15 }
         if distribution?.active.isEmpty == false { score += 10 }
+        if experimentEvidence?.evidenceStrength == .strong { score += 12 }
+        if experimentEvidence?.evidenceStrength == .weak { score -= 10 }
         if budgetReport?.status == .warning { score -= 8 }
         if budgetReport?.shouldBlockHeartbeat == true { score -= 25 }
         if paymentsRisk?.accountHealth == .healthy { score += 8 }
@@ -147,7 +150,7 @@ enum CompanyLifecycleEngine {
                 action: .promote,
                 from: .validating,
                 to: .building,
-                rationale: "Validation met ready-to-build thresholds.",
+                rationale: promotionRationale("Validation met ready-to-build thresholds.", evidence),
                 requiresOverride: false,
                 evidence: evidence
             )
@@ -193,7 +196,7 @@ enum CompanyLifecycleEngine {
                 action: .promote,
                 from: .building,
                 to: .launched,
-                rationale: "Launch assets and active distribution exist.",
+                rationale: promotionRationale("Launch assets and active distribution exist.", evidence),
                 requiresOverride: false,
                 evidence: evidence
             )
@@ -203,17 +206,27 @@ enum CompanyLifecycleEngine {
                 action: .promote,
                 from: .launched,
                 to: .revenuePositive,
-                rationale: "Verified or override-qualified revenue is positive.",
+                rationale: promotionRationale("Verified or override-qualified revenue is positive.", evidence),
                 requiresOverride: false,
                 evidence: evidence
             )
         }
         if evidence.ledger.netUSD > 100 && evidence.stage == .revenuePositive {
+            guard evidence.experimentEvidence?.canSupportLifecyclePromotion == true else {
+                return .init(
+                    action: .hold,
+                    from: evidence.stage,
+                    to: evidence.stage,
+                    rationale: "Scale blocked: experiment evidence is weak or uncertain.",
+                    requiresOverride: true,
+                    evidence: evidence
+                )
+            }
             return .init(
                 action: .scale,
                 from: .revenuePositive,
                 to: .scaling,
-                rationale: "Profit threshold supports scaling.",
+                rationale: promotionRationale("Profit threshold supports scaling.", evidence),
                 requiresOverride: false,
                 evidence: evidence
             )
@@ -259,5 +272,18 @@ enum CompanyLifecycleEngine {
         case .killed: return .killed
         case .pivoting: return .validating
         }
+    }
+
+    private static func promotionRationale(
+        _ base: String,
+        _ evidence: CompanyEvidenceSnapshot
+    ) -> String {
+        guard let experiment = evidence.experimentEvidence else {
+            return "\(base) Evidence strength: unavailable. Uncertainty: experiment evidence not attached."
+        }
+        let uncertainty = experiment.uncertaintyNotes.isEmpty
+            ? "none"
+            : experiment.uncertaintyNotes.joined(separator: ",")
+        return "\(base) Evidence strength: \(experiment.evidenceStrength.rawValue). Uncertainty: \(uncertainty)."
     }
 }
