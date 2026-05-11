@@ -57,4 +57,114 @@ struct CompanyLedgerTests {
         #expect(summary.netUSD == 86.75)
         #expect(summary.hasVerifiedRevenue)
     }
+
+    @Test
+    func profitAndLossComputesRefundsMarginROIAndTraceability() throws {
+        let day0 = Date(timeIntervalSince1970: 1_800_000_000)
+        let day2 = day0.addingTimeInterval(172_800)
+        let sourceEventID = UUID()
+        let entries = [
+            CompanyLedgerEntry(
+                id: "stripe-1",
+                companyID: "abc",
+                occurredAt: day2,
+                kind: .revenue,
+                category: .sales,
+                amountUSD: 120,
+                source: "stripe",
+                sourceEventID: sourceEventID,
+                sourceReference: "checkout=cs_1",
+                confidence: .verified,
+                note: "checkout=cs_1"
+            ),
+            CompanyLedgerEntry(
+                id: "refund-1",
+                companyID: "abc",
+                occurredAt: day2,
+                kind: .refund,
+                category: .refund,
+                amountUSD: 20,
+                source: "stripe",
+                sourceReference: "refund=re_1",
+                confidence: .verified,
+                note: "refund re_1"
+            ),
+            CompanyLedgerEntry(
+                id: "cloud-1",
+                companyID: "abc",
+                occurredAt: day0,
+                kind: .cost,
+                category: .cloudCompute,
+                amountUSD: 25,
+                source: "orgo",
+                sourceReference: "receipt=orgo_1",
+                confidence: .verified,
+                note: "receipt=orgo_1"
+            )
+        ]
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(entries)
+        let summary = CompanyLedgerParser.summarize(
+            revenueMarkdown: "",
+            ledgerJSON: String(data: data, encoding: .utf8) ?? ""
+        )
+
+        #expect(summary.revenueUSD == 120)
+        #expect(summary.refundUSD == 20)
+        #expect(summary.netRevenueUSD == 100)
+        #expect(summary.netUSD == 75)
+        #expect(summary.contributionMargin == 0.75)
+        #expect(summary.roi == 3)
+        #expect(summary.paybackPeriodDays == 2)
+        #expect(summary.tracedEntryCount == 3)
+        #expect(summary.canMarkProfitable)
+    }
+
+    @Test
+    func profitabilityGuardRejectsUnverifiedProfitAndPausesLosses() {
+        let estimatedProfit = CompanyLedgerSummary(entries: [
+            CompanyLedgerEntry(
+                id: "estimate",
+                companyID: "abc",
+                occurredAt: nil,
+                kind: .revenue,
+                amountUSD: 500,
+                source: "manual",
+                confidence: .estimated,
+                note: "forecast"
+            )
+        ])
+        let loss = CompanyLedgerSummary(entries: [
+            CompanyLedgerEntry(
+                id: "ads",
+                companyID: "abc",
+                occurredAt: nil,
+                kind: .cost,
+                category: .ads,
+                amountUSD: 75,
+                source: "manual",
+                confidence: .manual,
+                note: "ad spend"
+            )
+        ])
+        let override = CompanyLedgerSummary(entries: [
+            CompanyLedgerEntry(
+                id: "override",
+                companyID: "abc",
+                occurredAt: nil,
+                kind: .revenue,
+                amountUSD: 100,
+                source: "manual",
+                confidence: .manualOverride,
+                note: "founder manual override after bank reconciliation"
+            )
+        ])
+
+        #expect(!estimatedProfit.canMarkProfitable)
+        #expect(CompanyProfitabilityGuard.evaluate(summary: estimatedProfit).reasons.contains("unverifiedProfit"))
+        #expect(CompanyProfitabilityGuard.evaluate(summary: loss).shouldPause)
+        #expect(override.canMarkProfitable)
+    }
 }

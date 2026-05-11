@@ -18,6 +18,8 @@ struct CodexTasksView: View {
     @State private var selectedID: String?
     @State private var interveneTexts: [String: String] = [:]
     @State private var approvalChangeTexts: [String: String] = [:]
+    @State private var ledgerAmounts: [String: String] = [:]
+    @State private var ledgerNotes: [String: String] = [:]
     @State private var nowTick: Date = Date()  // drives countdown labels
 
     private let columns = [GridItem(.adaptive(minimum: 320), spacing: 12)]
@@ -736,12 +738,70 @@ struct CodexTasksView: View {
                 .foregroundStyle(theme.palette.onCoralMuted)
 
             let ledger = manager.ledgerSummary(id: session.id)
-            HStack(spacing: 12) {
-                Label("revenue \(moneyLabel(ledger.revenueUSD))", systemImage: "arrow.down.circle")
-                Label("cost \(moneyLabel(ledger.costUSD))", systemImage: "arrow.up.circle")
-                Label("net \(moneyLabel(ledger.netUSD))", systemImage: "dollarsign.circle")
-                if ledger.hasVerifiedRevenue {
-                    Label("verified", systemImage: "checkmark.seal")
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("P&L")
+                        .os1Style(theme.typography.label)
+                        .foregroundStyle(theme.palette.onCoralMuted)
+                    Spacer()
+                    if ledger.canMarkProfitable {
+                        Label("profit qualified", systemImage: "checkmark.seal")
+                            .foregroundStyle(.green)
+                    } else if ledger.netUSD > 0 {
+                        Label("unverified profit", systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.orange)
+                    }
+                }
+                HStack(spacing: 12) {
+                    Label("gross \(moneyLabel(ledger.revenueUSD))", systemImage: "arrow.down.circle")
+                    Label("refunds \(moneyLabel(ledger.refundUSD))", systemImage: "arrow.uturn.left.circle")
+                    Label("net rev \(moneyLabel(ledger.netRevenueUSD))", systemImage: "sum")
+                    Label("cost \(moneyLabel(ledger.costUSD))", systemImage: "arrow.up.circle")
+                    Label("profit \(moneyLabel(ledger.netUSD))", systemImage: "dollarsign.circle")
+                }
+                HStack(spacing: 12) {
+                    Label("margin \(optionalPercentLabel(ledger.contributionMargin))", systemImage: "chart.line.uptrend.xyaxis")
+                    Label("ROI \(optionalPercentLabel(ledger.roi))", systemImage: "percent")
+                    Label("payback \(optionalDaysLabel(ledger.paybackPeriodDays))", systemImage: "calendar.badge.clock")
+                    Label("runway \(optionalDaysLabel(ledger.runwayDays))", systemImage: "fuelpump")
+                }
+                HStack(spacing: 12) {
+                    Label("verified \(ledger.verifiedEntryCount)", systemImage: "checkmark.seal")
+                    Label("estimated \(ledger.estimatedEntryCount)", systemImage: "questionmark.circle")
+                    Label("traced \(ledger.tracedEntryCount)/\(ledger.entries.count)", systemImage: "point.topleft.down.curvedto.point.bottomright.up")
+                    if !ledger.untracedEntries.isEmpty {
+                        Label("untraced \(ledger.untracedEntries.count)", systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.orange)
+                    }
+                }
+                HStack(spacing: 8) {
+                    TextField("Amount", text: Binding(
+                        get: { ledgerAmounts[session.id] ?? "" },
+                        set: { ledgerAmounts[session.id] = $0 }
+                    ))
+                    .textFieldStyle(.plain)
+                    .frame(width: 82)
+                    .padding(.vertical, 6)
+                    .padding(.horizontal, 8)
+                    .background(theme.palette.glassFill)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+
+                    TextField("Ledger note", text: Binding(
+                        get: { ledgerNotes[session.id] ?? "" },
+                        set: { ledgerNotes[session.id] = $0 }
+                    ))
+                    .textFieldStyle(.plain)
+                    .padding(.vertical, 6)
+                    .padding(.horizontal, 8)
+                    .background(theme.palette.glassFill)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+
+                    Button("Revenue") { recordLedger(session.id, kind: .revenue) }
+                        .buttonStyle(.os1Secondary)
+                    Button("Cost") { recordLedger(session.id, kind: .cost) }
+                        .buttonStyle(.os1Secondary)
+                    Button("Refund") { recordLedger(session.id, kind: .refund) }
+                        .buttonStyle(.os1Secondary)
                 }
             }
             .font(.caption)
@@ -936,6 +996,25 @@ struct CodexTasksView: View {
         approvalChangeTexts[request.id] = ""
     }
 
+    private func recordLedger(_ id: String, kind: CompanyLedgerEntry.Kind) {
+        let rawAmount = (ledgerAmounts[id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let note = (ledgerNotes[id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let amount = Double(rawAmount.replacingOccurrences(of: "$", with: "")),
+              amount > 0,
+              !note.isEmpty
+        else { return }
+        try? manager.recordManualLedgerEntry(
+            id: id,
+            kind: kind,
+            amountUSD: amount,
+            note: note,
+            confidence: .manual,
+            category: kind == .revenue ? .sales : kind == .refund ? .refund : .other
+        )
+        ledgerAmounts[id] = ""
+        ledgerNotes[id] = ""
+    }
+
     private func countdown(to date: Date?) -> String {
         guard let date else { return "—" }
         let interval = date.timeIntervalSince(nowTick)
@@ -975,6 +1054,16 @@ struct CodexTasksView: View {
         "\(Int((value * 100).rounded()))%"
     }
 
+    private func optionalPercentLabel(_ value: Double?) -> String {
+        guard let value else { return "n/a" }
+        return percentLabel(value)
+    }
+
+    private func optionalDaysLabel(_ value: Double?) -> String {
+        guard let value else { return "n/a" }
+        return "\(Int(value.rounded()))d"
+    }
+
     private func latencyLabel(_ value: Int?) -> String {
         guard let value else { return "n/a" }
         if value < 1000 { return "\(value)ms" }
@@ -1004,6 +1093,7 @@ struct CodexTasksView: View {
         case .approvalDenied: return "xmark.shield"
         case .approvalChangesRequested: return "arrow.uturn.left.circle"
         case .stateBackupCreated: return "externaldrive.badge.checkmark"
+        case .ledgerEntryRecorded: return "dollarsign.circle"
         }
     }
 
@@ -1017,7 +1107,7 @@ struct CodexTasksView: View {
             return .orange
         case .heartbeatStarted:
             return .yellow
-        case .heartbeatFinished, .lifecycleChanged, .companyResumed, .fleetResumed, .approvalApproved, .stateBackupCreated:
+        case .heartbeatFinished, .lifecycleChanged, .companyResumed, .fleetResumed, .approvalApproved, .stateBackupCreated, .ledgerEntryRecorded:
             return .green
         case .companyCreated, .userInstruction, .secretAccessed:
             return theme.palette.onCoralMuted

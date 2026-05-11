@@ -762,6 +762,75 @@ final class CodexSessionManager: ObservableObject {
         return CompanyLedgerParser.summarize(revenueMarkdown: revenue, ledgerJSON: ledger)
     }
 
+    func recordManualLedgerEntry(
+        id: String,
+        kind: CompanyLedgerEntry.Kind,
+        amountUSD: Double,
+        note: String,
+        confidence: CompanyLedgerEntry.Confidence = .manual,
+        category: CompanyLedgerEntry.Category? = nil,
+        sourceReference: String? = nil
+    ) throws {
+        guard let session = sessions.first(where: { $0.id == id }) else { return }
+        let normalizedNote = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard amountUSD > 0, !normalizedNote.isEmpty else { return }
+        let event = appendEvent(
+            kind: .ledgerEntryRecorded,
+            companyID: id,
+            actor: "user",
+            summary: "Manual ledger \(kind.rawValue): \(normalizedNote)",
+            metadata: [
+                "ledgerKind": kind.rawValue,
+                "amountUSD": String(format: "%.2f", amountUSD),
+                "confidence": confidence.rawValue,
+                "sourceReference": sourceReference ?? ""
+            ]
+        )
+        var entries = CompanyLedgerParser.decodeJSONEntries(
+            (try? String(contentsOfFile: session.ledgerPath, encoding: .utf8)) ?? ""
+        )
+        entries.append(
+            CompanyLedgerEntry(
+                id: "manual-\(event.id.uuidString)",
+                companyID: id,
+                occurredAt: event.occurredAt,
+                kind: kind,
+                category: category ?? (kind == .revenue ? .sales : kind == .refund ? .refund : .other),
+                amountUSD: amountUSD,
+                source: "manual",
+                sourceEventID: event.id,
+                sourceReference: sourceReference,
+                confidence: confidence,
+                note: normalizedNote
+            )
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(entries)
+        try data.write(to: URL(fileURLWithPath: session.ledgerPath), options: [.atomic])
+    }
+
+    private func enforceProfitabilityPolicy(id: String) {
+        guard let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
+        let summary = ledgerSummary(for: sessions[idx])
+        let decision = CompanyProfitabilityGuard.evaluate(summary: summary)
+        guard decision.shouldPause else { return }
+        sessions[idx].status = .paused
+        sessions[idx].lifecycleStage = .paused
+        sessions[idx].nextHeartbeatAt = nil
+        sessions[idx].blockedReason = "profitability guard: \(decision.reasons.joined(separator: ","))"
+        appendEvent(
+            kind: .budgetBlocked,
+            companyID: id,
+            summary: "Profitability guard paused company",
+            metadata: [
+                "reasons": decision.reasons.joined(separator: ","),
+                "netUSD": String(format: "%.2f", summary.netUSD)
+            ]
+        )
+    }
+
     private func appendSystemNote(id: String, text: String) {
         guard let session = sessions.first(where: { $0.id == id }) else { return }
         let entry = "\n\n## OS1 system note at \(Date())\n\(text)\n"
@@ -905,7 +974,7 @@ final class CodexSessionManager: ObservableObject {
         - JOURNAL.md — narrative memory, read it FIRST
         - AUDIT.md — every 3rd heartbeat a fresh AUDITOR appends here; if you see `CORRECTION:` lines from a recent audit, address them as your action this heartbeat
         - REVENUE.md — human-readable money tracker; append real numbers each heartbeat or "(unmeasured)"
-        - LEDGER.json — machine-readable money ledger array. Keep it valid JSON. Each entry: {"id":"stable-id","companyID":"\(session.id)","occurredAt":"ISO-8601 or null","kind":"revenue|cost","amountUSD":0.0,"source":"stripe|manual|codex|orgo|api","confidence":"verified|manual|estimated","note":"short evidence"}
+        - LEDGER.json — machine-readable money ledger array. Keep it valid JSON. Each entry: {"id":"stable-id","companyID":"\(session.id)","occurredAt":"ISO-8601 or null","kind":"revenue|cost|refund","category":"sales|subscription|ads|tools|cloudCompute|tokenUsage|manualLabor|paymentFees|refund|other","amountUSD":0.0,"source":"stripe|manual|codex|orgo|api","sourceReference":"checkout/invoice/receipt/event id","confidence":"verified|manual|estimated|manualOverride","note":"short evidence"}
         - APPROVAL_REQUEST.json — create this and BLOCK when a high-risk action needs review
         - APPROVAL_GRANTED.json — if present and unexpired, scope-limited permission from the operator
         - APPROVAL_DECISION.json — latest operator decision; if denied or changesRequested, follow it instead of executing the original action
@@ -1071,6 +1140,43 @@ final class CodexSessionManager: ObservableObject {
         } else {
             sessions[idx].status = .idle
             updateLifecycleAfterHeartbeat(id: id)
+            enforceProfitabilityPolicy(id: id)
+            guard sessions[idx].status != .paused else {
+                sessions[idx].nextHeartbeatAt = nil
+                sessions[idx].exitCode = exitCode
+                sessions[idx].heartbeatLease = nil
+                persistSessions()
+                if let runID {
+                    Self.releaseHeartbeatLock(lockURL: heartbeatLockURL(id: id), leaseID: runID)
+                }
+                recordHandoffEvents(
+                    session: sessions[idx],
+                    completedHeartbeat: completedHeartbeat,
+                    runID: runID
+                )
+                appendEvent(
+                    kind: .heartbeatFinished,
+                    companyID: id,
+                    summary: "Finished heartbeat \(completedHeartbeat) with status \(sessions[idx].status.rawValue)",
+                    runID: runID,
+                    tool: "codex exec",
+                    outputSummary: String(logTailString.suffix(1200)),
+                    latencyMS: startedAt.map { Int(Date().timeIntervalSince($0) * 1000) },
+                    riskTier: sandboxMode,
+                    approvalState: "file-gated",
+                    metadata: [
+                        "heartbeat": "\(completedHeartbeat)",
+                        "exitCode": "\(exitCode)",
+                        "terminationReason": "\(reason)",
+                        "status": sessions[idx].status.rawValue,
+                        "blockedReason": sessions[idx].blockedReason ?? "",
+                        "logFile": logPath,
+                        "failureKind": failureAssessment.kind,
+                        "operatorAction": failureAssessment.operatorAction
+                    ]
+                )
+                return
+            }
             // Auditor found problems → next heartbeat fires soon AND knows it must address them
             if let correction = correctionForNext {
                 sessions[idx].pendingUserInstruction = correction
@@ -1175,7 +1281,7 @@ final class CodexSessionManager: ObservableObject {
         guard let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
         let previousStage = sessions[idx].lifecycleStage
         let summary = ledgerSummary(for: sessions[idx])
-        if summary.hasVerifiedRevenue && summary.netUSD > 0 {
+        if summary.canMarkProfitable {
             sessions[idx].lifecycleStage = .revenuePositive
         } else if sessions[idx].heartbeatCount >= 1 && sessions[idx].lifecycleStage == .idea {
             sessions[idx].lifecycleStage = .validating
@@ -1609,6 +1715,7 @@ final class CodexSessionManager: ObservableObject {
         }
     }
 
+    @discardableResult
     private func appendEvent(
         kind: CompanyEvent.Kind,
         companyID: String? = nil,
@@ -1623,7 +1730,7 @@ final class CodexSessionManager: ObservableObject {
         riskTier: String? = nil,
         approvalState: String? = nil,
         metadata: [String: String] = [:]
-    ) {
+    ) -> CompanyEvent {
         let event = CompanyEvent(
             companyID: companyID,
             actor: actor,
@@ -1653,6 +1760,7 @@ final class CodexSessionManager: ObservableObject {
             _ = try? handle.seekToEnd()
             handle.write(line.data(using: .utf8) ?? Data())
         }
+        return event
     }
 
     func recentEvents(limit: Int = 200) -> [CompanyEvent] {
@@ -1689,13 +1797,14 @@ final class CodexSessionManager: ObservableObject {
     }
 
     func schedulerPlan(now: Date = Date()) -> CompanyHeartbeatSchedulePlan {
-        CompanyScaleScheduler.plan(sessions: sessions, now: now)
+        let summaries = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, ledgerSummary(for: $0)) })
+        return CompanyScaleScheduler.plan(sessions: sessions, now: now, ledgerSummaries: summaries)
     }
 
     func fleetStatus() -> CompanyFleetStatus {
         let profitable = Set(sessions.compactMap { session -> String? in
             let summary = ledgerSummary(for: session)
-            return summary.hasVerifiedRevenue && summary.netUSD > 0 ? session.id : nil
+            return summary.canMarkProfitable ? session.id : nil
         })
         return CompanyScaleScheduler.fleetStatus(sessions: sessions, profitableCompanyIDs: profitable)
     }

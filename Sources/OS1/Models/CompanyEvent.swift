@@ -22,6 +22,7 @@ struct CompanyEvent: Codable, Hashable, Identifiable {
         case approvalDenied
         case approvalChangesRequested
         case stateBackupCreated
+        case ledgerEntryRecorded
     }
 
     let id: UUID

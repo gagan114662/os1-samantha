@@ -30,6 +30,7 @@ struct CompanyHeartbeatSchedulePlan: Codable, Hashable {
     var startNowIDs: [String]
     var queuedIDs: [String]
     var blockedIDs: [String]
+    var pauseIDs: [String]
     var backpressureReasons: [String]
 }
 
@@ -52,7 +53,9 @@ enum CompanyScaleScheduler {
         sessions: [CodexSession],
         now: Date,
         limits: CompanySchedulerLimits = .productionDefault,
-        runners: [CompanyRunner] = [.local]
+        runners: [CompanyRunner] = [.local],
+        ledgerSummaries: [String: CompanyLedgerSummary] = [:],
+        profitabilityPolicy: CompanyProfitabilityPolicy = .productionDefault
     ) -> CompanyHeartbeatSchedulePlan {
         let activeCount = sessions.filter { $0.status == .running }.count
         let queuedCount = sessions.filter { $0.status == .queued }.count
@@ -77,14 +80,29 @@ enum CompanyScaleScheduler {
         var start: [String] = []
         var queued: [String] = []
         var blocked: [String] = []
+        let pauseIDs = sessions.compactMap { session -> String? in
+            guard let summary = ledgerSummaries[session.id],
+                  CompanyProfitabilityGuard.evaluate(summary: summary, policy: profitabilityPolicy).shouldPause
+            else { return nil }
+            return session.id
+        }
+        let pauseSet = Set(pauseIDs)
 
         let eligible = sessions
             .filter { $0.status == .idle || $0.status == .queued || $0.status == .blocked }
             .sorted { lhs, rhs in
-                (lhs.nextHeartbeatAt ?? lhs.startedAt) < (rhs.nextHeartbeatAt ?? rhs.startedAt)
+                let lhsDate = lhs.nextHeartbeatAt ?? lhs.startedAt
+                let rhsDate = rhs.nextHeartbeatAt ?? rhs.startedAt
+                if lhsDate == rhsDate { return lhs.id < rhs.id }
+                return lhsDate < rhsDate
             }
 
         for session in eligible {
+            if pauseSet.contains(session.id) {
+                blocked.append(session.id)
+                continue
+            }
+
             if backpressure.isEmpty == false {
                 queued.append(session.id)
                 continue
@@ -125,6 +143,7 @@ enum CompanyScaleScheduler {
             startNowIDs: start,
             queuedIDs: queued,
             blockedIDs: blocked,
+            pauseIDs: pauseIDs,
             backpressureReasons: backpressure
         )
     }
