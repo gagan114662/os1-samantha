@@ -18,6 +18,8 @@ struct CompanyFactoryTests {
         #expect(kinds.contains(.paymentLink))
         #expect(kinds.contains(.crmTable))
         #expect(kinds.contains(.supportInbox))
+        #expect(kinds.contains(.supportEscalationPolicy))
+        #expect(kinds.contains(.supportTickets))
         #expect(kinds.contains(.analyticsPlan))
         #expect(kinds.contains(.deploymentChecklist))
         #expect(kinds.contains(.brandGuide))
@@ -43,11 +45,13 @@ struct CompanyFactoryTests {
         let payment = manifest.assets.first { $0.kind == .paymentLink }
         let analytics = manifest.assets.first { $0.kind == .analyticsPlan }
         let legalMetadata = manifest.assets.first { $0.kind == .legalMetadata }
+        let escalation = manifest.assets.first { $0.kind == .supportEscalationPolicy }
 
         #expect(payment?.sandboxTestable == true)
         #expect(analytics?.sandboxTestable == true)
         #expect(payment?.requiresApprovalBeforePublish == true)
         #expect(legalMetadata?.requiresApprovalBeforePublish == true)
+        #expect(escalation?.requiresApprovalBeforePublish == true)
     }
 
     @Test
@@ -81,6 +85,7 @@ struct CompanyFactoryTests {
             #expect(checklist.contains(gate.title))
         }
         #expect(manifest.gates.contains { $0.kind == .legal })
+        #expect(manifest.gates.contains { $0.kind == .support })
     }
 
     @Test

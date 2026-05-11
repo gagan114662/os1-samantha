@@ -7,6 +7,8 @@ struct CompanyFactoryAsset: Codable, Hashable, Identifiable {
         case paymentLink
         case crmTable
         case supportInbox
+        case supportEscalationPolicy
+        case supportTickets
         case analyticsPlan
         case deploymentChecklist
         case brandGuide
@@ -36,6 +38,7 @@ struct CompanyFactoryGate: Codable, Hashable, Identifiable {
         case legal
         case security
         case budget
+        case support
     }
 
     let id: String
@@ -74,6 +77,8 @@ enum CompanyFactory {
             (.paymentLink, "payments-sandbox.md", true, true),
             (.crmTable, "crm.csv", true, false),
             (.supportInbox, "support-inbox.md", true, false),
+            (.supportEscalationPolicy, "support-escalation-policy.md", true, true),
+            (.supportTickets, "support-tickets.json", true, false),
             (.analyticsPlan, "analytics-plan.md", true, false),
             (.deploymentChecklist, "launch-checklist.md", true, false),
             (.brandGuide, "brand-guide.md", true, false),
@@ -108,7 +113,8 @@ enum CompanyFactory {
                 .init(id: "compliance", kind: .compliance, title: "Compliance review passed", passed: false, evidence: ""),
                 .init(id: "legal", kind: .legal, title: "Legal readiness approved", passed: false, evidence: ""),
                 .init(id: "security", kind: .security, title: "Security and credential scope reviewed", passed: false, evidence: ""),
-                .init(id: "budget", kind: .budget, title: "Budget and spend approval passed", passed: false, evidence: "")
+                .init(id: "budget", kind: .budget, title: "Budget and spend approval passed", passed: false, evidence: ""),
+                .init(id: "support", kind: .support, title: "Support contact and escalation policy configured", passed: false, evidence: "")
             ]
         )
     }
@@ -127,7 +133,7 @@ enum CompanyFactory {
         ## Gates
         \(manifest.gates.map { "- [ ] \($0.title)" }.joined(separator: "\n"))
 
-        Launch is blocked until compliance, legal, security, and budget gates pass.
+        Launch is blocked until compliance, legal, security, budget, and support gates pass.
         """
     }
 
@@ -143,6 +149,10 @@ enum CompanyFactory {
             return "name,email,source,status,consent,notes\n"
         case .supportInbox:
             return "# Support inbox\n\nTrack customer requests, refunds, and escalation notes here.\n"
+        case .supportEscalationPolicy:
+            return "# Support escalation policy\n\n- Support contact:\n- SLA hours:\n- Escalate angry customers, safety reports, payment disputes, and legal requests to the user.\n- Refunds, legal claims, and account actions require approval before sending.\n"
+        case .supportTickets:
+            return "[]\n"
         case .analyticsPlan:
             return "# Analytics\n\nTrack visits, signups, reply rate, CAC estimate, and paid conversions.\n"
         case .deploymentChecklist:
@@ -201,6 +211,8 @@ enum CompanyFactory {
         case .paymentLink: return "Sandbox payment link"
         case .crmTable: return "CRM table"
         case .supportInbox: return "Support inbox"
+        case .supportEscalationPolicy: return "Support escalation policy"
+        case .supportTickets: return "Support tickets"
         case .analyticsPlan: return "Analytics plan"
         case .deploymentChecklist: return "Deployment checklist"
         case .brandGuide: return "Brand guide"

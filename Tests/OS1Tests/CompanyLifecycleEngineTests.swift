@@ -50,8 +50,8 @@ struct CompanyLifecycleEngineTests {
     }
 
     @Test
-    func paidLaunchRequiresLegalReadinessGate() {
-        let blocked = CompanyLifecycleEngine.decide(snapshot(
+    func paidLaunchRequiresLegalAndSupportReadinessGates() {
+        let legalBlocked = CompanyLifecycleEngine.decide(snapshot(
             stage: .building,
             distribution: activeDistribution(),
             legal: CompanyLegalReadiness(
@@ -60,22 +60,29 @@ struct CompanyLifecycleEngineTests {
                 policyLinks: [:],
                 reviewedAt: nil,
                 approvalRequestID: nil
+            ),
+            support: CompanySupportReadiness(companyID: "company", blockers: [])
+        ))
+        let supportBlocked = CompanyLifecycleEngine.decide(snapshot(
+            stage: .building,
+            distribution: activeDistribution(),
+            legal: approvedLegalReadiness(),
+            support: CompanySupportReadiness(
+                companyID: "company",
+                blockers: ["Support contact is required."]
             )
         ))
         let approved = CompanyLifecycleEngine.decide(snapshot(
             stage: .building,
             distribution: activeDistribution(),
-            legal: CompanyLegalReadiness(
-                companyID: "company",
-                blockers: [],
-                policyLinks: [:],
-                reviewedAt: Date(timeIntervalSince1970: 1_800_000_000),
-                approvalRequestID: "approval-legal"
-            )
+            legal: approvedLegalReadiness(),
+            support: CompanySupportReadiness(companyID: "company", blockers: [])
         ))
 
-        #expect(blocked.action == .hold)
-        #expect(blocked.rationale.contains("Legal launch gate blocked paid launch"))
+        #expect(legalBlocked.action == .hold)
+        #expect(legalBlocked.rationale.contains("Legal launch gate blocked paid launch"))
+        #expect(supportBlocked.action == .hold)
+        #expect(supportBlocked.rationale.contains("Support launch gate blocked launch"))
         #expect(approved.action == .promote)
         #expect(approved.to == .launched)
     }
@@ -102,6 +109,7 @@ struct CompanyLifecycleEngineTests {
         budgetStatus: CompanyBudgetStatus? = nil,
         distribution: CompanyDistributionSummary? = nil,
         legal: CompanyLegalReadiness? = nil,
+        support: CompanySupportReadiness? = nil,
         failures: Int = 0,
         risk: CompanyIdea.RiskTier = .low,
         artifacts: [String] = []
@@ -128,6 +136,7 @@ struct CompanyLifecycleEngineTests {
             },
             distribution: distribution,
             legalReadiness: legal,
+            supportReadiness: support,
             failureCount: failures,
             complianceRisk: risk,
             overrideReason: nil,
@@ -156,6 +165,16 @@ struct CompanyLifecycleEngineTests {
             blocked: [],
             nextRecommendedAction: "launch",
             revenueLedgerEntries: []
+        )
+    }
+
+    private func approvedLegalReadiness() -> CompanyLegalReadiness {
+        CompanyLegalReadiness(
+            companyID: "company",
+            blockers: [],
+            policyLinks: [:],
+            reviewedAt: Date(timeIntervalSince1970: 1_800_000_000),
+            approvalRequestID: "approval-legal"
         )
     }
 }

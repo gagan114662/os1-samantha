@@ -8,6 +8,7 @@ struct CompanyEvidenceSnapshot: Codable, Hashable {
     var budgetReport: CompanyBudgetReport?
     var distribution: CompanyDistributionSummary?
     var legalReadiness: CompanyLegalReadiness? = nil
+    var supportReadiness: CompanySupportReadiness? = nil
     var failureCount: Int
     var complianceRisk: CompanyIdea.RiskTier
     var overrideReason: String?
@@ -90,6 +91,18 @@ enum CompanyLifecycleEngine {
                     from: .building,
                     to: .building,
                     rationale: "Legal launch gate blocked paid launch: \(blockers)",
+                    requiresOverride: true,
+                    evidence: evidence
+                )
+            }
+            guard evidence.supportReadiness?.canLaunch == true else {
+                let blockers = evidence.supportReadiness?.blockers.joined(separator: ", ")
+                    ?? "Support contact and escalation policy are required before launch."
+                return .init(
+                    action: .hold,
+                    from: .building,
+                    to: .building,
+                    rationale: "Support launch gate blocked launch: \(blockers)",
                     requiresOverride: true,
                     evidence: evidence
                 )
