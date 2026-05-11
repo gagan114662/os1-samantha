@@ -1018,6 +1018,9 @@
 "Close" = "Close";
 "Company name" = "Company name";
 "Company templates" = "Company templates";
+"4h" = "4h";
+"Always ask" = "Always ask";
+"Budget" = "Budget";
 "Deny" = "Deny";
 "Event log" = "Event log";
 "Hire" = "Hire";
@@ -1032,6 +1035,7 @@
 "No ~/.os1/voice-port file" = "No ~/.os1/voice-port file";
 "Not installed or not on PATH." = "Not installed or not on PATH.";
 "Not reachable on :7891" = "Not reachable on :7891";
+"Once" = "Once";
 "OS1 looked for `%@` on PATH but didn't find it. Install it before agentic features that depend on it will work." = "OS1 looked for `%@` on PATH but didn't find it. Install it before agentic features that depend on it will work.";
 "OS1's voice server writes its TCP port here when it starts. Missing file = voice runtime never mounted (boot animation didn't finish, or the voice section was disabled)." = "OS1's voice server writes its TCP port here when it starts. Missing file = voice runtime never mounted (boot animation didn't finish, or the voice section was disabled).";
 "Open journal in Finder" = "Open journal in Finder";

@@ -452,13 +452,31 @@ struct CodexTasksView: View {
             .lineLimit(1)
 
             HStack(spacing: 6) {
-                Button(L10n.string("Approve 4h")) {
+                Button(L10n.string("Once")) {
+                    manager.approveOnce(request: request)
+                }
+                .buttonStyle(.os1Secondary)
+
+                Button(L10n.string("4h")) {
                     manager.approve(request: request, hours: 4)
                 }
                 .buttonStyle(.os1Primary)
 
+                Button(L10n.string("Budget")) {
+                    manager.approveWithinBudget(request: request, hours: 4)
+                }
+                .buttonStyle(.os1Secondary)
+                .disabled(request.estimatedCostUSD == nil)
+            }
+
+            HStack(spacing: 6) {
                 Button(L10n.string("Deny")) {
                     manager.deny(request: request)
+                }
+                .buttonStyle(.os1Secondary)
+
+                Button(L10n.string("Always ask")) {
+                    manager.alwaysRequireApproval(request: request)
                 }
                 .buttonStyle(.os1Secondary)
             }

@@ -1145,7 +1145,8 @@ final class CodexSessionManager: ObservableObject {
         - REVENUE.md — human-readable money tracker; append real numbers each heartbeat or "(unmeasured)"
         - LEDGER.json — machine-readable money ledger array. Keep it valid JSON. Each entry: {"id":"stable-id","companyID":"\(session.id)","occurredAt":"ISO-8601 or null","kind":"revenue|cost|refund","category":"sales|subscription|ads|tools|cloudCompute|tokenUsage|manualLabor|paymentFees|refund|other","amountUSD":0.0,"source":"stripe|manual|codex|orgo|api","sourceReference":"checkout/invoice/receipt/event id","confidence":"verified|manual|estimated|manualOverride","note":"short evidence"}
         - APPROVAL_REQUEST.json — create this and BLOCK when a high-risk action needs review
-        - APPROVAL_GRANTED.json — if present and unexpired, scope-limited permission from the operator
+        - APPROVAL_GRANTED.json — if present and unexpired, scope-limited permission from the operator.
+          Its approvedActionFingerprint, companyID, destinationAccount, maxCostUSD, and remainingUses must match before execution
         - APPROVAL_DECISION.json — latest operator decision; if denied or changesRequested, follow it instead of executing the original action
         - handoff.json — STRUCTURED record you MUST overwrite each heartbeat (schema below). Auditor parses this directly, not your prose
         - LESSONS.md — portfolio-wide lessons shared across ALL companies (symlink, read-mostly). If you learn something useful to other companies, append a short entry (use `flock LESSONS.md ...` to avoid races)
@@ -1165,6 +1166,22 @@ final class CodexSessionManager: ObservableObject {
           "destinationAccount": "account/platform/person affected, or null",
           "rollbackPlan": "how you will undo or contain the action",
           "status": "pending"
+        }
+        ```
+
+        ## APPROVAL_GRANTED.JSON SCHEMA
+        ```json
+        {
+          "id": "stable-grant-id",
+          "requestID": "stable-request-id",
+          "companyID": "\(session.id)",
+          "approvedActionFingerprint": "lowercase normalized exact action",
+          "grantedAt": "ISO-8601 timestamp",
+          "expiresAt": "ISO-8601 timestamp or null",
+          "maxCostUSD": 0.0,
+          "remainingUses": 1,
+          "destinationAccount": "account/platform/person affected, or null",
+          "decisionNote": "operator note"
         }
         ```
 
@@ -1438,7 +1455,7 @@ final class CodexSessionManager: ObservableObject {
     }
 
     private func approvalState(for session: CodexSession) -> String {
-        if FileManager.default.fileExists(atPath: session.approvalGrantPath) {
+        if let grant = readApprovalGrant(for: session), grant.expiresAt.map({ Date() < $0 }) ?? true {
             return "granted"
         }
         if FileManager.default.fileExists(atPath: session.approvalRequestPath) {
@@ -1642,15 +1659,49 @@ final class CodexSessionManager: ObservableObject {
     }
 
     func approve(request: CompanyApprovalRequest, hours: Int = 4, note: String = "Approved by operator") {
-        recordApprovalDecision(request: request, status: .approved, note: note, grantHours: hours)
+        recordApprovalDecision(request: request, status: .approved, note: note, grantHours: hours, remainingUses: nil)
+    }
+
+    func approveOnce(request: CompanyApprovalRequest, note: String = "Approved once by operator") {
+        recordApprovalDecision(request: request, status: .approved, note: note, grantHours: nil, remainingUses: 1)
+    }
+
+    func approveWithinBudget(request: CompanyApprovalRequest, hours: Int = 4) {
+        let cost = request.estimatedCostUSD.map { money($0) } ?? "declared budget"
+        recordApprovalDecision(
+            request: request,
+            status: .approved,
+            note: "Approved within requested budget \(cost)",
+            grantHours: hours,
+            remainingUses: nil
+        )
     }
 
     func deny(request: CompanyApprovalRequest, note: String = "Denied by operator") {
-        recordApprovalDecision(request: request, status: .denied, note: note, grantHours: nil)
+        recordApprovalDecision(request: request, status: .denied, note: note, grantHours: nil, remainingUses: nil)
     }
 
     func requestChanges(request: CompanyApprovalRequest, note: String) {
-        recordApprovalDecision(request: request, status: .changesRequested, note: note, grantHours: nil)
+        recordApprovalDecision(
+            request: request,
+            status: .changesRequested,
+            note: note,
+            grantHours: nil,
+            remainingUses: nil
+        )
+    }
+
+    func alwaysRequireApproval(
+        request: CompanyApprovalRequest,
+        note: String = "Always require approval for this action"
+    ) {
+        recordApprovalDecision(
+            request: request,
+            status: .alwaysRequireApproval,
+            note: note,
+            grantHours: nil,
+            remainingUses: nil
+        )
     }
 
     private func readApprovalRequest(for session: CodexSession) -> CompanyApprovalRequest? {
@@ -1658,6 +1709,13 @@ final class CodexSessionManager: ObservableObject {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return try? decoder.decode(CompanyApprovalRequest.self, from: data)
+    }
+
+    private func readApprovalGrant(for session: CodexSession) -> CompanyApprovalGrant? {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: session.approvalGrantPath)) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(CompanyApprovalGrant.self, from: data)
     }
 
     private func recordPendingApprovalIfPresent(for session: CodexSession) {
@@ -1679,7 +1737,8 @@ final class CodexSessionManager: ObservableObject {
         request: CompanyApprovalRequest,
         status: CompanyApprovalRequest.Status,
         note: String,
-        grantHours: Int?
+        grantHours: Int?,
+        remainingUses: Int?
     ) {
         guard let idx = sessions.firstIndex(where: { $0.id == request.companyID }) else { return }
         let now = Date()
@@ -1694,11 +1753,19 @@ final class CodexSessionManager: ObservableObject {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
+        let grant = CompanyApprovalGrant(
+            request: decided,
+            grantedAt: now,
+            expiresAt: decided.expiresAt,
+            remainingUses: remainingUses
+        )
         if let data = try? encoder.encode(decided) {
             try? data.write(to: URL(fileURLWithPath: sessions[idx].approvalRequestPath), options: [.atomic])
             try? data.write(to: URL(fileURLWithPath: sessions[idx].approvalDecisionPath), options: [.atomic])
             if status == .approved {
-                try? data.write(to: URL(fileURLWithPath: sessions[idx].approvalGrantPath), options: [.atomic])
+                if let grantData = try? encoder.encode(grant) {
+                    try? grantData.write(to: URL(fileURLWithPath: sessions[idx].approvalGrantPath), options: [.atomic])
+                }
             } else {
                 try? FileManager.default.removeItem(atPath: sessions[idx].approvalGrantPath)
             }
@@ -1712,11 +1779,16 @@ final class CodexSessionManager: ObservableObject {
                 companyID: request.companyID,
                 actor: "user",
                 summary: "Approval granted: \(request.proposedAction)",
-                metadata: ["requestID": request.id, "expiresAt": decided.expiresAt.map { ISO8601DateFormatter().string(from: $0) } ?? ""]
+                metadata: [
+                    "requestID": request.id,
+                    "expiresAt": decided.expiresAt.map { ISO8601DateFormatter().string(from: $0) } ?? ""
+                ]
             )
             injectInstruction(
                 id: request.companyID,
-                instruction: "Approval granted for request \(request.id): \(request.proposedAction). Scope is limited to the approved action; expires in \(grantHours ?? 0) hours. Note: \(note)"
+                instruction: """
+                    Approval granted for request \(request.id): \(request.proposedAction). Scope is limited to the approved action; expires in \(grantHours ?? 0) hours. Note: \(note)
+                    """
             )
         case .denied:
             appendEvent(
@@ -1728,7 +1800,9 @@ final class CodexSessionManager: ObservableObject {
             )
             injectInstruction(
                 id: request.companyID,
-                instruction: "Approval denied for request \(request.id): \(request.proposedAction). Do not execute it. Produce a safer follow-up plan. Reason: \(note)"
+                instruction: """
+                    Approval denied for request \(request.id): \(request.proposedAction). Do not execute it. Produce a safer follow-up plan. Reason: \(note)
+                    """
             )
         case .changesRequested:
             appendEvent(
@@ -1740,7 +1814,23 @@ final class CodexSessionManager: ObservableObject {
             )
             injectInstruction(
                 id: request.companyID,
-                instruction: "Approval changes requested for request \(request.id): \(request.proposedAction). Revise the plan and write a new APPROVAL_REQUEST.json. Required changes: \(note)"
+                instruction: """
+                    Approval changes requested for request \(request.id): \(request.proposedAction). Revise the plan and write a new APPROVAL_REQUEST.json. Required changes: \(note)
+                    """
+            )
+        case .alwaysRequireApproval:
+            appendEvent(
+                kind: .approvalDenied,
+                companyID: request.companyID,
+                actor: "user",
+                summary: "Approval always required: \(request.proposedAction)",
+                metadata: ["requestID": request.id, "note": note]
+            )
+            injectInstruction(
+                id: request.companyID,
+                instruction: """
+                    Always require explicit approval for request \(request.id): \(request.proposedAction). Do not reuse old grants; write a fresh APPROVAL_REQUEST.json before each attempt. Note: \(note)
+                    """
             )
         case .pending, .expired:
             break
