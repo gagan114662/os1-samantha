@@ -7,6 +7,7 @@ struct CompanyEvidenceSnapshot: Codable, Hashable {
     var ledger: CompanyLedgerSummary
     var budgetReport: CompanyBudgetReport?
     var distribution: CompanyDistributionSummary?
+    var reputationHealth: [CompanyReputationHealth] = []
     var failureCount: Int
     var complianceRisk: CompanyIdea.RiskTier
     var overrideReason: String?
@@ -18,6 +19,7 @@ struct CompanyEvidenceSnapshot: Codable, Hashable {
         if ledger.canMarkProfitable { score += 30 }
         if ledger.netUSD > 0 { score += 15 }
         if distribution?.active.isEmpty == false { score += 10 }
+        if reputationHealth.contains(where: { $0.risk == .high || $0.risk == .critical }) { score -= 20 }
         if budgetReport?.status == .warning { score -= 8 }
         if budgetReport?.shouldBlockHeartbeat == true { score -= 25 }
         score -= failureCount * 3
@@ -63,6 +65,12 @@ enum CompanyLifecycleEngine {
         }
         if evidence.failureCount >= 5 {
             return .init(action: .pause, from: evidence.stage, to: .paused, rationale: "Repeated failures breached lifecycle guard.", requiresOverride: false, evidence: evidence)
+        }
+        if evidence.reputationHealth.contains(where: { $0.risk == .critical }) {
+            return .init(action: .pause, from: evidence.stage, to: .paused, rationale: "Critical reputation risk or account ban.", requiresOverride: false, evidence: evidence)
+        }
+        if evidence.reputationHealth.contains(where: { $0.risk == .high }) {
+            return .init(action: .pause, from: evidence.stage, to: .paused, rationale: "Outbound reputation thresholds exceeded.", requiresOverride: false, evidence: evidence)
         }
         if evidence.budgetReport?.status == .emergencyShutdown {
             return .init(action: .kill, from: evidence.stage, to: .killed, rationale: "Emergency budget shutdown threshold reached.", requiresOverride: false, evidence: evidence)
