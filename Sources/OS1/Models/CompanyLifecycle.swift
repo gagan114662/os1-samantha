@@ -7,6 +7,7 @@ struct CompanyEvidenceSnapshot: Codable, Hashable {
     var ledger: CompanyLedgerSummary
     var budgetReport: CompanyBudgetReport?
     var distribution: CompanyDistributionSummary?
+    var legalReadiness: CompanyLegalReadiness? = nil
     var failureCount: Int
     var complianceRisk: CompanyIdea.RiskTier
     var overrideReason: String?
@@ -81,6 +82,18 @@ enum CompanyLifecycleEngine {
             return .init(action: .promote, from: .validating, to: .building, rationale: "Validation met ready-to-build thresholds.", requiresOverride: false, evidence: evidence)
         }
         if evidence.stage == .building && evidence.distribution?.active.isEmpty == false {
+            guard evidence.legalReadiness?.canAcceptPayment == true else {
+                let blockers = evidence.legalReadiness?.blockers.joined(separator: ", ")
+                    ?? "Legal metadata is required before paid launch."
+                return .init(
+                    action: .hold,
+                    from: .building,
+                    to: .building,
+                    rationale: "Legal launch gate blocked paid launch: \(blockers)",
+                    requiresOverride: true,
+                    evidence: evidence
+                )
+            }
             return .init(action: .promote, from: .building, to: .launched, rationale: "Launch assets and active distribution exist.", requiresOverride: false, evidence: evidence)
         }
         if evidence.ledger.canMarkProfitable && evidence.stage == .launched {

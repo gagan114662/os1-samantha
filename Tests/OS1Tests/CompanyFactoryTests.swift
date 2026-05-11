@@ -23,6 +23,11 @@ struct CompanyFactoryTests {
         #expect(kinds.contains(.brandGuide))
         #expect(kinds.contains(.onboardingFlow))
         #expect(kinds.contains(.refundPolicy))
+        #expect(kinds.contains(.termsOfService))
+        #expect(kinds.contains(.privacyPolicy))
+        #expect(kinds.contains(.acceptableUsePolicy))
+        #expect(kinds.contains(.legalMetadata))
+        #expect(kinds.contains(.taxChecklist))
         #expect(kinds.contains(.salesScript))
     }
 
@@ -35,10 +40,12 @@ struct CompanyFactoryTests {
         )
         let payment = manifest.assets.first { $0.kind == .paymentLink }
         let analytics = manifest.assets.first { $0.kind == .analyticsPlan }
+        let legalMetadata = manifest.assets.first { $0.kind == .legalMetadata }
 
         #expect(payment?.sandboxTestable == true)
         #expect(analytics?.sandboxTestable == true)
         #expect(payment?.requiresApprovalBeforePublish == true)
+        #expect(legalMetadata?.requiresApprovalBeforePublish == true)
     }
 
     @Test
@@ -71,5 +78,6 @@ struct CompanyFactoryTests {
         for gate in manifest.gates {
             #expect(checklist.contains(gate.title))
         }
+        #expect(manifest.gates.contains { $0.kind == .legal })
     }
 }
