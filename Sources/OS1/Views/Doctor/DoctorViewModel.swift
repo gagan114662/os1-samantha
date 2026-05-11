@@ -38,6 +38,13 @@ final class DoctorViewModel: ObservableObject {
         let actions: [Action]
     }
 
+    struct CodexHeartbeatSandboxRuntime: Equatable, Sendable {
+        let isOn: Bool
+        let title: String
+        let summary: String
+        let detail: String
+    }
+
     @Published private(set) var checks: [Check] = []
     @Published private(set) var isRefreshing = false
     @Published private(set) var actionInFlight: Action?
@@ -166,6 +173,7 @@ final class DoctorViewModel: ObservableObject {
         async let evalHarness = makeEvaluationHarnessCheck()
         async let dataGovernance = makeDataGovernanceCheck()
         async let stateBackups = makeStateBackupCheck()
+        async let heartbeatSandbox = makeCodexHeartbeatSandboxCheck()
         return await [
             codex,
             claude,
@@ -180,7 +188,53 @@ final class DoctorViewModel: ObservableObject {
             evalHarness,
             dataGovernance,
             stateBackups,
+            heartbeatSandbox,
         ]
+    }
+
+    private func makeCodexHeartbeatSandboxCheck() async -> Check {
+        let session = CodexSession(
+            id: "doctor",
+            title: "doctor-sandbox-probe",
+            task: "Probe Codex heartbeat sandbox launch mode.",
+            worktreePath: "/tmp/os1-doctor-sandbox-probe",
+            branch: "company/doctor",
+            status: .idle,
+            startedAt: Date(timeIntervalSince1970: 0),
+            finishedAt: nil,
+            exitCode: nil,
+            pid: nil,
+            cadenceMinutes: 15,
+            heartbeatCount: 0,
+            lastHeartbeatAt: nil,
+            nextHeartbeatAt: nil,
+            pendingUserInstruction: nil,
+            templateID: nil,
+            budget: nil,
+            lifecycleStage: .validating,
+            sandboxMode: .sandbox,
+            environment: .sandbox,
+            credentialAllowlist: [],
+            heartbeatLease: nil,
+            assignedRunnerID: CompanyScaleScheduler.localRunnerID
+        )
+        let launchPlan = CodexSessionManager.heartbeatLaunchPlan(
+            session: session,
+            sandboxProfileURL: URL(fileURLWithPath: "/tmp/os1-doctor-sandbox-probe.sb"),
+            promptFile: "/tmp/os1-doctor-sandbox-probe.prompt"
+        )
+        let runtime = Self.codexHeartbeatSandboxRuntime(
+            sandboxExecIsExecutable: FileManager.default.isExecutableFile(atPath: "/usr/bin/sandbox-exec"),
+            launchPlan: launchPlan
+        )
+        return Check(
+            id: "codex-heartbeat-sandbox",
+            title: runtime.title,
+            severity: runtime.isOn ? .ok : .error,
+            summary: runtime.summary,
+            detail: runtime.detail,
+            actions: []
+        )
     }
 
     private func makeStateBackupCheck() async -> Check {
@@ -762,6 +816,35 @@ final class DoctorViewModel: ObservableObject {
             }
             return nil
         }
+    }
+
+    nonisolated static func codexHeartbeatSandboxRuntime(
+        sandboxExecIsExecutable: Bool,
+        launchPlan: CodexHeartbeatLaunchPlan
+    ) -> CodexHeartbeatSandboxRuntime {
+        let isOn = sandboxExecIsExecutable
+            && launchPlan.usesMacOSSandbox
+            && launchPlan.executablePath == "/usr/bin/sandbox-exec"
+            && launchPlan.arguments.contains("-f")
+            && launchPlan.sandboxProfilePath != nil
+        if isOn {
+            return CodexHeartbeatSandboxRuntime(
+                isOn: true,
+                title: "Codex heartbeat sandbox: ON",
+                summary: "macOS sandbox-exec wraps sandbox-mode heartbeats",
+                detail: "OS1 generates a per-company sandbox profile and launches Codex through "
+                    + "/usr/bin/sandbox-exec. Codex still receives its internal bypass flag inside that OS sandbox "
+                    + "so the heartbeat can run unattended without per-command prompts."
+            )
+        }
+
+        return CodexHeartbeatSandboxRuntime(
+            isOn: false,
+            title: "Codex heartbeat sandbox: OFF",
+            summary: "Heartbeat launch plan is not wrapped by macOS sandbox-exec",
+            detail: "Do not run revenue companies in this mode. The Codex process can read and write outside "
+                + "the company worktree unless an operator explicitly treats it as local-development only."
+        )
     }
 
     private func which(_ binary: String) -> String? {

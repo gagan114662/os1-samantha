@@ -1001,6 +1001,29 @@ struct CodexTasksView: View {
             }
             .foregroundStyle(theme.palette.onCoralMuted)
 
+            if session.sandboxMode != .sandbox {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.octagon.fill")
+                        .foregroundStyle(theme.palette.danger)
+                    Text(
+                        "Codex heartbeat sandbox: OFF. This local-development company is not wrapped by macOS "
+                            + "sandbox-exec, so Codex can read or write outside its company worktree. Do not use "
+                            + "this mode for revenue companies."
+                    )
+                        .os1Style(theme.typography.label)
+                        .foregroundStyle(theme.palette.danger)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(theme.palette.danger.opacity(0.16))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(theme.palette.danger.opacity(0.65), lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            }
+
             Text(L10n.string("Task"))
                 .os1Style(theme.typography.label)
                 .foregroundStyle(theme.palette.onCoralMuted)

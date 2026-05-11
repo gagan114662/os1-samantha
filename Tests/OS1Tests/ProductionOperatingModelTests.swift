@@ -62,6 +62,49 @@ struct ProductionOperatingModelTests {
     }
 
     @Test
+    func doctorReportsCodexHeartbeatSandboxRuntimeFromLaunchPlan() {
+        let sandboxed = CodexSession(
+            id: "sandboxed",
+            title: "sandboxed company",
+            task: "test",
+            worktreePath: "/tmp/sandboxed",
+            branch: "company/sandboxed",
+            status: .idle,
+            startedAt: Date(timeIntervalSince1970: 1),
+            sandboxMode: .sandbox
+        )
+        let sandboxedPlan = CodexSessionManager.heartbeatLaunchPlan(
+            session: sandboxed,
+            sandboxProfileURL: URL(fileURLWithPath: "/tmp/sandboxed.sb"),
+            promptFile: "/tmp/sandboxed.prompt"
+        )
+        let onRuntime = DoctorViewModel.codexHeartbeatSandboxRuntime(
+            sandboxExecIsExecutable: true,
+            launchPlan: sandboxedPlan
+        )
+
+        #expect(onRuntime.isOn)
+        #expect(onRuntime.title == "Codex heartbeat sandbox: ON")
+        #expect(onRuntime.detail.contains("/usr/bin/sandbox-exec"))
+
+        var localDev = sandboxed
+        localDev.sandboxMode = .localDevelopment
+        let localDevPlan = CodexSessionManager.heartbeatLaunchPlan(
+            session: localDev,
+            sandboxProfileURL: URL(fileURLWithPath: "/tmp/localdev.sb"),
+            promptFile: "/tmp/localdev.prompt"
+        )
+        let offRuntime = DoctorViewModel.codexHeartbeatSandboxRuntime(
+            sandboxExecIsExecutable: true,
+            launchPlan: localDevPlan
+        )
+
+        #expect(!offRuntime.isOn)
+        #expect(offRuntime.title == "Codex heartbeat sandbox: OFF")
+        #expect(offRuntime.detail.contains("Do not run revenue companies"))
+    }
+
+    @Test
     func doctorParsesEvaluationReportSummary() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("os1-eval-report-test-\(UUID().uuidString)", isDirectory: true)

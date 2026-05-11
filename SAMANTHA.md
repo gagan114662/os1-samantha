@@ -129,7 +129,9 @@ Pre-1.0. Built end-to-end in a long iterative session; many architectural decisi
 - No browser-automation stealth — bot detection still wins on consumer platforms
 - Click forwarding has ~500ms-2.5s latency because frames come from screenshot polling, not VNC
 - No multi-user, no auth between you and the voice/bot stack
-- Codex Tasks runs with `--dangerously-bypass-approvals-and-sandbox` — fast but un-sandboxed
+- Codex Tasks sandbox mode is wrapped by macOS `sandbox-exec`; the nested Codex command still uses
+  `--dangerously-bypass-approvals-and-sandbox` so heartbeats can run unattended. See
+  [Codex Heartbeat Sandbox Runtime](docs/codex-heartbeat-sandbox.md).
 
 ## License
 
