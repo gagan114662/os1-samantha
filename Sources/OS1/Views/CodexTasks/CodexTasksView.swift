@@ -30,6 +30,7 @@ struct CodexTasksView: View {
             spawnBar
             templateBar
             ideaBacklog
+            portfolioDashboard
             approvalConsole
             eventConsole
             metricsStrip
@@ -299,7 +300,11 @@ struct CodexTasksView: View {
     }
 
     private var rankedIdeas: [CompanyIdea] {
-        CompanyIdeaEngine.topIdeas(count: 10, from: CompanyIdeaEngine.candidates(limit: 50))
+        CompanyIdeaEngine.topIdeas(
+            count: 10,
+            from: CompanyIdeaEngine.candidates(limit: 50),
+            preservedLearnings: manager.portfolioDashboard().preservedLearnings
+        )
     }
 
     private var rankedIdeaPlans: [(idea: CompanyIdea, plan: CompanyValidationPlan)] {
@@ -380,6 +385,111 @@ struct CodexTasksView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .strokeBorder(theme.palette.glassBorder, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    // MARK: - Portfolio dashboard
+
+    @ViewBuilder
+    private var portfolioDashboard: some View {
+        let dashboard = manager.portfolioDashboard()
+        if dashboard.totalCompanies > 0 {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Label("Portfolio", systemImage: "chart.pie")
+                        .os1Style(theme.typography.label)
+                        .foregroundStyle(theme.palette.onCoralPrimary)
+                    Text("EV \(moneyLabel(dashboard.expectedValueUSD))")
+                    Text("channels \(dashboard.channelCount)")
+                    Text("risks \(dashboard.concentrationRisks.count)")
+                    Text("learnings \(dashboard.preservedLearnings.count)")
+                    Spacer()
+                }
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundStyle(theme.palette.onCoralMuted)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .top, spacing: 8) {
+                        ForEach(dashboard.allocations.prefix(8)) { allocation in
+                            portfolioAllocationCard(allocation)
+                        }
+                        ForEach(dashboard.concentrationRisks.prefix(6)) { risk in
+                            portfolioRiskCard(risk)
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.bottom, 10)
+        }
+    }
+
+    private func portfolioAllocationCard(_ allocation: CompanyPortfolioAllocation) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text("#\(allocation.rank)")
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.green)
+                Text(allocation.companyID.prefix(8))
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(theme.palette.onCoralMuted)
+                Spacer()
+                Image(systemName: allocation.canStartHeartbeat ? "play.circle.fill" : "pause.circle.fill")
+                    .foregroundStyle(allocation.canStartHeartbeat ? .green : .orange)
+            }
+            Text("score \(allocation.priorityScore, specifier: "%.1f")")
+                .os1Style(theme.typography.label)
+                .foregroundStyle(theme.palette.onCoralPrimary)
+            HStack(spacing: 6) {
+                Label(moneyLabel(allocation.recommendedBudgetUSD), systemImage: "banknote")
+                Label("\(allocation.computeSlots)x", systemImage: "cpu")
+            }
+            .font(.caption2)
+            .foregroundStyle(theme.palette.onCoralMuted)
+            Text(allocation.reasons.joined(separator: ", "))
+                .font(.caption2)
+                .foregroundStyle(theme.palette.onCoralSecondary)
+                .lineLimit(2)
+        }
+        .padding(10)
+        .frame(width: 210, alignment: .leading)
+        .background(theme.palette.glassFill.opacity(0.78))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(theme.palette.glassBorder, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func portfolioRiskCard(_ risk: CompanyPortfolioConcentrationRisk) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text(risk.dimension.rawValue)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.orange)
+                Spacer()
+            }
+            Text(risk.value)
+                .os1Style(theme.typography.label)
+                .foregroundStyle(theme.palette.onCoralPrimary)
+                .lineLimit(1)
+            Text("\(risk.count)/\(risk.limit) companies")
+                .font(.caption2)
+                .foregroundStyle(theme.palette.onCoralMuted)
+            Text(risk.companyIDs.prefix(4).joined(separator: ", "))
+                .font(.caption2)
+                .foregroundStyle(theme.palette.onCoralSecondary)
+                .lineLimit(2)
+        }
+        .padding(10)
+        .frame(width: 210, alignment: .leading)
+        .background(Color.orange.opacity(0.16))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color.orange.opacity(0.55), lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }

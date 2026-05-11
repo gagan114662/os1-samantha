@@ -1996,7 +1996,14 @@ final class CodexSessionManager: ObservableObject {
     func schedulerPlan(now: Date = Date()) -> CompanyHeartbeatSchedulePlan {
         let summaries = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, ledgerSummary(for: $0)) })
         let reports = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, budgetReport(for: $0, now: now)) })
-        return CompanyScaleScheduler.plan(sessions: sessions, now: now, ledgerSummaries: summaries, budgetReports: reports)
+        let profiles = Dictionary(uniqueKeysWithValues: portfolioProfiles().map { ($0.companyID, $0) })
+        return CompanyScaleScheduler.plan(
+            sessions: sessions,
+            now: now,
+            ledgerSummaries: summaries,
+            budgetReports: reports,
+            portfolioProfiles: profiles
+        )
     }
 
     func fleetStatus() -> CompanyFleetStatus {
@@ -2009,6 +2016,10 @@ final class CodexSessionManager: ObservableObject {
             profitableCompanyIDs: profitable,
             globalBudgetReport: fleetBudgetReport()
         )
+    }
+
+    func portfolioDashboard() -> CompanyPortfolioDashboard {
+        CompanyPortfolioStrategyEngine.dashboard(profiles: portfolioProfiles())
     }
 
     func portfolioRanks() -> [CompanyPortfolioRank] {
@@ -2033,6 +2044,82 @@ final class CodexSessionManager: ObservableObject {
             )
         }
         return CompanyLifecycleEngine.rankPortfolio(snapshots)
+    }
+
+    private func portfolioProfiles() -> [CompanyPortfolioProfile] {
+        let ranks = Dictionary(uniqueKeysWithValues: portfolioRanks().map { ($0.companyID, $0) })
+        return sessions.map { session in
+            let template = session.templateID.flatMap(CompanyTemplateCatalog.template(id:))
+            let ledger = ledgerSummary(for: session)
+            let rank = ranks[session.id]
+            return CompanyPortfolioProfile(
+                companyID: session.id,
+                title: session.title,
+                channel: template?.channel ?? inferredChannel(from: session.task),
+                niche: template?.category.rawValue ?? inferredNiche(from: session.task),
+                brand: portfolioToken(session.title),
+                account: accountToken(for: session),
+                provider: session.assignedRunnerID,
+                status: session.status,
+                lifecycleStage: session.lifecycleStage,
+                expectedValueUSD: ledger.netUSD + max(0, ledger.revenueUSD * 0.5),
+                evidenceScore: rank?.evidenceScore ?? 0,
+                contributionMargin: ledger.contributionMargin,
+                risk: rank?.risk ?? (session.sandboxMode == .sandbox ? .low : .medium),
+                learningSummary: portfolioLearning(for: session)
+            )
+        }
+    }
+
+    private func portfolioLearning(for session: CodexSession) -> String? {
+        guard session.lifecycleStage == .killed || session.lifecycleStage == .pivoting || session.status == .killed else {
+            return nil
+        }
+        let journal = readJournal(id: session.id, maxBytes: 2_000)
+        let lessonLine = journal
+            .components(separatedBy: .newlines)
+            .first { line in
+                let lower = line.lowercased()
+                return lower.contains("lesson") || lower.contains("avoid") || lower.contains("pivot")
+            }
+        return lessonLine ?? "Preserve \(session.title) outcome before scoring similar ideas again."
+    }
+
+    private func accountToken(for session: CodexSession) -> String {
+        if let templateID = session.templateID {
+            return "template:\(templateID)"
+        }
+        if let credential = session.credentialAllowlist.sorted().first {
+            return "credential:\(credential)"
+        }
+        return "worktree:\(portfolioToken(session.worktreePath))"
+    }
+
+    private func inferredChannel(from task: String) -> String {
+        let lower = task.lowercased()
+        if lower.contains("youtube") { return "YouTube" }
+        if lower.contains("etsy") { return "Etsy" }
+        if lower.contains("amazon") || lower.contains("kdp") { return "Amazon KDP" }
+        if lower.contains("seo") { return "SEO" }
+        if lower.contains("outreach") { return "Outbound outreach" }
+        return "unknown"
+    }
+
+    private func inferredNiche(from task: String) -> String {
+        task.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .prefix(3)
+            .joined(separator: "-")
+    }
+
+    private func portfolioToken(_ value: String) -> String {
+        let token = value.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .prefix(4)
+            .joined(separator: "-")
+        return token.isEmpty ? "unknown" : token
     }
 
     func migrateCompany(id: String, toRunnerID runnerID: String) {

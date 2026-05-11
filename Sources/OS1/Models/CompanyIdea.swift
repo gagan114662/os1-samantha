@@ -74,6 +74,18 @@ enum CompanyIdeaEngine {
         Array(rank(ideas ?? candidates(limit: 50)).prefix(max(0, count)))
     }
 
+    static func topIdeas(
+        count: Int = 10,
+        from ideas: [CompanyIdea]? = nil,
+        preservedLearnings: [String: String]
+    ) -> [CompanyIdea] {
+        let ranked = CompanyPortfolioStrategyEngine.rankIdeas(
+            ideas ?? candidates(limit: 50),
+            preservedLearnings: preservedLearnings
+        )
+        return Array(ranked.prefix(max(0, count)))
+    }
+
     static func advanceToValidation(_ idea: CompanyIdea) -> CompanyIdea? {
         guard idea.canAdvanceToValidation else { return nil }
         var advanced = idea
