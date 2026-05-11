@@ -164,6 +164,7 @@ final class DoctorViewModel: ObservableObject {
         async let productionGates = makeProductionGatesCheck()
         async let evalHarness = makeEvaluationHarnessCheck()
         async let dataGovernance = makeDataGovernanceCheck()
+        async let stateBackups = makeStateBackupCheck()
         return await [
             codex,
             claude,
@@ -176,7 +177,47 @@ final class DoctorViewModel: ObservableObject {
             productionGates,
             evalHarness,
             dataGovernance,
+            stateBackups,
         ]
+    }
+
+    private func makeStateBackupCheck() async -> Check {
+        guard let latest = Self.latestStateBackupManifest() else {
+            return Check(
+                id: "company-state-backups",
+                title: "Company state backups",
+                severity: .warn,
+                summary: "No state backup manifest found",
+                detail: "Create a backup before relying on autonomous company recovery.",
+                actions: []
+            )
+        }
+
+        let integrity = CompanyStateBackupBuilder.verifyManifest(latest.manifest, backupRoot: latest.root)
+        let problems = Self.stateBackupProblems(
+            latestManifest: latest.manifest,
+            integrityReport: integrity,
+            now: Date()
+        )
+        if problems.isEmpty {
+            return Check(
+                id: "company-state-backups",
+                title: "Company state backups",
+                severity: .ok,
+                summary: "Latest backup is current and integrity-checked",
+                detail: "Backup \(latest.manifest.backupID) has \(integrity.verifiedEntryCount) verified entries.",
+                actions: []
+            )
+        }
+
+        return Check(
+            id: "company-state-backups",
+            title: "Company state backups",
+            severity: integrity.isPassing ? .warn : .error,
+            summary: "Backup needs attention",
+            detail: problems.joined(separator: "\n"),
+            actions: []
+        )
     }
 
     private func makeProductionGatesCheck() async -> Check {
@@ -347,6 +388,61 @@ final class DoctorViewModel: ObservableObject {
             return cwdDoc
         }
         return URL(fileURLWithPath: "/Users/gaganarora/Desktop/my projects/hermes-desktop-os1/docs/data-governance.md")
+    }
+
+    nonisolated static func stateBackupProblems(
+        latestManifest: CompanyStateBackupManifest?,
+        integrityReport: CompanyBackupIntegrityReport?,
+        now: Date
+    ) -> [String] {
+        guard let latestManifest else { return ["No state backup manifest found."] }
+        var problems: [String] = []
+        let ageHours = now.timeIntervalSince(latestManifest.createdAt) / 3_600
+        if ageHours > Double(latestManifest.recoveryPointObjectiveHours) {
+            problems.append(
+                "Latest backup is \(Int(ageHours))h old; RPO is \(latestManifest.recoveryPointObjectiveHours)h."
+            )
+        }
+        guard let integrityReport else {
+            problems.append("Backup integrity has not been checked.")
+            return problems
+        }
+        if !integrityReport.missingPaths.isEmpty {
+            problems.append("Missing backup paths: \(integrityReport.missingPaths.joined(separator: ", ")).")
+        }
+        if !integrityReport.checksumMismatches.isEmpty {
+            problems.append(
+                "Checksum mismatches: \(integrityReport.checksumMismatches.joined(separator: ", "))."
+            )
+        }
+        return problems
+    }
+
+    private nonisolated static func latestStateBackupManifest()
+        -> (manifest: CompanyStateBackupManifest, root: URL)? {
+        let root = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".os1/codex-tasks/backups", isDirectory: true)
+        guard let children = try? FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else { return nil }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return children
+            .compactMap { backupRoot -> (CompanyStateBackupManifest, URL, Date)? in
+                let manifestURL = backupRoot.appendingPathComponent("manifest.json")
+                guard let data = try? Data(contentsOf: manifestURL),
+                      let manifest = try? decoder.decode(CompanyStateBackupManifest.self, from: data)
+                else { return nil }
+                let values = try? manifestURL.resourceValues(forKeys: [.contentModificationDateKey])
+                let modified = values?.contentModificationDate ?? manifest.createdAt
+                return (manifest, backupRoot, modified)
+            }
+            .sorted { $0.2 > $1.2 }
+            .first
+            .map { ($0.0, $0.1) }
     }
 
     /// Reports whether the built OS1.app bundle is Developer-ID-signed +
