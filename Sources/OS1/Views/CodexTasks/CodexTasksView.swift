@@ -323,7 +323,8 @@ struct CodexTasksView: View {
     }
 
     private func ideaCard(_ idea: CompanyIdea) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        let validationPlan = CompanyValidationEngine.plan(for: idea)
+        return VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text("#\(idea.score)")
                     .font(.system(.caption2, design: .monospaced))
@@ -344,6 +345,15 @@ struct CodexTasksView: View {
             HStack(spacing: 6) {
                 Label(idea.riskTier.rawValue, systemImage: "shield.lefthalf.filled")
                 Label("\(idea.evidenceLinks.count) evidence", systemImage: "link")
+            }
+            .font(.caption2)
+            .foregroundStyle(theme.palette.onCoralMuted)
+            HStack(spacing: 6) {
+                Label("\(validationPlan.experiments.count) tests", systemImage: "checklist")
+                if validationPlan.experiments.contains(where: \.draftOnly) {
+                    Label("draft-only outreach", systemImage: "hand.raised")
+                        .foregroundStyle(.orange)
+                }
             }
             .font(.caption2)
             .foregroundStyle(theme.palette.onCoralMuted)
@@ -1052,6 +1062,7 @@ struct CodexTasksView: View {
               let templateID = advanced.sourceTemplateID,
               let template = CompanyTemplateCatalog.template(id: templateID)
         else { return }
+        let validationPlan = CompanyValidationEngine.plan(for: advanced)
         selectedTemplateID = template.id
         newCompanyName = template.companyName
         newTaskText = """
@@ -1065,6 +1076,9 @@ struct CodexTasksView: View {
         FIRST EXPERIMENT: \(advanced.expectedFirstExperiment)
         EVIDENCE:
         \(advanced.evidenceLinks.map { "- \($0)" }.joined(separator: "\n"))
+
+        VALIDATION PLAN:
+        \(validationPlan.experiments.map { "- \($0.kind.rawValue): \($0.action) Threshold: \($0.measurableThreshold)\($0.draftOnly ? " Draft only until approved." : "")" }.joined(separator: "\n"))
 
         Start in validation mode. Do not build until the first experiment has real evidence.
         """
