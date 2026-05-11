@@ -182,6 +182,7 @@ struct CodexSession: Identifiable, Codable, Hashable {
     var approvalRequestPath: String { worktreePath + "/APPROVAL_REQUEST.json" }
     var approvalDecisionPath: String { worktreePath + "/APPROVAL_DECISION.json" }
     var approvalGrantPath: String { worktreePath + "/APPROVAL_GRANTED.json" }
+    var compliancePolicyPath: String { worktreePath + "/COMPLIANCE_POLICY.json" }
 }
 
 extension CodexSession {
@@ -1137,6 +1138,7 @@ final class CodexSessionManager: ObservableObject {
         7. Your work WILL be audited. Hallucinations get caught and reverted. Be honest in the journal — write "(unverified)" or "(failed)" when things didn't work. Lying creates more work for you, not less.
         8. Lifecycle discipline: validating means collect demand evidence; building means ship the smallest monetizable asset; launched means measure real users/revenue; revenuePositive means improve margin and repeatability. Do not scale without verified revenue and positive net.
         9. Approval gate: before spending money, increasing budget, creating/charging/refunding payments, publishing public content, messaging humans, deleting assets, changing credentials, signing contracts, or touching regulated/real-estate/legal/financial claims, write APPROVAL_REQUEST.json using the schema below and end with `BLOCKED: approval required for <action>`. Only execute a high-risk action when APPROVAL_GRANTED.json exists, is unexpired, and matches the action scope.
+        10. Compliance gate: before outreach, publishing, payments, browser automation, scraping, or collecting personal data, update COMPLIANCE_POLICY.json and include complianceMetadata in APPROVAL_REQUEST.json. Browser automation must name an allowed domain and allowed action; if it is not listed, do not automate it.
 
         ## YOUR WORKSPACE
         Working directory is your cwd. Files you should know about:
@@ -1148,6 +1150,7 @@ final class CodexSessionManager: ObservableObject {
         - APPROVAL_GRANTED.json — if present and unexpired, scope-limited permission from the operator.
           Its approvedActionFingerprint, companyID, destinationAccount, maxCostUSD, and remainingUses must match before execution
         - APPROVAL_DECISION.json — latest operator decision; if denied or changesRequested, follow it instead of executing the original action
+        - COMPLIANCE_POLICY.json — per-company policy. Keep legalBasis, unsubscribePath, disclosureText, targetAudience, contactSource, dataRetentionPolicy, and browserAutomationPolicy.allowedDomains/allowedActions current before risky actions.
         - handoff.json — STRUCTURED record you MUST overwrite each heartbeat (schema below). Auditor parses this directly, not your prose
         - LESSONS.md — portfolio-wide lessons shared across ALL companies (symlink, read-mostly). If you learn something useful to other companies, append a short entry (use `flock LESSONS.md ...` to avoid races)
         - Your git HEAD was just tagged `heartbeat-pre-\(session.heartbeatCount)` before this run; run `git diff heartbeat-pre-\(session.heartbeatCount)..HEAD` at end of heartbeat to verify what you ACTUALLY changed vs claimed
@@ -1164,6 +1167,21 @@ final class CodexSessionManager: ObservableObject {
           "expectedEffect": "what should happen if approved",
           "estimatedCostUSD": 0.0,
           "destinationAccount": "account/platform/person affected, or null",
+          "complianceMetadata": {
+            "legalBasis": "consent|contract|legitimate-interest|none-yet",
+            "unsubscribePath": "how recipients opt out, or null if not outbound",
+            "disclosureText": "identity, sponsorship, affiliate, AI, or commercial disclosure",
+            "targetAudience": "who is affected",
+            "contactSource": "where contacts/data came from",
+            "dataRetentionPolicy": "what is stored and when it is deleted"
+          },
+          "browserAutomationPolicy": {
+            "allowedDomains": ["example.com"],
+            "allowedActions": ["read-public-page", "fill-owned-form"]
+          },
+          "targetDomain": "domain for browser automation, or null",
+          "browserAction": "browser action name, or null",
+          "requestedCredential": "credential name, or null",
           "rollbackPlan": "how you will undo or contain the action",
           "status": "pending"
         }
@@ -1704,6 +1722,11 @@ final class CodexSessionManager: ObservableObject {
         )
     }
 
+    func complianceDecision(for request: CompanyApprovalRequest) -> CompanyComplianceDecision {
+        let allowlist = sessions.first(where: { $0.id == request.companyID })?.credentialAllowlist ?? []
+        return CompanyComplianceEngine.evaluate(request: request, allowedCredentialNames: allowlist)
+    }
+
     private func readApprovalRequest(for session: CodexSession) -> CompanyApprovalRequest? {
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: session.approvalRequestPath)) else { return nil }
         let decoder = JSONDecoder()
@@ -1720,6 +1743,21 @@ final class CodexSessionManager: ObservableObject {
 
     private func recordPendingApprovalIfPresent(for session: CodexSession) {
         guard let request = readApprovalRequest(for: session), request.status == .pending else { return }
+        let decision = CompanyComplianceEngine.evaluate(
+            request: request,
+            allowedCredentialNames: session.credentialAllowlist
+        )
+        appendEvent(
+            kind: decision.status == .blocked ? .complianceBlocked : .complianceChecked,
+            companyID: session.id,
+            summary: "Compliance \(decision.status.rawValue): \(request.proposedAction)",
+            metadata: [
+                "requestID": request.id,
+                "status": decision.status.rawValue,
+                "findingIDs": decision.findings.map(\.id).joined(separator: ","),
+                "fixes": decision.fixes.joined(separator: " | ")
+            ]
+        )
         appendEvent(
             kind: .approvalRequested,
             companyID: session.id,
@@ -1727,6 +1765,7 @@ final class CodexSessionManager: ObservableObject {
             metadata: [
                 "requestID": request.id,
                 "riskTier": request.riskTier.rawValue,
+                "complianceStatus": decision.status.rawValue,
                 "estimatedCostUSD": request.estimatedCostUSD.map { "\($0)" } ?? "",
                 "destinationAccount": request.destinationAccount ?? ""
             ]
@@ -1741,6 +1780,30 @@ final class CodexSessionManager: ObservableObject {
         remainingUses: Int?
     ) {
         guard let idx = sessions.firstIndex(where: { $0.id == request.companyID }) else { return }
+        if status == .approved {
+            let compliance = CompanyComplianceEngine.evaluate(
+                request: request,
+                allowedCredentialNames: sessions[idx].credentialAllowlist
+            )
+            if compliance.status == .blocked {
+                appendEvent(
+                    kind: .complianceBlocked,
+                    companyID: request.companyID,
+                    actor: "user",
+                    summary: "Approval blocked by compliance: \(request.proposedAction)",
+                    metadata: [
+                        "requestID": request.id,
+                        "findingIDs": compliance.findings.map(\.id).joined(separator: ","),
+                        "fixes": compliance.fixes.joined(separator: " | ")
+                    ]
+                )
+                injectInstruction(
+                    id: request.companyID,
+                    instruction: "Approval request \(request.id) is blocked by compliance. Fixes: \(compliance.fixes.joined(separator: " | ")). Write a corrected APPROVAL_REQUEST.json before retrying."
+                )
+                return
+            }
+        }
         let now = Date()
         var decided = request
         decided.status = status
@@ -2198,6 +2261,7 @@ final class CodexSessionManager: ObservableObject {
             candidates.append(.init(sourceURL: URL(fileURLWithPath: session.approvalRequestPath), relativePath: "\(root)/APPROVAL_REQUEST.json", kind: .approval))
             candidates.append(.init(sourceURL: URL(fileURLWithPath: session.approvalDecisionPath), relativePath: "\(root)/APPROVAL_DECISION.json", kind: .approval))
             candidates.append(.init(sourceURL: URL(fileURLWithPath: session.approvalGrantPath), relativePath: "\(root)/APPROVAL_GRANTED.json", kind: .approval))
+            candidates.append(.init(sourceURL: URL(fileURLWithPath: session.compliancePolicyPath), relativePath: "\(root)/COMPLIANCE_POLICY.json", kind: .approval))
             candidates.append(.init(sourceURL: logDir.appendingPathComponent("\(session.id).log"), relativePath: "logs/\(session.id).log", kind: .log))
         }
 

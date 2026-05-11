@@ -17,6 +17,8 @@ struct CompanyEvent: Codable, Hashable, Identifiable {
         case fleetPaused
         case fleetResumed
         case secretAccessed
+        case complianceChecked
+        case complianceBlocked
         case approvalRequested
         case approvalApproved
         case approvalDenied

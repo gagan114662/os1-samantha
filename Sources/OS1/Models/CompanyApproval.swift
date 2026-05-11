@@ -26,6 +26,11 @@ struct CompanyApprovalRequest: Codable, Hashable, Identifiable {
     var expectedEffect: String
     var estimatedCostUSD: Double?
     var destinationAccount: String?
+    var complianceMetadata: CompanyComplianceMetadata?
+    var browserAutomationPolicy: CompanyBrowserAutomationPolicy?
+    var targetDomain: String?
+    var browserAction: String?
+    var requestedCredential: String?
     var rollbackPlan: String
     var status: Status
     var decisionNote: String?
@@ -42,6 +47,11 @@ struct CompanyApprovalRequest: Codable, Hashable, Identifiable {
         expectedEffect: String,
         estimatedCostUSD: Double? = nil,
         destinationAccount: String? = nil,
+        complianceMetadata: CompanyComplianceMetadata? = nil,
+        browserAutomationPolicy: CompanyBrowserAutomationPolicy? = nil,
+        targetDomain: String? = nil,
+        browserAction: String? = nil,
+        requestedCredential: String? = nil,
         rollbackPlan: String,
         status: Status = .pending,
         decisionNote: String? = nil,
@@ -57,6 +67,11 @@ struct CompanyApprovalRequest: Codable, Hashable, Identifiable {
         self.expectedEffect = CompanyEvent.redact(expectedEffect)
         self.estimatedCostUSD = estimatedCostUSD
         self.destinationAccount = destinationAccount.map(CompanyEvent.redact)
+        self.complianceMetadata = complianceMetadata
+        self.browserAutomationPolicy = browserAutomationPolicy
+        self.targetDomain = targetDomain.map(CompanyEvent.redact)
+        self.browserAction = browserAction.map(CompanyEvent.redact)
+        self.requestedCredential = requestedCredential.map(CompanyEvent.redact)
         self.rollbackPlan = CompanyEvent.redact(rollbackPlan)
         self.status = status
         self.decisionNote = decisionNote.map(CompanyEvent.redact)
