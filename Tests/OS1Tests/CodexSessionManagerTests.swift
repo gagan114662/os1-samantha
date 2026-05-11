@@ -112,6 +112,50 @@ struct CodexSessionManagerTests {
         #expect(result.blocked == "newer reason B")
     }
 
+    // MARK: - Revenue signal parsing
+
+    @Test
+    func verifiedRevenueSignalRequiresPositiveDollarAmount() {
+        #expect(CodexSessionManager.hasVerifiedRevenueSignal("2026-05-11 Stripe checkout paid: $19.00 id=cs_test_123"))
+        #expect(CodexSessionManager.hasVerifiedRevenueSignal("Verified revenue: $1,250.50 from Stripe payout"))
+        #expect(!CodexSessionManager.hasVerifiedRevenueSignal("2026-05-11 $0"))
+        #expect(!CodexSessionManager.hasVerifiedRevenueSignal("(no revenue API connected yet)"))
+        #expect(!CodexSessionManager.hasVerifiedRevenueSignal("estimated revenue projection: $500"))
+        #expect(!CodexSessionManager.hasVerifiedRevenueSignal("unmeasured affiliate clicks, possible $25"))
+    }
+
+    // MARK: - Credential sandboxing
+
+    @Test
+    func credentialParserOnlyExposesAllowlistedNames() {
+        let contents = """
+        # comments ignored
+        export STRIPE_API_KEY="sk_live_should_not_be_logged"
+        RESEND_API_KEY='resend-secret'
+        GITHUB_TOKEN=ghp_shouldnotleak123456789012345
+        """
+
+        let env = CodexSessionManager.parseCredentialEnvironment(
+            contents: contents,
+            allowlist: ["RESEND_API_KEY"]
+        )
+
+        #expect(env == ["RESEND_API_KEY": "resend-secret"])
+    }
+
+    @Test
+    func credentialParserCanExposeAllNamesForLocalDevelopmentMode() {
+        let contents = """
+        A=1
+        export B="two"
+        """
+
+        let env = CodexSessionManager.parseCredentialEnvironment(contents: contents, allowlist: nil)
+
+        #expect(env["A"] == "1")
+        #expect(env["B"] == "two")
+    }
+
     // MARK: - CodexSession persistence (Codable roundtrip)
 
     @Test
@@ -132,6 +176,18 @@ struct CodexSessionManagerTests {
             lastHeartbeatAt: Date(timeIntervalSince1970: 1_700_001_000),
             nextHeartbeatAt: Date(timeIntervalSince1970: 1_700_001_900),
             pendingUserInstruction: "Focus on shorts",
+            templateID: "youtube-ai-tool-tutorials",
+            budget: .defaultState(now: Date(timeIntervalSince1970: 1_700_000_000)),
+            lifecycleStage: .validating,
+            sandboxMode: .productionSandbox,
+            credentialAllowlist: ["STRIPE_API_KEY"],
+            heartbeatLease: CodexSession.HeartbeatLease(
+                id: "lease-1",
+                heartbeatCount: 7,
+                acquiredAt: Date(timeIntervalSince1970: 1_700_001_000),
+                expiresAt: Date(timeIntervalSince1970: 1_700_008_200),
+                ownerPID: 12345
+            ),
             blockedReason: "needs Twitter OAuth via Composio"
         )
 
@@ -146,6 +202,12 @@ struct CodexSessionManagerTests {
         #expect(round.heartbeatCount == 7)
         #expect(round.cadenceMinutes == 15)
         #expect(round.pendingUserInstruction == "Focus on shorts")
+        #expect(round.templateID == "youtube-ai-tool-tutorials")
+        #expect(round.lifecycleStage == .validating)
+        #expect(round.sandboxMode == .productionSandbox)
+        #expect(round.credentialAllowlist == ["STRIPE_API_KEY"])
+        #expect(round.heartbeatLease?.id == "lease-1")
+        #expect(round.heartbeatLease?.ownerPID == 12345)
         #expect(round.blockedReason == "needs Twitter OAuth via Composio")
         #expect(round.nextHeartbeatAt == original.nextHeartbeatAt)
     }
@@ -180,6 +242,70 @@ struct CodexSessionManagerTests {
         #expect(session.lastHeartbeatAt == nil)
         #expect(session.nextHeartbeatAt == nil)
         #expect(session.pendingUserInstruction == nil)
+        #expect(session.lifecycleStage == .validating)
+        #expect(session.sandboxMode == .productionSandbox)
+        #expect(session.credentialAllowlist.isEmpty)
+        #expect(session.heartbeatLease == nil)
+    }
+
+    // MARK: - Restart recovery / leases
+
+    @Test
+    func restartRecoveryQueuesRunningSessionWithActiveLease() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        var session = CodexSession(
+            id: "leased",
+            title: "leased",
+            task: "run",
+            worktreePath: "/tmp/leased",
+            branch: "company/leased",
+            status: .running,
+            startedAt: now
+        )
+        session.pid = 4321
+        session.heartbeatLease = CodexSession.HeartbeatLease(
+            id: "active",
+            heartbeatCount: 2,
+            acquiredAt: now,
+            expiresAt: now.addingTimeInterval(600),
+            ownerPID: 4321
+        )
+
+        let recovered = CodexSessionManager.recoverSessionAfterRestart(session, now: now, retryJitterSeconds: 10)
+
+        #expect(recovered.status == .queued)
+        #expect(recovered.pid == nil)
+        #expect(recovered.heartbeatLease?.id == "active")
+        #expect(recovered.nextHeartbeatAt == now.addingTimeInterval(610))
+    }
+
+    @Test
+    func restartRecoveryResumesRunningSessionWithExpiredLease() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        var session = CodexSession(
+            id: "expired",
+            title: "expired",
+            task: "run",
+            worktreePath: "/tmp/expired",
+            branch: "company/expired",
+            status: .running,
+            startedAt: now
+        )
+        session.pid = 4321
+        session.heartbeatLease = CodexSession.HeartbeatLease(
+            id: "expired",
+            heartbeatCount: 2,
+            acquiredAt: now.addingTimeInterval(-900),
+            expiresAt: now.addingTimeInterval(-60),
+            ownerPID: 4321
+        )
+
+        let recovered = CodexSessionManager.recoverSessionAfterRestart(session, now: now, retryJitterSeconds: 10)
+
+        #expect(recovered.status == .idle)
+        #expect(recovered.pid == nil)
+        #expect(recovered.heartbeatLease == nil)
+        #expect(recovered.nextHeartbeatAt == now.addingTimeInterval(10))
     }
 
     // MARK: - Status colour mapping (lightweight UI invariant)
@@ -189,6 +315,7 @@ struct CodexSessionManagerTests {
         for status in [
             CodexSession.Status.running,
             .idle,
+            .queued,
             .blocked,
             .paused,
             .completed,

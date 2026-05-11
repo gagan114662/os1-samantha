@@ -6,6 +6,51 @@ import Combine
 /// worktree and JOURNAL.md memory file that codex reads + appends to every
 /// heartbeat.
 struct CodexSession: Identifiable, Codable, Hashable {
+    enum LifecycleStage: String, Codable, CaseIterable, Hashable {
+        case idea
+        case validating
+        case building
+        case launched
+        case revenuePositive
+        case scaling
+        case paused
+        case killed
+        case pivoting
+    }
+
+    struct BudgetState: Codable, Hashable {
+        var dailyWindowStart: Date
+        var dailyHeartbeatCount: Int
+        var maxDailyHeartbeats: Int
+        var maxHeartbeatsWithoutRevenueSignal: Int
+
+        static func defaultState(now: Date = Date()) -> BudgetState {
+            BudgetState(
+                dailyWindowStart: now,
+                dailyHeartbeatCount: 0,
+                maxDailyHeartbeats: 12,
+                maxHeartbeatsWithoutRevenueSignal: 18
+            )
+        }
+    }
+
+    enum SandboxMode: String, Codable, CaseIterable, Hashable {
+        case productionSandbox
+        case localDevelopment
+    }
+
+    struct HeartbeatLease: Codable, Hashable {
+        let id: String
+        let heartbeatCount: Int
+        let acquiredAt: Date
+        let expiresAt: Date
+        var ownerPID: Int32?
+
+        var isExpired: Bool {
+            expiresAt <= Date()
+        }
+    }
+
     let id: String                  // short token, also the branch suffix
     var title: String               // company name (e.g. "samantha-youtube")
     var task: String                // mission statement — never changes
@@ -22,10 +67,17 @@ struct CodexSession: Identifiable, Codable, Hashable {
     var lastHeartbeatAt: Date?
     var nextHeartbeatAt: Date?
     var pendingUserInstruction: String?
+    var templateID: String? = nil
+    var budget: BudgetState? = nil
+    var lifecycleStage: LifecycleStage = .validating
+    var sandboxMode: SandboxMode = .productionSandbox
+    var credentialAllowlist: [String] = []
+    var heartbeatLease: HeartbeatLease? = nil
 
     enum Status: String, Codable {
         case running       // a heartbeat is currently executing
         case idle          // between heartbeats, scheduled
+        case queued        // due, but deferred by fleet concurrency limits
         case blocked       // codex emitted BLOCKED: marker — needs CEO direction
         case paused        // user paused the heartbeat loop
         case completed     // mission marked done by user
@@ -37,6 +89,7 @@ struct CodexSession: Identifiable, Codable, Hashable {
         switch status {
         case .running:   "yellow"
         case .idle:      "blue"
+        case .queued:    "purple"
         case .blocked:   "orange"
         case .paused:    "gray"
         case .completed: "green"
@@ -49,6 +102,64 @@ struct CodexSession: Identifiable, Codable, Hashable {
     var blockedReason: String?
 
     var journalPath: String { worktreePath + "/JOURNAL.md" }
+    var revenuePath: String { worktreePath + "/REVENUE.md" }
+    var ledgerPath: String { worktreePath + "/LEDGER.json" }
+    var approvalRequestPath: String { worktreePath + "/APPROVAL_REQUEST.json" }
+    var approvalDecisionPath: String { worktreePath + "/APPROVAL_DECISION.json" }
+    var approvalGrantPath: String { worktreePath + "/APPROVAL_GRANTED.json" }
+}
+
+extension CodexSession {
+    enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case task
+        case worktreePath
+        case branch
+        case status
+        case startedAt
+        case finishedAt
+        case exitCode
+        case pid
+        case cadenceMinutes
+        case heartbeatCount
+        case lastHeartbeatAt
+        case nextHeartbeatAt
+        case pendingUserInstruction
+        case templateID
+        case budget
+        case lifecycleStage
+        case sandboxMode
+        case credentialAllowlist
+        case heartbeatLease
+        case blockedReason
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        task = try container.decode(String.self, forKey: .task)
+        worktreePath = try container.decode(String.self, forKey: .worktreePath)
+        branch = try container.decode(String.self, forKey: .branch)
+        status = try container.decode(Status.self, forKey: .status)
+        startedAt = try container.decode(Date.self, forKey: .startedAt)
+        finishedAt = try container.decodeIfPresent(Date.self, forKey: .finishedAt)
+        exitCode = try container.decodeIfPresent(Int32.self, forKey: .exitCode)
+        pid = try container.decodeIfPresent(Int32.self, forKey: .pid)
+        cadenceMinutes = try container.decodeIfPresent(Int.self, forKey: .cadenceMinutes) ?? 15
+        heartbeatCount = try container.decodeIfPresent(Int.self, forKey: .heartbeatCount) ?? 0
+        lastHeartbeatAt = try container.decodeIfPresent(Date.self, forKey: .lastHeartbeatAt)
+        nextHeartbeatAt = try container.decodeIfPresent(Date.self, forKey: .nextHeartbeatAt)
+        pendingUserInstruction = try container.decodeIfPresent(String.self, forKey: .pendingUserInstruction)
+        templateID = try container.decodeIfPresent(String.self, forKey: .templateID)
+        budget = try container.decodeIfPresent(BudgetState.self, forKey: .budget)
+        lifecycleStage = try container.decodeIfPresent(LifecycleStage.self, forKey: .lifecycleStage) ?? .validating
+        sandboxMode = try container.decodeIfPresent(SandboxMode.self, forKey: .sandboxMode) ?? .productionSandbox
+        credentialAllowlist = try container.decodeIfPresent([String].self, forKey: .credentialAllowlist) ?? []
+        heartbeatLease = try container.decodeIfPresent(HeartbeatLease.self, forKey: .heartbeatLease)
+        blockedReason = try container.decodeIfPresent(String.self, forKey: .blockedReason)
+    }
 }
 
 /// Spawns and tracks parallel `codex exec` sessions, each in its own
@@ -72,6 +183,12 @@ final class CodexSessionManager: ObservableObject {
     private let compactionEveryNHeartbeats = 5
     /// Don't bother compacting unless journal is at least this big.
     private let compactionMinBytes = 12_000
+    /// Global active-runner cap. This is the first fleet backpressure layer:
+    /// big template batches can create 100 companies, but only this many
+    /// heartbeat processes may run at once.
+    private let maxConcurrentHeartbeats = 3
+    private let queueRetryBaseSeconds: TimeInterval = 120
+    private let heartbeatLeaseSeconds: TimeInterval = 7_200
     private var processes: [String: Process] = [:]
     private let logQueue = DispatchQueue(label: "com.elementsoftware.os1.codex-tasks", qos: .utility)
     /// Serializes git worktree mutations across companies to dodge .git/index.lock races.
@@ -113,7 +230,14 @@ final class CodexSessionManager: ObservableObject {
     }
 
     @discardableResult
-    func createCompany(name: String, mission: String, cadenceMinutes: Int = 15) throws -> CodexSession {
+    func createCompany(
+        name: String,
+        mission: String,
+        cadenceMinutes: Int = 15,
+        templateID: String? = nil,
+        startPaused: Bool = false,
+        firstHeartbeatDelay: TimeInterval = 5
+    ) throws -> CodexSession {
         let id = Self.shortID()
         let safeName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedName = safeName.isEmpty ? "company-\(id)" : safeName
@@ -125,7 +249,7 @@ final class CodexSessionManager: ObservableObject {
         defer { worktreeMutex.unlock() }
         try runShell("git", args: ["-C", baseDir.path, "worktree", "add", "-b", branch, worktreePath, "main"], timeout: 15)
         // Belt-and-suspenders: prevent worktree contents from leaking secrets if user pushes the base repo
-        let gitignore = "JOURNAL.md\nAUDIT.md\nREVENUE.md\nhandoff.json\n.env\n.env.*\nsecrets/\nLESSONS.md\n"
+        let gitignore = "JOURNAL.md\nAUDIT.md\nREVENUE.md\nLEDGER.json\nAPPROVAL_REQUEST.json\nAPPROVAL_DECISION.json\nAPPROVAL_GRANTED.json\nhandoff.json\n.env\n.env.*\nsecrets/\nLESSONS.md\n"
         try? gitignore.write(toFile: worktreePath + "/.gitignore", atomically: true, encoding: .utf8)
         // Symlink the portfolio lessons file into this worktree so codex sees
         // LESSONS.md alongside JOURNAL.md every heartbeat. All companies
@@ -148,6 +272,9 @@ final class CodexSessionManager: ObservableObject {
 
         """
         try journal.write(toFile: worktreePath + "/JOURNAL.md", atomically: true, encoding: .utf8)
+        try "# Revenue\n\n- \(Self.todayString()) $0 baseline (no revenue API connected yet)\n"
+            .write(toFile: worktreePath + "/REVENUE.md", atomically: true, encoding: .utf8)
+        try "[]\n".write(toFile: worktreePath + "/LEDGER.json", atomically: true, encoding: .utf8)
 
         let session = CodexSession(
             id: id,
@@ -163,13 +290,58 @@ final class CodexSessionManager: ObservableObject {
             cadenceMinutes: cadenceMinutes,
             heartbeatCount: 0,
             lastHeartbeatAt: nil,
-            nextHeartbeatAt: Date(timeIntervalSinceNow: 5),  // first heartbeat in 5s
-            pendingUserInstruction: nil
+            nextHeartbeatAt: startPaused ? nil : Date(timeIntervalSinceNow: firstHeartbeatDelay),
+            pendingUserInstruction: nil,
+            templateID: templateID,
+            budget: .defaultState(),
+            lifecycleStage: .validating,
+            sandboxMode: .productionSandbox,
+            credentialAllowlist: [],
+            heartbeatLease: nil
         )
-        sessions.insert(session, at: 0)
+        var persistedSession = session
+        if startPaused {
+            persistedSession.status = .paused
+        }
+        sessions.insert(persistedSession, at: 0)
         persistSessions()
-        scheduleHeartbeat(id: id)
-        return session
+        appendEvent(
+            kind: .companyCreated,
+            companyID: id,
+            summary: "Created company \(resolvedName)",
+            metadata: [
+                "title": resolvedName,
+                "templateID": templateID ?? "",
+                "cadenceMinutes": "\(cadenceMinutes)",
+                "startPaused": "\(startPaused)"
+            ]
+        )
+        if !startPaused {
+            scheduleHeartbeat(id: id)
+        }
+        return persistedSession
+    }
+
+    @discardableResult
+    func createCompanies(
+        from templates: [CompanyTemplate],
+        cadenceMinutes: Int? = nil,
+        startPaused: Bool = true,
+        firstHeartbeatSpacingSeconds: TimeInterval = 90
+    ) throws -> [CodexSession] {
+        var created: [CodexSession] = []
+        for (index, template) in templates.enumerated() {
+            let session = try createCompany(
+                name: template.companyName,
+                mission: template.missionPrompt,
+                cadenceMinutes: cadenceMinutes ?? template.suggestedCadenceMinutes,
+                templateID: template.id,
+                startPaused: startPaused,
+                firstHeartbeatDelay: firstHeartbeatSpacingSeconds * Double(index + 1)
+            )
+            created.append(session)
+        }
+        return created
     }
 
     // MARK: - Heartbeat loop
@@ -179,7 +351,7 @@ final class CodexSessionManager: ObservableObject {
     private func scheduleHeartbeat(id: String) {
         heartbeatTasks[id]?.cancel()
         guard let session = sessions.first(where: { $0.id == id }) else { return }
-        guard session.status == .idle || session.status == .blocked else { return }
+        guard session.status == .idle || session.status == .queued || session.status == .blocked else { return }
         var fireAt = session.nextHeartbeatAt ?? Date(timeIntervalSinceNow: TimeInterval(session.cadenceMinutes) * 60)
 
         // Stagger-on-wake: if scheduled time was in the past (Mac slept, app
@@ -209,13 +381,39 @@ final class CodexSessionManager: ObservableObject {
     /// instruction, takes the next concrete action, appends to journal.
     func runHeartbeat(id: String) async {
         guard let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
-        guard sessions[idx].status == .idle || sessions[idx].status == .blocked else { return }
+        guard sessions[idx].status == .idle || sessions[idx].status == .queued || sessions[idx].status == .blocked else { return }
+
+        if activeHeartbeatCount(excluding: id) >= maxConcurrentHeartbeats {
+            deferHeartbeatForQueue(id: id)
+            return
+        }
+
+        guard enforceBudgetBeforeHeartbeat(id: id) else { return }
+        guard let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
 
         sessions[idx].status = .running
         sessions[idx].lastHeartbeatAt = Date()
         sessions[idx].heartbeatCount += 1
+        sessions[idx].heartbeatLease = CodexSession.HeartbeatLease(
+            id: UUID().uuidString,
+            heartbeatCount: sessions[idx].heartbeatCount,
+            acquiredAt: sessions[idx].lastHeartbeatAt ?? Date(),
+            expiresAt: Date(timeIntervalSinceNow: heartbeatLeaseSeconds),
+            ownerPID: nil
+        )
         let session = sessions[idx]
         persistSessions()
+        appendEvent(
+            kind: .heartbeatStarted,
+            companyID: id,
+            summary: "Started heartbeat \(session.heartbeatCount) for \(session.title)",
+            metadata: [
+                "heartbeat": "\(session.heartbeatCount)",
+                "lifecycleStage": session.lifecycleStage.rawValue,
+                "leaseID": session.heartbeatLease?.id ?? "",
+                "leaseExpiresAt": session.heartbeatLease.map { ISO8601DateFormatter().string(from: $0.expiresAt) } ?? ""
+            ]
+        )
 
         // Hard-enforced compaction: every Nth heartbeat AND if journal grew
         // past the threshold, distill it via `claude -p` BEFORE the worker
@@ -231,7 +429,10 @@ final class CodexSessionManager: ObservableObject {
         // exactly what changed during this run, not what codex CLAIMS changed.
         snapshotPreHeartbeat(session: session)
 
-        let availableCreds = Self.loadCredentialNames()
+        let credentialEnvironment = Self.loadCredentialEnvironment(
+            allowlist: session.sandboxMode == .localDevelopment ? nil : Set(session.credentialAllowlist)
+        )
+        let availableCreds = credentialEnvironment.keys.sorted()
         // Every 3rd heartbeat is an adversarial audit instead of a work step.
         // Audit fires with FRESH context: codex doesn't carry over from the
         // worker that just wrote the journal, so the same cost bias that makes
@@ -248,8 +449,14 @@ final class CodexSessionManager: ObservableObject {
             FileManager.default.createFile(atPath: logFile.path, contents: nil)
         }
         guard let logHandle = try? FileHandle(forWritingTo: logFile) else { return }
-        try? logHandle.seekToEnd()
-        let header = "\n\n=== Heartbeat \(session.heartbeatCount) (\(isAudit ? "AUDIT" : "WORK")) at \(Date()) ===\n"
+        _ = try? logHandle.seekToEnd()
+        let header = """
+
+
+        === Heartbeat \(session.heartbeatCount) (\(isAudit ? "AUDIT" : "WORK")) at \(Date()) ===
+        sandbox_mode=\(session.sandboxMode.rawValue) approval_mode=file-gated credential_allowlist=\(session.credentialAllowlist.joined(separator: ",")) exposed_credentials=\(availableCreds.joined(separator: ","))
+
+        """
         logHandle.write(header.data(using: .utf8) ?? Data())
 
         // Write the prompt to a per-heartbeat temp file and pipe via stdin.
@@ -262,12 +469,16 @@ final class CodexSessionManager: ObservableObject {
         let proc = Process()
         proc.currentDirectoryURL = URL(fileURLWithPath: session.worktreePath)
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        // Source ~/.os1/credentials.env (if present) so user-provided API keys
-        // are exported to the codex process. Login shell also picks up .zshrc.
+        var environment = ProcessInfo.processInfo.environment
+        for (name, value) in credentialEnvironment {
+            environment[name] = value
+        }
+        environment["OS1_COMPANY_ID"] = session.id
+        environment["OS1_SANDBOX_MODE"] = session.sandboxMode.rawValue
+        environment["OS1_APPROVAL_MODE"] = "file-gated"
+        proc.environment = environment
         // Prompt is piped via stdin so no user text touches the shell command line.
-        let credsPath = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".os1/credentials.env").path
-        let credsLoad = "[ -f \(Self.shellEscape(credsPath)) ] && set -a && source \(Self.shellEscape(credsPath)) && set +a; "
-        let codexCommand = "\(credsLoad)cat \(Self.shellEscape(promptFile)) | codex exec --dangerously-bypass-approvals-and-sandbox -"
+        let codexCommand = "cat \(Self.shellEscape(promptFile)) | codex exec --dangerously-bypass-approvals-and-sandbox -"
         proc.arguments = ["zsh", "-l", "-c", codexCommand]
         proc.standardOutput = logHandle
         proc.standardError = logHandle
@@ -281,11 +492,118 @@ final class CodexSessionManager: ObservableObject {
         do {
             try proc.run()
             sessions[idx].pid = proc.processIdentifier
+            sessions[idx].heartbeatLease?.ownerPID = proc.processIdentifier
             processes[id] = proc
+            persistSessions()
         } catch {
             sessions[idx].status = .failed
             sessions[idx].exitCode = -1
+            sessions[idx].heartbeatLease = nil
             persistSessions()
+        }
+    }
+
+    private func activeHeartbeatCount(excluding id: String? = nil) -> Int {
+        sessions.filter { session in
+            session.id != id && session.status == .running
+        }.count
+    }
+
+    private func deferHeartbeatForQueue(id: String) {
+        guard let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
+        let jitter = Double.random(in: 0...maxJitterSeconds)
+        sessions[idx].status = .queued
+        sessions[idx].nextHeartbeatAt = Date(timeIntervalSinceNow: queueRetryBaseSeconds + jitter)
+        persistSessions()
+        appendEvent(
+            kind: .heartbeatQueued,
+            companyID: id,
+            summary: "Heartbeat queued by fleet concurrency limit",
+            metadata: [
+                "maxConcurrentHeartbeats": "\(maxConcurrentHeartbeats)",
+                "retrySeconds": "\(Int(queueRetryBaseSeconds + jitter))"
+            ]
+        )
+        scheduleHeartbeat(id: id)
+    }
+
+    private func enforceBudgetBeforeHeartbeat(id: String) -> Bool {
+        guard let idx = sessions.firstIndex(where: { $0.id == id }) else { return false }
+        let now = Date()
+        var budget = sessions[idx].budget ?? .defaultState(now: now)
+
+        if now.timeIntervalSince(budget.dailyWindowStart) >= 86_400 {
+            budget.dailyWindowStart = now
+            budget.dailyHeartbeatCount = 0
+        }
+
+        if sessions[idx].heartbeatCount >= budget.maxHeartbeatsWithoutRevenueSignal {
+            let summary = ledgerSummary(for: sessions[idx])
+            if !summary.hasVerifiedRevenue {
+                sessions[idx].status = .blocked
+                sessions[idx].blockedReason = "budget guard: \(budget.maxHeartbeatsWithoutRevenueSignal) heartbeats without verified revenue signal"
+                sessions[idx].nextHeartbeatAt = nil
+                sessions[idx].budget = budget
+                appendSystemNote(
+                    id: id,
+                    text: "BLOCKED by budget guard: no verified revenue signal after \(budget.maxHeartbeatsWithoutRevenueSignal) heartbeats. Founder/Samantha must approve pivot, kill, or new budget."
+                )
+                persistSessions()
+                appendEvent(
+                    kind: .budgetBlocked,
+                    companyID: id,
+                    summary: "Budget guard blocked company with no verified revenue signal",
+                    metadata: [
+                        "heartbeatCount": "\(sessions[idx].heartbeatCount)",
+                        "maxHeartbeatsWithoutRevenueSignal": "\(budget.maxHeartbeatsWithoutRevenueSignal)"
+                    ]
+                )
+                return false
+            }
+        }
+
+        if budget.dailyHeartbeatCount >= budget.maxDailyHeartbeats {
+            sessions[idx].status = .queued
+            sessions[idx].nextHeartbeatAt = budget.dailyWindowStart.addingTimeInterval(86_400 + Double.random(in: 0...maxJitterSeconds))
+            sessions[idx].budget = budget
+            persistSessions()
+            appendEvent(
+                kind: .budgetBlocked,
+                companyID: id,
+                summary: "Daily heartbeat budget exhausted; queued until next window",
+                metadata: [
+                    "dailyHeartbeatCount": "\(budget.dailyHeartbeatCount)",
+                    "maxDailyHeartbeats": "\(budget.maxDailyHeartbeats)"
+                ]
+            )
+            scheduleHeartbeat(id: id)
+            return false
+        }
+
+        budget.dailyHeartbeatCount += 1
+        sessions[idx].budget = budget
+        return true
+    }
+
+    func ledgerSummary(id: String) -> CompanyLedgerSummary {
+        guard let session = sessions.first(where: { $0.id == id }) else { return .empty }
+        return ledgerSummary(for: session)
+    }
+
+    private func ledgerSummary(for session: CodexSession) -> CompanyLedgerSummary {
+        let revenue = (try? String(contentsOfFile: session.revenuePath, encoding: .utf8)) ?? ""
+        let ledger = (try? String(contentsOfFile: session.ledgerPath, encoding: .utf8)) ?? ""
+        return CompanyLedgerParser.summarize(revenueMarkdown: revenue, ledgerJSON: ledger)
+    }
+
+    private func appendSystemNote(id: String, text: String) {
+        guard let session = sessions.first(where: { $0.id == id }) else { return }
+        let entry = "\n\n## OS1 system note at \(Date())\n\(text)\n"
+        if let data = entry.data(using: .utf8),
+           let h = try? FileHandle(forWritingTo: URL(fileURLWithPath: session.journalPath)) {
+            _ = try? h.seekToEnd()
+            h.write(data)
+            try? h.close()
         }
     }
 
@@ -351,7 +669,7 @@ final class CodexSessionManager: ObservableObject {
             guard proc.terminationStatus == 0, let new = String(data: data, encoding: .utf8), new.count > 200 else {
                 // Compaction failed — keep original journal, log to heartbeat log
                 if let handle = try? FileHandle(forWritingTo: logDir.appendingPathComponent("\(session.id).log")) {
-                    try? handle.seekToEnd()
+                    _ = try? handle.seekToEnd()
                     handle.write("\n[compaction failed at heartbeat \(session.heartbeatCount), kept original journal]\n".data(using: .utf8) ?? Data())
                     try? handle.close()
                 }
@@ -359,7 +677,7 @@ final class CodexSessionManager: ObservableObject {
             }
             try? new.write(toFile: journalPath, atomically: true, encoding: .utf8)
             if let handle = try? FileHandle(forWritingTo: logDir.appendingPathComponent("\(session.id).log")) {
-                try? handle.seekToEnd()
+                _ = try? handle.seekToEnd()
                 handle.write("\n[compacted journal at heartbeat \(session.heartbeatCount): \(original.count) → \(new.count) chars; backup: \(backupPath)]\n".data(using: .utf8) ?? Data())
                 try? handle.close()
             }
@@ -388,8 +706,11 @@ final class CodexSessionManager: ObservableObject {
             "\n## CEO INSTRUCTION (from Samantha — must address this in your action):\n\($0)\n"
         } ?? ""
         let credsLine = availableCreds.isEmpty
-            ? "No platform credentials are wired yet — if your mission needs Stripe/Resend/YouTube/etc, emit BLOCKED: <which credential>."
-            : "Available platform credentials in your environment (already exported, just use them): \(availableCreds.joined(separator: ", "))"
+            ? "No platform credentials are exposed to this company sandbox. If your mission needs Stripe/Resend/YouTube/etc, write APPROVAL_REQUEST.json if the action is high-risk, then emit BLOCKED: <which credential/scope>."
+            : "Available platform credentials in this company's sandbox environment (already exported, just use them within approved scope): \(availableCreds.joined(separator: ", "))"
+        let budget = session.budget ?? .defaultState()
+        let budgetLine = "Budget guard: \(budget.dailyHeartbeatCount)/\(budget.maxDailyHeartbeats) heartbeats used in current 24h window; OS1 blocks after \(budget.maxHeartbeatsWithoutRevenueSignal) total heartbeats without verified revenue in REVENUE.md."
+        let sandboxLine = "Sandbox mode: \(session.sandboxMode.rawValue). Credential allowlist: \(session.credentialAllowlist.isEmpty ? "(empty)" : session.credentialAllowlist.joined(separator: ", "))."
 
         let summaryNudge = (session.heartbeatCount > 0 && session.heartbeatCount % 10 == 0)
             ? "\n\n## ROLLING SUMMARY DUE\nThe journal is getting long. Before your action this heartbeat, prepend a `## SUMMARY (heartbeats 0-\(session.heartbeatCount))` section to JOURNAL.md that distills the older entries into 5-10 bullets. Then truncate (delete) the original entries from the journal so future heartbeats don't drown in context. KEEP all CEO instructions verbatim.\n"
@@ -399,6 +720,8 @@ final class CodexSessionManager: ObservableObject {
         You are the autonomous CEO of "\(session.title)".
 
         MISSION (every heartbeat must move this forward — do not deviate): \(session.task)
+        CURRENT LIFECYCLE STAGE: \(session.lifecycleStage.rawValue)
+        \(sandboxLine)
 
         ## HARD RULES (violating these = company gets shut down)
         1. NEVER hallucinate. If you didn't actually run a command and see real output, do not claim it happened. "I posted" is only true if you have a real platform response with a tweet ID, transaction ID, or URL you can curl.
@@ -406,17 +729,40 @@ final class CodexSessionManager: ObservableObject {
         3. Read JOURNAL.md FIRST every heartbeat. Also read AUDIT.md if it exists — every 3rd heartbeat a FRESH AUDITOR agent will run, check your claims by re-running commands, and append CORRECTION instructions you MUST address before any new work. The next time you see "AUDITOR FOUND ISSUES" in your CEO instruction, that's the auditor talking — fix those first.
         4. If you find a previous heartbeat already did the action you were about to take, do something DIFFERENT — don't duplicate.
         5. If you can't proceed without external auth/decision, emit `BLOCKED: <specific need>` as your LAST line. Do not silently pivot to busy-work that doesn't move revenue.
-        6. Track money in REVENUE.md. Every heartbeat: append the day's revenue (from a real Stripe/etc API call), or "(no revenue API connected yet)".
+        6. Track money in REVENUE.md and LEDGER.json. Every heartbeat: append the day's revenue/costs (from a real Stripe/etc API call), or "(no revenue API connected yet)".
         7. Your work WILL be audited. Hallucinations get caught and reverted. Be honest in the journal — write "(unverified)" or "(failed)" when things didn't work. Lying creates more work for you, not less.
+        8. Lifecycle discipline: validating means collect demand evidence; building means ship the smallest monetizable asset; launched means measure real users/revenue; revenuePositive means improve margin and repeatability. Do not scale without verified revenue and positive net.
+        9. Approval gate: before spending money, creating/charging/refunding payments, publishing public content, messaging humans, deleting assets, changing credentials, signing contracts, or touching regulated/real-estate/legal/financial claims, write APPROVAL_REQUEST.json using the schema below and end with `BLOCKED: approval required for <action>`. Only execute a high-risk action when APPROVAL_GRANTED.json exists, is unexpired, and matches the action scope.
 
         ## YOUR WORKSPACE
         Working directory is your cwd. Files you should know about:
         - JOURNAL.md — narrative memory, read it FIRST
         - AUDIT.md — every 3rd heartbeat a fresh AUDITOR appends here; if you see `CORRECTION:` lines from a recent audit, address them as your action this heartbeat
-        - REVENUE.md — money tracker; append real numbers each heartbeat or "(unmeasured)"
+        - REVENUE.md — human-readable money tracker; append real numbers each heartbeat or "(unmeasured)"
+        - LEDGER.json — machine-readable money ledger array. Keep it valid JSON. Each entry: {"id":"stable-id","companyID":"\(session.id)","occurredAt":"ISO-8601 or null","kind":"revenue|cost","amountUSD":0.0,"source":"stripe|manual|codex|orgo|api","confidence":"verified|manual|estimated","note":"short evidence"}
+        - APPROVAL_REQUEST.json — create this and BLOCK when a high-risk action needs review
+        - APPROVAL_GRANTED.json — if present and unexpired, scope-limited permission from the operator
+        - APPROVAL_DECISION.json — latest operator decision; if denied or changesRequested, follow it instead of executing the original action
         - handoff.json — STRUCTURED record you MUST overwrite each heartbeat (schema below). Auditor parses this directly, not your prose
         - LESSONS.md — portfolio-wide lessons shared across ALL companies (symlink, read-mostly). If you learn something useful to other companies, append a short entry (use `flock LESSONS.md ...` to avoid races)
         - Your git HEAD was just tagged `heartbeat-pre-\(session.heartbeatCount)` before this run; run `git diff heartbeat-pre-\(session.heartbeatCount)..HEAD` at end of heartbeat to verify what you ACTUALLY changed vs claimed
+
+        ## APPROVAL_REQUEST.JSON SCHEMA
+        ```json
+        {
+          "id": "stable-request-id",
+          "companyID": "\(session.id)",
+          "requestedAt": "ISO-8601 timestamp",
+          "actor": "codex",
+          "riskTier": "medium|high|critical",
+          "proposedAction": "exact action you want to take",
+          "expectedEffect": "what should happen if approved",
+          "estimatedCostUSD": 0.0,
+          "destinationAccount": "account/platform/person affected, or null",
+          "rollbackPlan": "how you will undo or contain the action",
+          "status": "pending"
+        }
+        ```
 
         ## HANDOFF.JSON SCHEMA (overwrite each heartbeat)
         ```json
@@ -437,17 +783,18 @@ final class CodexSessionManager: ObservableObject {
 
         Heartbeat #\(session.heartbeatCount). Take ONE high-leverage action this heartbeat. Not 5. Not a plan — an execution.
 
-        \(credsLine)\(summaryNudge)
+        \(credsLine)
+        \(budgetLine)\(summaryNudge)
         \(userInstr)
 
         ## PROCESS
         1. Read JOURNAL.md, AUDIT.md (if exists), and LESSONS.md.
-        2. Read REVENUE.md (create it if missing with today's $0 baseline).
+        2. Read REVENUE.md and LEDGER.json (create them if missing with today's $0 baseline / empty array).
         3. Pick ONE action that pushes the mission toward revenue. Prefer ship over plan, real over draft, measured over assumed.
         4. EXECUTE — run the command, write the file, hit the API.
         5. Overwrite `handoff.json` with the schema above. Every claim must have evidence (paste real command output).
         6. Append a brief heartbeat section to JOURNAL.md (1-2 paragraphs max — handoff.json carries the structured details).
-        7. Update REVENUE.md if anything changed.
+        7. Update REVENUE.md and LEDGER.json if anything changed. Use confidence=verified only when you have a real transaction/API/receipt ID.
         8. **COMMIT THE CHANGES** — at heartbeat end, run:
            `git add -A && git -c user.email=samantha@os1.local -c user.name=Samantha commit -m "hb \(session.heartbeatCount): <one-line summary>" --allow-empty`
            This is mandatory. The auditor uses `git diff heartbeat-pre-\(session.heartbeatCount)..HEAD` to verify your file changes match your claims. No commit = audit can't verify anything = you get marked as drift.
@@ -518,6 +865,7 @@ final class CodexSessionManager: ObservableObject {
     private func handleHeartbeatExit(id: String, exitCode: Int32, reason: Process.TerminationReason) {
         guard let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
         processes.removeValue(forKey: id)
+        let completedHeartbeat = sessions[idx].heartbeatCount
 
         // Read the tail of the log to detect transient network failures from
         // the codex CLI itself (DNS hiccups, websocket drops). Don't mark the
@@ -542,8 +890,8 @@ final class CodexSessionManager: ObservableObject {
         let auditDoc = (try? String(contentsOfFile: auditPath, encoding: .utf8)) ?? ""
 
         let parsed = Self.parseMarkers(journal: journal, auditDoc: auditDoc)
-        var blockedReason = parsed.blocked
-        var correctionForNext = parsed.correction
+        let blockedReason = parsed.blocked
+        let correctionForNext = parsed.correction
 
         if reason == .uncaughtSignal {
             sessions[idx].status = .killed
@@ -559,6 +907,7 @@ final class CodexSessionManager: ObservableObject {
             sessions[idx].blockedReason = reason
         } else {
             sessions[idx].status = .idle
+            updateLifecycleAfterHeartbeat(id: id)
             // Auditor found problems → next heartbeat fires soon AND knows it must address them
             if let correction = correctionForNext {
                 sessions[idx].pendingUserInstruction = correction
@@ -568,10 +917,51 @@ final class CodexSessionManager: ObservableObject {
             }
         }
         sessions[idx].exitCode = exitCode
+        sessions[idx].heartbeatLease = nil
         persistSessions()
+        appendEvent(
+            kind: .heartbeatFinished,
+            companyID: id,
+            summary: "Finished heartbeat \(completedHeartbeat) with status \(sessions[idx].status.rawValue)",
+            metadata: [
+                "heartbeat": "\(completedHeartbeat)",
+                "exitCode": "\(exitCode)",
+                "terminationReason": "\(reason)",
+                "status": sessions[idx].status.rawValue,
+                "blockedReason": sessions[idx].blockedReason ?? ""
+            ]
+        )
+        if sessions[idx].status == .blocked {
+            recordPendingApprovalIfPresent(for: sessions[idx])
+        }
 
-        if sessions[idx].status == .idle {
+        if sessions[idx].status == .idle || sessions[idx].status == .queued {
             scheduleHeartbeat(id: id)
+        }
+    }
+
+    private func updateLifecycleAfterHeartbeat(id: String) {
+        guard let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
+        let previousStage = sessions[idx].lifecycleStage
+        let summary = ledgerSummary(for: sessions[idx])
+        if summary.hasVerifiedRevenue && summary.netUSD > 0 {
+            sessions[idx].lifecycleStage = .revenuePositive
+        } else if sessions[idx].heartbeatCount >= 1 && sessions[idx].lifecycleStage == .idea {
+            sessions[idx].lifecycleStage = .validating
+        } else if sessions[idx].heartbeatCount >= 3 && sessions[idx].lifecycleStage == .validating {
+            sessions[idx].lifecycleStage = .building
+        }
+        if sessions[idx].lifecycleStage != previousStage {
+            appendEvent(
+                kind: .lifecycleChanged,
+                companyID: id,
+                summary: "Lifecycle changed from \(previousStage.rawValue) to \(sessions[idx].lifecycleStage.rawValue)",
+                metadata: [
+                    "from": previousStage.rawValue,
+                    "to": sessions[idx].lifecycleStage.rawValue,
+                    "heartbeatCount": "\(sessions[idx].heartbeatCount)"
+                ]
+            )
         }
     }
 
@@ -584,11 +974,18 @@ final class CodexSessionManager: ObservableObject {
         let entry = "\n\n## CEO note at \(Date())\n\(instruction)\n"
         if let data = entry.data(using: .utf8),
            let h = try? FileHandle(forWritingTo: URL(fileURLWithPath: sessions[idx].journalPath)) {
-            try? h.seekToEnd()
+            _ = try? h.seekToEnd()
             h.write(data)
             try? h.close()
         }
         persistSessions()
+        appendEvent(
+            kind: .userInstruction,
+            companyID: id,
+            actor: "user",
+            summary: "CEO instruction queued",
+            metadata: ["instruction": String(instruction.prefix(500))]
+        )
         // If the company was blocked, kick off a heartbeat now
         if sessions[idx].status == .blocked {
             sessions[idx].status = .idle
@@ -605,15 +1002,80 @@ final class CodexSessionManager: ObservableObject {
             kill(id: id)
         }
         sessions[idx].status = .paused
+        sessions[idx].lifecycleStage = .paused
+        sessions[idx].heartbeatLease = nil
         persistSessions()
+        appendEvent(
+            kind: .companyPaused,
+            companyID: id,
+            actor: "user",
+            summary: "Company paused"
+        )
     }
 
     func resume(id: String) {
         guard let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
         sessions[idx].status = .idle
+        if sessions[idx].lifecycleStage == .paused {
+            sessions[idx].lifecycleStage = .validating
+        }
         sessions[idx].nextHeartbeatAt = Date()
         persistSessions()
+        appendEvent(
+            kind: .companyResumed,
+            companyID: id,
+            actor: "user",
+            summary: "Company resumed"
+        )
         scheduleHeartbeat(id: id)
+    }
+
+    func pauseAll(reason: String = "fleet emergency stop") {
+        for session in sessions {
+            heartbeatTasks[session.id]?.cancel()
+            heartbeatTasks.removeValue(forKey: session.id)
+            if session.status == .running {
+                kill(id: session.id)
+            }
+        }
+
+        for idx in sessions.indices {
+            if sessions[idx].status != .killed && sessions[idx].status != .completed {
+            sessions[idx].status = .paused
+            sessions[idx].lifecycleStage = .paused
+            sessions[idx].nextHeartbeatAt = nil
+            sessions[idx].heartbeatLease = nil
+            appendSystemNote(id: sessions[idx].id, text: "Fleet paused by OS1: \(reason)")
+        }
+        }
+        persistSessions()
+        appendEvent(
+            kind: .fleetPaused,
+            actor: "user",
+            summary: "Fleet paused",
+            metadata: [
+                "reason": reason,
+                "affectedCompanies": "\(sessions.filter { $0.status == .paused }.count)"
+            ]
+        )
+    }
+
+    func resumeAllPaused() {
+        for idx in sessions.indices where sessions[idx].status == .paused {
+            sessions[idx].status = .idle
+            if sessions[idx].lifecycleStage == .paused {
+                sessions[idx].lifecycleStage = .validating
+            }
+            sessions[idx].nextHeartbeatAt = Date(timeIntervalSinceNow: Double(idx + 1) * 30)
+        }
+        persistSessions()
+        appendEvent(
+            kind: .fleetResumed,
+            actor: "user",
+            summary: "Paused fleet resumed",
+            metadata: ["resumedCompanies": "\(sessions.filter { $0.status == .idle }.count)"]
+        )
+        resumeAllScheduledCompanies()
     }
 
     /// Read journal contents (for voice tools / Samantha's awareness).
@@ -623,10 +1085,125 @@ final class CodexSessionManager: ObservableObject {
         return String(full.suffix(maxBytes))
     }
 
+    // MARK: - Approval console
+
+    func approvalRequests(status: CompanyApprovalRequest.Status? = nil) -> [CompanyApprovalRequest] {
+        sessions.compactMap(readApprovalRequest)
+            .filter { request in
+                status.map { request.status == $0 } ?? true
+            }
+            .sorted { $0.requestedAt > $1.requestedAt }
+    }
+
+    func approve(request: CompanyApprovalRequest, hours: Int = 4, note: String = "Approved by operator") {
+        recordApprovalDecision(request: request, status: .approved, note: note, grantHours: hours)
+    }
+
+    func deny(request: CompanyApprovalRequest, note: String = "Denied by operator") {
+        recordApprovalDecision(request: request, status: .denied, note: note, grantHours: nil)
+    }
+
+    func requestChanges(request: CompanyApprovalRequest, note: String) {
+        recordApprovalDecision(request: request, status: .changesRequested, note: note, grantHours: nil)
+    }
+
+    private func readApprovalRequest(for session: CodexSession) -> CompanyApprovalRequest? {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: session.approvalRequestPath)) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(CompanyApprovalRequest.self, from: data)
+    }
+
+    private func recordPendingApprovalIfPresent(for session: CodexSession) {
+        guard let request = readApprovalRequest(for: session), request.status == .pending else { return }
+        appendEvent(
+            kind: .approvalRequested,
+            companyID: session.id,
+            summary: "Approval requested: \(request.proposedAction)",
+            metadata: [
+                "requestID": request.id,
+                "riskTier": request.riskTier.rawValue,
+                "estimatedCostUSD": request.estimatedCostUSD.map { "\($0)" } ?? "",
+                "destinationAccount": request.destinationAccount ?? ""
+            ]
+        )
+    }
+
+    private func recordApprovalDecision(
+        request: CompanyApprovalRequest,
+        status: CompanyApprovalRequest.Status,
+        note: String,
+        grantHours: Int?
+    ) {
+        guard let session = sessions.first(where: { $0.id == request.companyID }) else { return }
+        let now = Date()
+        var decided = request
+        decided.status = status
+        decided.decisionNote = note
+        decided.decidedAt = now
+        if let grantHours {
+            decided.expiresAt = now.addingTimeInterval(TimeInterval(grantHours * 3600))
+        }
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        if let data = try? encoder.encode(decided) {
+            try? data.write(to: URL(fileURLWithPath: session.approvalRequestPath), options: [.atomic])
+            try? data.write(to: URL(fileURLWithPath: session.approvalDecisionPath), options: [.atomic])
+            if status == .approved {
+                try? data.write(to: URL(fileURLWithPath: session.approvalGrantPath), options: [.atomic])
+            } else {
+                try? FileManager.default.removeItem(atPath: session.approvalGrantPath)
+            }
+        }
+
+        switch status {
+        case .approved:
+            appendEvent(
+                kind: .approvalApproved,
+                companyID: request.companyID,
+                actor: "user",
+                summary: "Approval granted: \(request.proposedAction)",
+                metadata: ["requestID": request.id, "expiresAt": decided.expiresAt.map { ISO8601DateFormatter().string(from: $0) } ?? ""]
+            )
+            injectInstruction(
+                id: request.companyID,
+                instruction: "Approval granted for request \(request.id): \(request.proposedAction). Scope is limited to the approved action; expires in \(grantHours ?? 0) hours. Note: \(note)"
+            )
+        case .denied:
+            appendEvent(
+                kind: .approvalDenied,
+                companyID: request.companyID,
+                actor: "user",
+                summary: "Approval denied: \(request.proposedAction)",
+                metadata: ["requestID": request.id, "note": note]
+            )
+            injectInstruction(
+                id: request.companyID,
+                instruction: "Approval denied for request \(request.id): \(request.proposedAction). Do not execute it. Produce a safer follow-up plan. Reason: \(note)"
+            )
+        case .changesRequested:
+            appendEvent(
+                kind: .approvalChangesRequested,
+                companyID: request.companyID,
+                actor: "user",
+                summary: "Approval changes requested: \(request.proposedAction)",
+                metadata: ["requestID": request.id, "note": note]
+            )
+            injectInstruction(
+                id: request.companyID,
+                instruction: "Approval changes requested for request \(request.id): \(request.proposedAction). Revise the plan and write a new APPROVAL_REQUEST.json. Required changes: \(note)"
+            )
+        case .pending, .expired:
+            break
+        }
+    }
+
     // MARK: - Auto-resume scheduler on app start
 
     func resumeAllScheduledCompanies() {
-        for s in sessions where s.status == .idle || s.status == .blocked {
+        for s in sessions where s.status == .idle || s.status == .queued || s.status == .blocked {
             scheduleHeartbeat(id: s.id)
         }
     }
@@ -666,8 +1243,12 @@ final class CodexSessionManager: ObservableObject {
         if session.status == .running {
             kill(id: id)
         }
+        if let idx = sessions.firstIndex(where: { $0.id == id }) {
+            sessions[idx].lifecycleStage = .killed
+            sessions[idx].heartbeatLease = nil
+        }
         if removeWorktree {
-            try? runShell(
+            _ = try? runShell(
                 "git",
                 args: ["-C", baseDir.path, "worktree", "remove", "--force", session.worktreePath],
                 timeout: 10
@@ -677,6 +1258,13 @@ final class CodexSessionManager: ObservableObject {
         processes.removeValue(forKey: id)
         try? FileManager.default.removeItem(atPath: logDir.appendingPathComponent("\(id).log").path)
         persistSessions()
+        appendEvent(
+            kind: .companyKilled,
+            companyID: id,
+            actor: "user",
+            summary: "Company cleaned up",
+            metadata: ["removedWorktree": "\(removeWorktree)"]
+        )
     }
 
     // MARK: - Internals
@@ -714,6 +1302,14 @@ final class CodexSessionManager: ObservableObject {
         sessionsDir.deletingLastPathComponent().appendingPathComponent("sessions.json")
     }
 
+    private var eventLogURL: URL {
+        sessionsDir.deletingLastPathComponent().appendingPathComponent("events.jsonl")
+    }
+
+    private var backupsDir: URL {
+        sessionsDir.deletingLastPathComponent().appendingPathComponent("backups", isDirectory: true)
+    }
+
     private func persistSessions() {
         let snapshot = sessions
         logQueue.async { [persistURL] in
@@ -723,11 +1319,116 @@ final class CodexSessionManager: ObservableObject {
         }
     }
 
+    private func appendEvent(
+        kind: CompanyEvent.Kind,
+        companyID: String? = nil,
+        actor: String = "os1",
+        summary: String,
+        metadata: [String: String] = [:]
+    ) {
+        let event = CompanyEvent(
+            companyID: companyID,
+            actor: actor,
+            kind: kind,
+            summary: summary,
+            metadata: metadata
+        )
+        logQueue.async { [eventLogURL] in
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            guard let data = try? encoder.encode(event),
+                  var line = String(data: data, encoding: .utf8) else { return }
+            line.append("\n")
+            if !FileManager.default.fileExists(atPath: eventLogURL.path) {
+                FileManager.default.createFile(atPath: eventLogURL.path, contents: nil)
+            }
+            guard let handle = try? FileHandle(forWritingTo: eventLogURL) else { return }
+            defer { try? handle.close() }
+            _ = try? handle.seekToEnd()
+            handle.write(line.data(using: .utf8) ?? Data())
+        }
+    }
+
+    func recentEvents(limit: Int = 200) -> [CompanyEvent] {
+        guard let text = try? String(contentsOf: eventLogURL, encoding: .utf8) else { return [] }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return text
+            .split(separator: "\n")
+            .suffix(max(0, limit))
+            .compactMap { line in
+                guard let data = String(line).data(using: .utf8) else { return nil }
+                return try? decoder.decode(CompanyEvent.self, from: data)
+            }
+            .reversed()
+    }
+
+    @discardableResult
+    func createStateBackup() throws -> CompanyStateBackupManifest {
+        let backupID = "backup-\(Self.timestampString())"
+        let destinationRoot = backupsDir.appendingPathComponent(backupID, isDirectory: true)
+        try FileManager.default.createDirectory(at: destinationRoot, withIntermediateDirectories: true)
+
+        let candidates = stateBackupCandidates()
+        for candidate in candidates where FileManager.default.fileExists(atPath: candidate.sourceURL.path) {
+            let destination = destinationRoot.appendingPathComponent(candidate.relativePath)
+            try FileManager.default.createDirectory(
+                at: destination.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            if FileManager.default.fileExists(atPath: destination.path) {
+                try FileManager.default.removeItem(at: destination)
+            }
+            try FileManager.default.copyItem(at: candidate.sourceURL, to: destination)
+        }
+
+        let manifest = try CompanyStateBackupBuilder.makeManifest(
+            backupID: backupID,
+            sourceRoot: sessionsDir.deletingLastPathComponent(),
+            candidates: candidates
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let manifestURL = destinationRoot.appendingPathComponent("manifest.json")
+        try encoder.encode(manifest).write(to: manifestURL, options: [.atomic])
+        appendEvent(
+            kind: .stateBackupCreated,
+            summary: "State backup created",
+            metadata: [
+                "backupID": backupID,
+                "entries": "\(manifest.entries.count)",
+                "manifest": manifestURL.path
+            ]
+        )
+        return manifest
+    }
+
+    private func stateBackupCandidates() -> [CompanyStateBackupBuilder.Candidate] {
+        var candidates: [CompanyStateBackupBuilder.Candidate] = []
+        candidates.append(.init(sourceURL: persistURL, relativePath: "sessions.json", kind: .sessions))
+        candidates.append(.init(sourceURL: eventLogURL, relativePath: "events.jsonl", kind: .events))
+        candidates.append(.init(sourceURL: lessonsDir.appendingPathComponent("portfolio.md"), relativePath: "lessons/portfolio.md", kind: .lessons))
+
+        for session in sessions {
+            let root = "sessions/\(session.id)"
+            candidates.append(.init(sourceURL: URL(fileURLWithPath: session.journalPath), relativePath: "\(root)/JOURNAL.md", kind: .journal))
+            candidates.append(.init(sourceURL: URL(fileURLWithPath: session.worktreePath + "/AUDIT.md"), relativePath: "\(root)/AUDIT.md", kind: .audit))
+            candidates.append(.init(sourceURL: URL(fileURLWithPath: session.revenuePath), relativePath: "\(root)/REVENUE.md", kind: .revenue))
+            candidates.append(.init(sourceURL: URL(fileURLWithPath: session.ledgerPath), relativePath: "\(root)/LEDGER.json", kind: .ledger))
+            candidates.append(.init(sourceURL: URL(fileURLWithPath: session.approvalRequestPath), relativePath: "\(root)/APPROVAL_REQUEST.json", kind: .approval))
+            candidates.append(.init(sourceURL: URL(fileURLWithPath: session.approvalDecisionPath), relativePath: "\(root)/APPROVAL_DECISION.json", kind: .approval))
+            candidates.append(.init(sourceURL: URL(fileURLWithPath: session.approvalGrantPath), relativePath: "\(root)/APPROVAL_GRANTED.json", kind: .approval))
+            candidates.append(.init(sourceURL: logDir.appendingPathComponent("\(session.id).log"), relativePath: "logs/\(session.id).log", kind: .log))
+        }
+
+        return candidates
+    }
+
     private func loadPersistedSessions() {
         guard let data = try? Data(contentsOf: persistURL),
               let decoded = try? JSONDecoder().decode([CodexSession].self, from: data) else { return }
-        // On restart, any session marked .running was orphaned (process is gone). Drop back to idle so it gets picked up by scheduler.
-        sessions = decoded.map { var s = $0; if s.status == .running { s.status = .idle }; return s }
+        sessions = decoded.map { Self.recoverSessionAfterRestart($0, now: Date(), retryJitterSeconds: maxJitterSeconds) }
         // Resume heartbeat loops for idle/blocked companies so the loop survives app restarts.
         Task { @MainActor [weak self] in
             self?.resumeAllScheduledCompanies()
@@ -781,6 +1482,32 @@ final class CodexSessionManager: ObservableObject {
         return (blocked, correction)
     }
 
+    nonisolated static func hasVerifiedRevenueSignal(_ revenueDocument: String) -> Bool {
+        CompanyLedgerParser.summarize(revenueMarkdown: revenueDocument).hasVerifiedRevenue
+    }
+
+    nonisolated static func recoverSessionAfterRestart(
+        _ session: CodexSession,
+        now: Date,
+        retryJitterSeconds: Double = 30
+    ) -> CodexSession {
+        var recovered = session
+        guard recovered.status == .running else { return recovered }
+
+        if let lease = recovered.heartbeatLease, lease.expiresAt > now {
+            recovered.status = .queued
+            recovered.pid = nil
+            recovered.nextHeartbeatAt = lease.expiresAt.addingTimeInterval(retryJitterSeconds)
+            return recovered
+        }
+
+        recovered.status = .idle
+        recovered.pid = nil
+        recovered.heartbeatLease = nil
+        recovered.nextHeartbeatAt = now.addingTimeInterval(retryJitterSeconds)
+        return recovered
+    }
+
     private static func shortID() -> String {
         // 8 chars of base36 from a UUID
         let uuid = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
@@ -797,13 +1524,39 @@ final class CodexSessionManager: ObservableObject {
         "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
+    private static func todayString() -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: Date())
+    }
+
+    private static func timestampString() -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return formatter.string(from: Date())
+    }
+
     /// Read ~/.os1/credentials.env and return the names of exported variables
     /// (without their values). Used to tell each codex heartbeat what
     /// platform credentials are available.
     static func loadCredentialNames() -> [String] {
+        loadCredentialEnvironment(allowlist: nil).keys.sorted()
+    }
+
+    static func loadCredentialEnvironment(allowlist: Set<String>?) -> [String: String] {
         let path = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".os1/credentials.env").path
-        guard let contents = try? String(contentsOfFile: path, encoding: .utf8) else { return [] }
+        guard let contents = try? String(contentsOfFile: path, encoding: .utf8) else { return [:] }
+        return parseCredentialEnvironment(contents: contents, allowlist: allowlist)
+    }
+
+    nonisolated static func parseCredentialEnvironment(contents: String, allowlist: Set<String>?) -> [String: String] {
+        let allowed = allowlist?.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         var names: Set<String> = []
+        var values: [String: String] = [:]
         for line in contents.components(separatedBy: .newlines) {
             let trim = line.trimmingCharacters(in: .whitespaces)
             if trim.isEmpty || trim.hasPrefix("#") { continue }
@@ -811,10 +1564,23 @@ final class CodexSessionManager: ObservableObject {
             let withoutExport = trim.hasPrefix("export ") ? String(trim.dropFirst("export ".count)) : trim
             if let eq = withoutExport.firstIndex(of: "=") {
                 let name = withoutExport[..<eq].trimmingCharacters(in: .whitespaces)
-                if !name.isEmpty { names.insert(name) }
+                guard !name.isEmpty else { continue }
+                if let allowed, !allowed.contains(name) { continue }
+                let rawValue = String(withoutExport[withoutExport.index(after: eq)...]).trimmingCharacters(in: .whitespaces)
+                values[name] = unquoteCredentialValue(rawValue)
+                names.insert(name)
             }
         }
-        return names.sorted()
+        return values.filter { names.contains($0.key) }
+    }
+
+    nonisolated private static func unquoteCredentialValue(_ value: String) -> String {
+        guard value.count >= 2 else { return value }
+        if (value.hasPrefix("\"") && value.hasSuffix("\""))
+            || (value.hasPrefix("'") && value.hasSuffix("'")) {
+            return String(value.dropFirst().dropLast())
+        }
+        return value
     }
 }
 

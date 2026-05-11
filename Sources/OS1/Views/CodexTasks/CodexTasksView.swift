@@ -9,9 +9,15 @@ struct CodexTasksView: View {
     @State private var newTaskText: String = ""
     @State private var newCompanyName: String = ""
     @State private var newCadenceMinutes: Int = 15
+    @State private var templateSearchText: String = ""
+    @State private var selectedTemplateID: String = CompanyTemplateCatalog.all.first?.id ?? ""
+    @State private var bulkLaunchLimit: Int = 10
+    @State private var bulkLaunchStartPaused: Bool = true
+    @State private var bulkCadenceOverride: Int = 0
     @State private var spawnError: String = ""
     @State private var selectedID: String?
     @State private var interveneTexts: [String: String] = [:]
+    @State private var approvalChangeTexts: [String: String] = [:]
     @State private var nowTick: Date = Date()  // drives countdown labels
 
     private let columns = [GridItem(.adaptive(minimum: 320), spacing: 12)]
@@ -20,6 +26,9 @@ struct CodexTasksView: View {
         VStack(spacing: 0) {
             header
             spawnBar
+            templateBar
+            approvalConsole
+            eventConsole
             if manager.sessions.isEmpty {
                 emptyPlaceholder
             } else {
@@ -55,9 +64,32 @@ struct CodexTasksView: View {
                 .os1Style(theme.typography.label)
                 .foregroundStyle(theme.palette.onCoralMuted)
             Spacer()
+            Button(L10n.string("Backup state")) {
+                createBackup()
+            }
+            .buttonStyle(.os1Secondary)
+            .disabled(manager.sessions.isEmpty)
+
+            Button(L10n.string("Pause fleet")) {
+                manager.pauseAll()
+            }
+            .buttonStyle(.os1Secondary)
+            .disabled(manager.sessions.isEmpty)
+
+            Button(L10n.string("Resume fleet")) {
+                manager.resumeAllPaused()
+            }
+            .buttonStyle(.os1Secondary)
+            .disabled(!manager.sessions.contains(where: { $0.status == .paused }))
+
             Text(L10n.string("running %lld", manager.sessions.filter { $0.status == .running }.count))
                 .os1Style(theme.typography.label)
                 .foregroundStyle(theme.palette.onCoralMuted)
+            if manager.sessions.contains(where: { $0.status == .queued }) {
+                Text(L10n.string("queued %lld", manager.sessions.filter { $0.status == .queued }.count))
+                    .os1Style(theme.typography.label)
+                    .foregroundStyle(theme.palette.onCoralMuted)
+            }
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 10)
@@ -125,6 +157,299 @@ struct CodexTasksView: View {
         .padding(.vertical, 10)
     }
 
+    private var templateBar: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Label(L10n.string("Company templates"), systemImage: "building.2")
+                    .os1Style(theme.typography.label)
+                    .foregroundStyle(theme.palette.onCoralPrimary)
+
+                TextField(L10n.string("Search 100 templates"), text: $templateSearchText)
+                    .textFieldStyle(.plain)
+                    .frame(width: 180)
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 10)
+                    .background(theme.palette.glassFill)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(theme.palette.glassBorder, lineWidth: 1)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                Picker(L10n.string("Template"), selection: $selectedTemplateID) {
+                    ForEach(filteredTemplates) { template in
+                        Text(template.title).tag(template.id)
+                    }
+                }
+                .frame(maxWidth: 420)
+
+                Button(L10n.string("Use template")) { applySelectedTemplate() }
+                    .buttonStyle(.os1Secondary)
+                    .disabled(selectedTemplate == nil)
+
+                Button(L10n.string("Hire from template")) { spawnSelectedTemplate() }
+                    .buttonStyle(.os1Primary)
+                    .disabled(selectedTemplate == nil)
+
+                Spacer()
+
+                Text(L10n.string("%lld templates", CompanyTemplateCatalog.all.count))
+                    .os1Style(theme.typography.label)
+                    .foregroundStyle(theme.palette.onCoralMuted)
+            }
+
+            if let template = selectedTemplate {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Text(template.category.rawValue)
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(theme.palette.onCoralMuted)
+                        Text(template.channel)
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(theme.palette.onCoralMuted)
+                        Text("every \(template.suggestedCadenceMinutes)m")
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(theme.palette.onCoralMuted)
+                    }
+                    Text(template.mission)
+                        .os1Style(theme.typography.label)
+                        .foregroundStyle(theme.palette.onCoralSecondary)
+                        .lineLimit(2)
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(theme.palette.glassFill.opacity(0.72))
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+
+            HStack(spacing: 10) {
+                Picker(L10n.string("Batch"), selection: $bulkLaunchLimit) {
+                    Text("5").tag(5)
+                    Text("10").tag(10)
+                    Text("25").tag(25)
+                    Text("50").tag(50)
+                    Text("100").tag(100)
+                }
+                .frame(width: 92)
+
+                Picker(L10n.string("Cadence"), selection: $bulkCadenceOverride) {
+                    Text(L10n.string("template")).tag(0)
+                    Text("30m").tag(30)
+                    Text("1h").tag(60)
+                    Text("4h").tag(240)
+                    Text("12h").tag(720)
+                }
+                .frame(width: 124)
+
+                Toggle(L10n.string("Start paused"), isOn: $bulkLaunchStartPaused)
+                    .toggleStyle(.checkbox)
+                    .foregroundStyle(theme.palette.onCoralSecondary)
+
+                Button(L10n.string("Launch batch")) { launchTemplateBatch() }
+                    .buttonStyle(.os1Secondary)
+                    .disabled(batchTemplates.isEmpty)
+
+                Text(L10n.string("will create %lld", batchTemplates.count))
+                    .os1Style(theme.typography.label)
+                    .foregroundStyle(theme.palette.onCoralMuted)
+
+                Spacer()
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.bottom, 10)
+    }
+
+    private var filteredTemplates: [CompanyTemplate] {
+        let query = templateSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return CompanyTemplateCatalog.all }
+        return CompanyTemplateCatalog.all.filter { $0.searchText.contains(query) }
+    }
+
+    private var selectedTemplate: CompanyTemplate? {
+        CompanyTemplateCatalog.template(id: selectedTemplateID) ?? filteredTemplates.first
+    }
+
+    private var batchTemplates: [CompanyTemplate] {
+        Array(filteredTemplates.prefix(bulkLaunchLimit))
+    }
+
+    // MARK: - Approval console
+
+    @ViewBuilder
+    private var approvalConsole: some View {
+        let requests = manager.approvalRequests(status: .pending)
+        if !requests.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Label(L10n.string("Approvals"), systemImage: "checkmark.shield")
+                        .os1Style(theme.typography.label)
+                        .foregroundStyle(theme.palette.onCoralPrimary)
+                    Text(L10n.string("%lld pending", requests.count))
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(theme.palette.onCoralMuted)
+                    Spacer()
+                }
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(requests) { request in
+                            approvalCard(request)
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.bottom, 10)
+        }
+    }
+
+    private func approvalCard(_ request: CompanyApprovalRequest) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.shield")
+                    .foregroundStyle(approvalColor(request.riskTier))
+                Text(request.riskTier.rawValue)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(approvalColor(request.riskTier))
+                Spacer()
+                Text(relativeAge(request.requestedAt))
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(theme.palette.onCoralMuted)
+            }
+
+            Text(request.proposedAction)
+                .os1Style(theme.typography.label)
+                .foregroundStyle(theme.palette.onCoralPrimary)
+                .lineLimit(2)
+
+            Text(request.expectedEffect)
+                .font(.caption2)
+                .foregroundStyle(theme.palette.onCoralSecondary)
+                .lineLimit(2)
+
+            HStack(spacing: 8) {
+                Text(request.companyID)
+                if let cost = request.estimatedCostUSD {
+                    Text(moneyLabel(cost))
+                }
+                if let destination = request.destinationAccount {
+                    Text(destination)
+                }
+            }
+            .font(.system(.caption2, design: .monospaced))
+            .foregroundStyle(theme.palette.onCoralMuted)
+            .lineLimit(1)
+
+            HStack(spacing: 6) {
+                Button(L10n.string("Approve 4h")) {
+                    manager.approve(request: request, hours: 4)
+                }
+                .buttonStyle(.os1Primary)
+
+                Button(L10n.string("Deny")) {
+                    manager.deny(request: request)
+                }
+                .buttonStyle(.os1Secondary)
+            }
+
+            HStack(spacing: 6) {
+                TextField(
+                    L10n.string("Request changes"),
+                    text: Binding(
+                        get: { approvalChangeTexts[request.id] ?? "" },
+                        set: { approvalChangeTexts[request.id] = $0 }
+                    )
+                )
+                .textFieldStyle(.plain)
+                .padding(.vertical, 6)
+                .padding(.horizontal, 8)
+                .background(theme.palette.glassFill)
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .onSubmit { requestApprovalChanges(request) }
+
+                Button {
+                    requestApprovalChanges(request)
+                } label: {
+                    Image(systemName: "arrow.uturn.left.circle.fill")
+                        .font(.system(size: 16))
+                }
+                .buttonStyle(.os1Icon)
+            }
+        }
+        .padding(10)
+        .frame(width: 330, alignment: .leading)
+        .background(theme.palette.glassFill.opacity(0.86))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(approvalColor(request.riskTier).opacity(0.6), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    // MARK: - Event console
+
+    @ViewBuilder
+    private var eventConsole: some View {
+        let events = manager.recentEvents(limit: 8)
+        if !events.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Label(L10n.string("Event log"), systemImage: "list.bullet.rectangle")
+                        .os1Style(theme.typography.label)
+                        .foregroundStyle(theme.palette.onCoralPrimary)
+                    Text(L10n.string("last %lld", events.count))
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(theme.palette.onCoralMuted)
+                    Spacer()
+                }
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(events) { event in
+                            eventPill(event)
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.bottom, 10)
+        }
+    }
+
+    private func eventPill(_ event: CompanyEvent) -> some View {
+        HStack(alignment: .top, spacing: 7) {
+            Image(systemName: eventIcon(event.kind))
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(eventColor(event.kind))
+                .frame(width: 16)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(event.summary)
+                    .os1Style(theme.typography.label)
+                    .foregroundStyle(theme.palette.onCoralPrimary)
+                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(event.kind.rawValue)
+                    if let companyID = event.companyID {
+                        Text(companyID)
+                    }
+                    Text(relativeAge(event.occurredAt))
+                }
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundStyle(theme.palette.onCoralMuted)
+            }
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 10)
+        .frame(width: 280, alignment: .leading)
+        .background(theme.palette.glassFill.opacity(0.82))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(theme.palette.glassBorder, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
     // MARK: - Grid
 
     private var grid: some View {
@@ -151,6 +476,9 @@ struct CodexTasksView: View {
                 Text(session.status.rawValue)
                     .font(.system(.caption2, design: .monospaced))
                     .foregroundStyle(theme.palette.onCoralMuted)
+                Text(session.lifecycleStage.rawValue)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(theme.palette.onCoralMuted)
             }
 
             Text(session.task)
@@ -166,6 +494,18 @@ struct CodexTasksView: View {
                 Label("every \(session.cadenceMinutes)m", systemImage: "clock")
                     .font(.caption2)
                     .foregroundStyle(theme.palette.onCoralMuted)
+                Label(session.sandboxMode.rawValue, systemImage: "lock.shield")
+                    .font(.caption2)
+                    .foregroundStyle(theme.palette.onCoralMuted)
+                if let budget = session.budget {
+                    Label("\(budget.dailyHeartbeatCount)/\(budget.maxDailyHeartbeats) today", systemImage: "gauge.with.dots.needle.33percent")
+                        .font(.caption2)
+                        .foregroundStyle(theme.palette.onCoralMuted)
+                }
+                let ledger = manager.ledgerSummary(id: session.id)
+                Label(moneyLabel(ledger.netUSD), systemImage: "dollarsign.circle")
+                    .font(.caption2)
+                    .foregroundStyle(ledger.netUSD >= 0 ? theme.palette.onCoralMuted : theme.palette.danger)
                 Spacer()
                 if session.status == .idle, let next = session.nextHeartbeatAt {
                     Label("next \(countdown(to: next))", systemImage: "arrow.right.circle")
@@ -175,6 +515,10 @@ struct CodexTasksView: View {
                     Label("running", systemImage: "circle.fill")
                         .font(.caption2)
                         .foregroundStyle(.yellow)
+                } else if session.status == .queued {
+                    Label("queued", systemImage: "line.3.horizontal.decrease.circle")
+                        .font(.caption2)
+                        .foregroundStyle(.purple)
                 }
             }
 
@@ -279,6 +623,10 @@ struct CodexTasksView: View {
                     .font(.caption)
                 Label(session.status.rawValue, systemImage: "circle.fill")
                     .font(.caption)
+                Label(session.lifecycleStage.rawValue, systemImage: "flag.checkered")
+                    .font(.caption)
+                Label(session.sandboxMode.rawValue, systemImage: "lock.shield")
+                    .font(.caption)
             }
             .foregroundStyle(theme.palette.onCoralMuted)
 
@@ -307,6 +655,18 @@ struct CodexTasksView: View {
             Text(session.worktreePath)
                 .font(.system(.caption2, design: .monospaced))
                 .foregroundStyle(theme.palette.onCoralMuted)
+
+            let ledger = manager.ledgerSummary(id: session.id)
+            HStack(spacing: 12) {
+                Label("revenue \(moneyLabel(ledger.revenueUSD))", systemImage: "arrow.down.circle")
+                Label("cost \(moneyLabel(ledger.costUSD))", systemImage: "arrow.up.circle")
+                Label("net \(moneyLabel(ledger.netUSD))", systemImage: "dollarsign.circle")
+                if ledger.hasVerifiedRevenue {
+                    Label("verified", systemImage: "checkmark.seal")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(theme.palette.onCoralMuted)
         }
         .padding(20)
         .frame(width: 760, height: 560)
@@ -349,11 +709,70 @@ struct CodexTasksView: View {
         }
     }
 
+    private func applySelectedTemplate() {
+        guard let template = selectedTemplate else { return }
+        selectedTemplateID = template.id
+        newCompanyName = template.companyName
+        newTaskText = template.missionPrompt
+        newCadenceMinutes = template.suggestedCadenceMinutes
+        spawnError = ""
+    }
+
+    private func spawnSelectedTemplate() {
+        applySelectedTemplate()
+        guard let template = selectedTemplate else { return }
+        do {
+            _ = try manager.createCompany(
+                name: template.companyName,
+                mission: template.missionPrompt,
+                cadenceMinutes: template.suggestedCadenceMinutes,
+                templateID: template.id
+            )
+            newTaskText = ""
+            newCompanyName = ""
+            spawnError = ""
+        } catch {
+            spawnError = (error as NSError).localizedDescription
+        }
+    }
+
+    private func launchTemplateBatch() {
+        let templates = batchTemplates
+        guard !templates.isEmpty else { return }
+        do {
+            _ = try manager.createCompanies(
+                from: templates,
+                cadenceMinutes: bulkCadenceOverride == 0 ? nil : bulkCadenceOverride,
+                startPaused: bulkLaunchStartPaused,
+                firstHeartbeatSpacingSeconds: 90
+            )
+            spawnError = ""
+        } catch {
+            spawnError = (error as NSError).localizedDescription
+        }
+    }
+
+    private func createBackup() {
+        do {
+            _ = try manager.createStateBackup()
+            spawnError = ""
+        } catch {
+            spawnError = (error as NSError).localizedDescription
+        }
+    }
+
     private func intervene(id: String) {
         let text = (interveneTexts[id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         manager.injectInstruction(id: id, instruction: text)
         interveneTexts[id] = ""
+    }
+
+    private func requestApprovalChanges(_ request: CompanyApprovalRequest) {
+        let note = (approvalChangeTexts[request.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !note.isEmpty else { return }
+        manager.requestChanges(request: request, note: note)
+        approvalChangeTexts[request.id] = ""
     }
 
     private func countdown(to date: Date?) -> String {
@@ -377,11 +796,63 @@ struct CodexTasksView: View {
         switch status {
         case .running:   return .yellow
         case .idle:      return .blue
+        case .queued:    return .purple
         case .blocked:   return .orange
         case .paused:    return .gray
         case .completed: return .green
         case .failed:    return .red
         case .killed:    return .gray
+        }
+    }
+
+    private func moneyLabel(_ amount: Double) -> String {
+        let sign = amount < 0 ? "-" : ""
+        return "\(sign)$\(String(format: "%.2f", abs(amount)))"
+    }
+
+    private func eventIcon(_ kind: CompanyEvent.Kind) -> String {
+        switch kind {
+        case .companyCreated: return "building.2"
+        case .heartbeatStarted: return "play.circle"
+        case .heartbeatFinished: return "checkmark.circle"
+        case .heartbeatQueued: return "line.3.horizontal.decrease.circle"
+        case .budgetBlocked: return "gauge.with.dots.needle.67percent"
+        case .lifecycleChanged: return "flag.checkered"
+        case .userInstruction: return "person.crop.circle.badge.checkmark"
+        case .companyPaused, .fleetPaused: return "pause.circle"
+        case .companyResumed, .fleetResumed: return "arrow.clockwise.circle"
+        case .companyKilled: return "xmark.octagon"
+        case .approvalRequested: return "checkmark.shield"
+        case .approvalApproved: return "checkmark.seal"
+        case .approvalDenied: return "xmark.shield"
+        case .approvalChangesRequested: return "arrow.uturn.left.circle"
+        case .stateBackupCreated: return "externaldrive.badge.checkmark"
+        }
+    }
+
+    private func eventColor(_ kind: CompanyEvent.Kind) -> Color {
+        switch kind {
+        case .budgetBlocked, .companyKilled, .approvalDenied:
+            return theme.palette.danger
+        case .heartbeatQueued:
+            return .purple
+        case .companyPaused, .fleetPaused, .approvalRequested, .approvalChangesRequested:
+            return .orange
+        case .heartbeatStarted:
+            return .yellow
+        case .heartbeatFinished, .lifecycleChanged, .companyResumed, .fleetResumed, .approvalApproved, .stateBackupCreated:
+            return .green
+        case .companyCreated, .userInstruction:
+            return theme.palette.onCoralMuted
+        }
+    }
+
+    private func approvalColor(_ riskTier: CompanyApprovalRequest.RiskTier) -> Color {
+        switch riskTier {
+        case .low: return theme.palette.onCoralMuted
+        case .medium: return .yellow
+        case .high: return .orange
+        case .critical: return theme.palette.danger
         }
     }
 }
