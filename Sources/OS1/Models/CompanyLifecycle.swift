@@ -12,6 +12,7 @@ struct CompanyEvidenceSnapshot: Codable, Hashable {
     var paymentsRisk: CompanyPaymentsRiskReport? = nil
     var experimentEvidence: CompanyExperimentResult? = nil
     var reputationHealth: [CompanyReputationHealth] = []
+    var unitEconomics: CompanyUnitEconomicsReport? = nil
     var failureCount: Int
     var complianceRisk: CompanyIdea.RiskTier
     var overrideReason: String?
@@ -26,6 +27,8 @@ struct CompanyEvidenceSnapshot: Codable, Hashable {
         if experimentEvidence?.evidenceStrength == .strong { score += 12 }
         if experimentEvidence?.evidenceStrength == .weak { score -= 10 }
         if reputationHealth.contains(where: { $0.risk == .high || $0.risk == .critical }) { score -= 20 }
+        if unitEconomics?.canScale == true { score += 12 }
+        if unitEconomics?.shouldReview == true { score -= 12 }
         if budgetReport?.status == .warning { score -= 8 }
         if budgetReport?.shouldBlockHeartbeat == true { score -= 25 }
         if paymentsRisk?.accountHealth == .healthy { score += 8 }
@@ -143,6 +146,9 @@ enum CompanyLifecycleEngine {
                 evidence: evidence
             )
         }
+        if evidence.unitEconomics?.shouldReview == true && evidence.stage == .revenuePositive {
+            return .init(action: .pause, from: evidence.stage, to: .paused, rationale: "Poor unit economics require lifecycle review.", requiresOverride: false, evidence: evidence)
+        }
         if evidence.stage == .validating && evidence.validationDecision == .rejected {
             return .init(
                 action: .kill,
@@ -226,6 +232,16 @@ enum CompanyLifecycleEngine {
                     from: evidence.stage,
                     to: evidence.stage,
                     rationale: "Scale blocked: experiment evidence is weak or uncertain.",
+                    requiresOverride: true,
+                    evidence: evidence
+                )
+            }
+            guard evidence.unitEconomics?.canScale == true else {
+                return .init(
+                    action: .hold,
+                    from: evidence.stage,
+                    to: evidence.stage,
+                    rationale: "Unit economics must meet scale thresholds before auto-scale.",
                     requiresOverride: true,
                     evidence: evidence
                 )
