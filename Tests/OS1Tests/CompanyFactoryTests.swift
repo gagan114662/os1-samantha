@@ -17,6 +17,7 @@ struct CompanyFactoryTests {
         #expect(kinds.contains(.pricingPage))
         #expect(kinds.contains(.paymentLink))
         #expect(kinds.contains(.crmTable))
+        #expect(kinds.contains(.suppressionList))
         #expect(kinds.contains(.supportInbox))
         #expect(kinds.contains(.analyticsPlan))
         #expect(kinds.contains(.deploymentChecklist))
