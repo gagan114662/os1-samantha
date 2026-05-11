@@ -1047,6 +1047,7 @@
 "Request changes" = "Request changes";
 "Resume fleet" = "Resume fleet";
 "Run heartbeat now" = "Run heartbeat now";
+"Kill heartbeat" = "Kill heartbeat";
 "Search 100 templates" = "Search 100 templates";
 "Save missing ones via the Providers / Connectors tabs, or `security add-generic-password -s <service> -a default -w <secret>`." = "Save missing ones via the Providers / Connectors tabs, or `security add-generic-password -s <service> -a default -w <secret>`.";
 "Spin up" = "Spin up";

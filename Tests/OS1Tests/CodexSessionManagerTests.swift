@@ -179,7 +179,7 @@ struct CodexSessionManagerTests {
             templateID: "youtube-ai-tool-tutorials",
             budget: .defaultState(now: Date(timeIntervalSince1970: 1_700_000_000)),
             lifecycleStage: .validating,
-            sandboxMode: .productionSandbox,
+            sandboxMode: .sandbox,
             credentialAllowlist: ["STRIPE_API_KEY"],
             heartbeatLease: CodexSession.HeartbeatLease(
                 id: "lease-1",
@@ -204,7 +204,7 @@ struct CodexSessionManagerTests {
         #expect(round.pendingUserInstruction == "Focus on shorts")
         #expect(round.templateID == "youtube-ai-tool-tutorials")
         #expect(round.lifecycleStage == .validating)
-        #expect(round.sandboxMode == .productionSandbox)
+        #expect(round.sandboxMode == .sandbox)
         #expect(round.credentialAllowlist == ["STRIPE_API_KEY"])
         #expect(round.heartbeatLease?.id == "lease-1")
         #expect(round.heartbeatLease?.ownerPID == 12345)
@@ -243,9 +243,30 @@ struct CodexSessionManagerTests {
         #expect(session.nextHeartbeatAt == nil)
         #expect(session.pendingUserInstruction == nil)
         #expect(session.lifecycleStage == .validating)
-        #expect(session.sandboxMode == .productionSandbox)
+        #expect(session.sandboxMode == .sandbox)
         #expect(session.credentialAllowlist.isEmpty)
         #expect(session.heartbeatLease == nil)
+    }
+
+    @Test
+    func sessionDecodesLegacyProductionSandboxNameAsSandbox() throws {
+        let legacyJSON = """
+        [{
+            "id": "deadbeef",
+            "title": "legacy-company",
+            "task": "do stuff",
+            "worktreePath": "/tmp/legacy",
+            "branch": "company/deadbeef",
+            "status": "idle",
+            "startedAt": 800000000.0,
+            "sandboxMode": "productionSandbox"
+        }]
+        """.data(using: .utf8)!
+
+        let decoded = try JSONDecoder().decode([CodexSession].self, from: legacyJSON)
+        let session = try #require(decoded.first)
+
+        #expect(session.sandboxMode == .sandbox)
     }
 
     // MARK: - Restart recovery / leases

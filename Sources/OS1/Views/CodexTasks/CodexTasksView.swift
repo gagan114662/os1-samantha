@@ -578,6 +578,11 @@ struct CodexTasksView: View {
                     Button(L10n.string("Run heartbeat now")) {
                         Task { await manager.runHeartbeat(id: session.id) }
                     }
+                    if session.status == .running {
+                        Button(L10n.string("Kill heartbeat"), role: .destructive) {
+                            manager.kill(id: session.id)
+                        }
+                    }
                     Divider()
                     Button(L10n.string("Open journal in Finder")) {
                         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: session.journalPath)])

@@ -35,8 +35,26 @@ struct CodexSession: Identifiable, Codable, Hashable {
     }
 
     enum SandboxMode: String, Codable, CaseIterable, Hashable {
-        case productionSandbox
+        case sandbox
         case localDevelopment
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            let raw = try container.decode(String.self)
+            switch raw {
+            case "sandbox", "productionSandbox":
+                self = .sandbox
+            case "localDevelopment":
+                self = .localDevelopment
+            default:
+                self = .sandbox
+            }
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.singleValueContainer()
+            try container.encode(rawValue)
+        }
     }
 
     struct HeartbeatLease: Codable, Hashable {
@@ -70,7 +88,7 @@ struct CodexSession: Identifiable, Codable, Hashable {
     var templateID: String? = nil
     var budget: BudgetState? = nil
     var lifecycleStage: LifecycleStage = .validating
-    var sandboxMode: SandboxMode = .productionSandbox
+    var sandboxMode: SandboxMode = .sandbox
     var credentialAllowlist: [String] = []
     var heartbeatLease: HeartbeatLease? = nil
 
@@ -155,7 +173,7 @@ extension CodexSession {
         templateID = try container.decodeIfPresent(String.self, forKey: .templateID)
         budget = try container.decodeIfPresent(BudgetState.self, forKey: .budget)
         lifecycleStage = try container.decodeIfPresent(LifecycleStage.self, forKey: .lifecycleStage) ?? .validating
-        sandboxMode = try container.decodeIfPresent(SandboxMode.self, forKey: .sandboxMode) ?? .productionSandbox
+        sandboxMode = try container.decodeIfPresent(SandboxMode.self, forKey: .sandboxMode) ?? .sandbox
         credentialAllowlist = try container.decodeIfPresent([String].self, forKey: .credentialAllowlist) ?? []
         heartbeatLease = try container.decodeIfPresent(HeartbeatLease.self, forKey: .heartbeatLease)
         blockedReason = try container.decodeIfPresent(String.self, forKey: .blockedReason)
@@ -165,8 +183,8 @@ extension CodexSession {
 /// Spawns and tracks parallel `codex exec` sessions, each in its own
 /// git worktree branched off `~/.os1/codex-tasks/base`.
 ///
-/// Uses `--dangerously-bypass-approvals-and-sandbox` so sessions don't
-/// stall on human approval (the user explicitly opted into this).
+/// Sandbox sessions are wrapped by a generated macOS sandbox-exec
+/// profile so each company can mutate only its own worktree/log/prompt state.
 @MainActor
 final class CodexSessionManager: ObservableObject {
     static let shared = CodexSessionManager()
@@ -177,6 +195,7 @@ final class CodexSessionManager: ObservableObject {
     private let sessionsDir: URL
     private let logDir: URL
     private let lessonsDir: URL
+    private let sandboxDir: URL
     /// Compact JOURNAL.md every N heartbeats — uses `claude -p` (your Claude
     /// Code subscription) to distill old entries into a SUMMARY block.
     /// Hard-enforced in Swift, not a prompt nudge codex might ignore.
@@ -203,9 +222,11 @@ final class CodexSessionManager: ObservableObject {
         self.sessionsDir = home.appendingPathComponent(".os1/codex-tasks/sessions", isDirectory: true)
         self.logDir = home.appendingPathComponent(".os1/codex-tasks/logs", isDirectory: true)
         self.lessonsDir = home.appendingPathComponent(".os1/codex-tasks/lessons", isDirectory: true)
+        self.sandboxDir = home.appendingPathComponent(".os1/codex-tasks/sandboxes", isDirectory: true)
         try? FileManager.default.createDirectory(at: sessionsDir, withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(at: lessonsDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: sandboxDir, withIntermediateDirectories: true)
         // Initialize portfolio lessons file if missing
         let portfolioLessons = lessonsDir.appendingPathComponent("portfolio.md").path
         if !FileManager.default.fileExists(atPath: portfolioLessons) {
@@ -295,7 +316,7 @@ final class CodexSessionManager: ObservableObject {
             templateID: templateID,
             budget: .defaultState(),
             lifecycleStage: .validating,
-            sandboxMode: .productionSandbox,
+            sandboxMode: .sandbox,
             credentialAllowlist: [],
             heartbeatLease: nil
         )
@@ -445,6 +466,7 @@ final class CodexSessionManager: ObservableObject {
         sessions[idx].pendingUserInstruction = nil
 
         let logFile = logDir.appendingPathComponent("\(id).log")
+        let sandboxProfileURL = sandboxProfileURL(id: id)
         if !FileManager.default.fileExists(atPath: logFile.path) {
             FileManager.default.createFile(atPath: logFile.path, contents: nil)
         }
@@ -454,7 +476,7 @@ final class CodexSessionManager: ObservableObject {
 
 
         === Heartbeat \(session.heartbeatCount) (\(isAudit ? "AUDIT" : "WORK")) at \(Date()) ===
-        sandbox_mode=\(session.sandboxMode.rawValue) approval_mode=file-gated credential_allowlist=\(session.credentialAllowlist.joined(separator: ",")) exposed_credentials=\(availableCreds.joined(separator: ","))
+        sandbox_mode=\(session.sandboxMode.rawValue) sandbox_profile=\(session.sandboxMode == .sandbox ? sandboxProfileURL.path : "none") approval_mode=file-gated credential_allowlist=\(session.credentialAllowlist.joined(separator: ",")) exposed_credentials=\(availableCreds.joined(separator: ","))
 
         """
         logHandle.write(header.data(using: .utf8) ?? Data())
@@ -468,7 +490,29 @@ final class CodexSessionManager: ObservableObject {
 
         let proc = Process()
         proc.currentDirectoryURL = URL(fileURLWithPath: session.worktreePath)
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        let sandboxProfile = makeSandboxProfile(
+            session: session,
+            logFile: logFile.path,
+            promptFile: promptFile
+        )
+        if session.sandboxMode == .sandbox {
+            do {
+                try sandboxProfile.write(to: sandboxProfileURL)
+            } catch {
+                sessions[idx].status = .failed
+                sessions[idx].exitCode = -1
+                sessions[idx].heartbeatLease = nil
+                persistSessions()
+                appendEvent(
+                    kind: .heartbeatFinished,
+                    companyID: id,
+                    summary: "Heartbeat failed before launch: sandbox profile write failed",
+                    metadata: ["error": error.localizedDescription]
+                )
+                return
+            }
+        }
+        proc.executableURL = URL(fileURLWithPath: session.sandboxMode == .sandbox ? "/usr/bin/sandbox-exec" : "/usr/bin/env")
         var environment = ProcessInfo.processInfo.environment
         for (name, value) in credentialEnvironment {
             environment[name] = value
@@ -476,10 +520,18 @@ final class CodexSessionManager: ObservableObject {
         environment["OS1_COMPANY_ID"] = session.id
         environment["OS1_SANDBOX_MODE"] = session.sandboxMode.rawValue
         environment["OS1_APPROVAL_MODE"] = "file-gated"
+        environment["OS1_SANDBOX_PROFILE"] = session.sandboxMode == .sandbox ? sandboxProfileURL.path : ""
+        let companyTemp = URL(fileURLWithPath: session.worktreePath).appendingPathComponent(".tmp", isDirectory: true)
+        try? FileManager.default.createDirectory(at: companyTemp, withIntermediateDirectories: true)
+        environment["TMPDIR"] = companyTemp.path
+        environment["TMP"] = companyTemp.path
+        environment["TEMP"] = companyTemp.path
         proc.environment = environment
         // Prompt is piped via stdin so no user text touches the shell command line.
         let codexCommand = "cat \(Self.shellEscape(promptFile)) | codex exec --dangerously-bypass-approvals-and-sandbox -"
-        proc.arguments = ["zsh", "-l", "-c", codexCommand]
+        proc.arguments = session.sandboxMode == .sandbox
+            ? ["-f", sandboxProfileURL.path, "/usr/bin/env", "zsh", "-l", "-c", codexCommand]
+            : ["zsh", "-l", "-c", codexCommand]
         proc.standardOutput = logHandle
         proc.standardError = logHandle
         proc.terminationHandler = { [weak self] p in
@@ -1219,6 +1271,22 @@ final class CodexSessionManager: ObservableObject {
 
     func session(id: String) -> CodexSession? {
         sessions.first(where: { $0.id == id })
+    }
+
+    private func sandboxProfileURL(id: String) -> URL {
+        sandboxDir.appendingPathComponent("\(id).sb")
+    }
+
+    private func makeSandboxProfile(session: CodexSession, logFile: String, promptFile: String) -> CompanySandboxProfile {
+        CompanySandboxProfile(
+            companyID: session.id,
+            worktreePath: session.worktreePath,
+            logPath: logFile,
+            promptPath: promptFile,
+            portfolioLessonsPath: lessonsDir.appendingPathComponent("portfolio.md").path,
+            codexHomePath: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex").path,
+            allowedCredentialNames: session.credentialAllowlist
+        )
     }
 
     // MARK: - Kill
