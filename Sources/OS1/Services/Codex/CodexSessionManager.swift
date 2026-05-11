@@ -1101,7 +1101,18 @@ final class CodexSessionManager: ObservableObject {
         // Keep journal context bounded
         _ = journal.suffix(15_000)
         let userInstr = session.pendingUserInstruction.map {
-            "\n## CEO INSTRUCTION (from Samantha — must address this in your action):\n\($0)\n"
+            let payload = CompanyDataGovernanceEngine.promptPayload(
+                text: $0,
+                category: .prompts,
+                companyID: session.id,
+                explicitAllowed: false
+            )
+            return """
+
+            ## CEO INSTRUCTION (from Samantha — must address this in your action):
+            \(payload.sanitizedText)
+
+            """
         } ?? ""
         let credsLine = availableCreds.isEmpty
             ? "No platform credentials are exposed to this company sandbox. If your mission needs Stripe/Resend/YouTube/etc, write APPROVAL_REQUEST.json if the action is high-risk, then emit BLOCKED: <which credential/scope>."
@@ -1137,6 +1148,9 @@ final class CodexSessionManager: ObservableObject {
         7. Your work WILL be audited. Hallucinations get caught and reverted. Be honest in the journal — write "(unverified)" or "(failed)" when things didn't work. Lying creates more work for you, not less.
         8. Lifecycle discipline: validating means collect demand evidence; building means ship the smallest monetizable asset; launched means measure real users/revenue; revenuePositive means improve margin and repeatability. Do not scale without verified revenue and positive net.
         9. Approval gate: before spending money, increasing budget, creating/charging/refunding payments, publishing public content, messaging humans, deleting assets, changing credentials, signing contracts, or touching regulated/real-estate/legal/financial claims, write APPROVAL_REQUEST.json using the schema below and end with `BLOCKED: approval required for <action>`. Only execute a high-risk action when APPROVAL_GRANTED.json exists, is unexpired, and matches the action scope.
+        10. Data governance: classify stored records by data category and apply retention policies. Do not copy
+        credentials, customer PII, payment metadata, health data, or financial data into model prompts unless an
+        explicit approved task requires it. Redact sensitive values in logs and prompt payloads.
 
         ## YOUR WORKSPACE
         Working directory is your cwd. Files you should know about:
