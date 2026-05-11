@@ -159,9 +159,10 @@ final class DoctorViewModel: ObservableObject {
         async let launchd = makeLaunchdCheck()
         async let voicePort = makeVoicePortCheck()
         async let keychain = makeKeychainCheck()
+        async let sharedCredentials = makeSharedCredentialScopeCheck()
         async let notarization = makeNotarizationCheck()
         async let productionGates = makeProductionGatesCheck()
-        return await [codex, claude, wuphf, launchd, voicePort, keychain, notarization, productionGates]
+        return await [codex, claude, wuphf, launchd, voicePort, keychain, sharedCredentials, notarization, productionGates]
     }
 
     private func makeProductionGatesCheck() async -> Check {
@@ -446,6 +447,51 @@ final class DoctorViewModel: ObservableObject {
             detail: L10n.string("Save missing ones via the Providers / Connectors tabs, or `security add-generic-password -s <service> -a default -w <secret>`."),
             actions: []
         )
+    }
+
+    private func makeSharedCredentialScopeCheck() async -> Check {
+        let credentialNames = CodexSessionManager.loadCredentialNames()
+        let unsafe = Self.sharedProductionCredentialProblems(
+            credentialNames: credentialNames,
+            sessions: CodexSessionManager.shared.sessions
+        )
+        if unsafe.isEmpty {
+            return Check(
+                id: "company-credential-scopes",
+                title: "Company credential scopes",
+                severity: .ok,
+                summary: "No overbroad company credential grants detected",
+                detail: credentialNames.isEmpty ? "No ~/.os1/credentials.env credentials loaded." : "Loaded credential names: \(credentialNames.joined(separator: ", "))",
+                actions: []
+            )
+        }
+        return Check(
+            id: "company-credential-scopes",
+            title: "Company credential scopes",
+            severity: .warn,
+            summary: "Shared production credentials are unsafe",
+            detail: unsafe.joined(separator: "\n"),
+            actions: []
+        )
+    }
+
+    nonisolated static func sharedProductionCredentialProblems(
+        credentialNames: [String],
+        sessions: [CodexSession]
+    ) -> [String] {
+        let names = Set(credentialNames.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+        guard !names.isEmpty else { return [] }
+
+        return sessions.compactMap { session in
+            if session.sandboxMode == .localDevelopment {
+                return "\(session.title) uses localDevelopment and can read all shared credentials."
+            }
+            let allowlist = Set(session.credentialAllowlist)
+            if !allowlist.isEmpty && names.isSubset(of: allowlist) {
+                return "\(session.title) is granted every shared credential: \(credentialNames.sorted().joined(separator: ", "))."
+            }
+            return nil
+        }
     }
 
     private func which(_ binary: String) -> String? {

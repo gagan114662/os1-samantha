@@ -156,6 +156,19 @@ struct CodexSessionManagerTests {
         #expect(env["B"] == "two")
     }
 
+    @Test
+    func credentialLogLineContainsNamesButNeverValues() {
+        let line = CodexSessionManager.redactedCredentialLogLine(
+            names: ["STRIPE_API_KEY", "RESEND_API_KEY"],
+            values: ["sk_live_should_not_be_logged", "resend-secret"]
+        )
+
+        #expect(line.contains("RESEND_API_KEY"))
+        #expect(line.contains("STRIPE_API_KEY"))
+        #expect(!line.contains("sk_live_should_not_be_logged"))
+        #expect(!line.contains("resend-secret"))
+    }
+
     // MARK: - CodexSession persistence (Codable roundtrip)
 
     @Test

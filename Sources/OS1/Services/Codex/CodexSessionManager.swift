@@ -458,6 +458,22 @@ final class CodexSessionManager: ObservableObject {
             allowlist: session.sandboxMode == .localDevelopment ? nil : Set(session.credentialAllowlist)
         )
         let availableCreds = credentialEnvironment.keys.sorted()
+        appendEvent(
+            kind: .secretAccessed,
+            companyID: id,
+            actor: "codex",
+            summary: availableCreds.isEmpty ? "No credentials exposed to heartbeat" : "Credential names exposed to heartbeat",
+            runID: session.heartbeatLease?.id,
+            tool: "credential-env",
+            riskTier: session.sandboxMode.rawValue,
+            approvalState: "file-gated",
+            metadata: [
+                "heartbeat": "\(session.heartbeatCount)",
+                "credentialNames": availableCreds.joined(separator: ","),
+                "credentialCount": "\(availableCreds.count)",
+                "allowlist": session.credentialAllowlist.joined(separator: ",")
+            ]
+        )
         // Every 3rd heartbeat is an adversarial audit instead of a work step.
         // Audit fires with FRESH context: codex doesn't carry over from the
         // worker that just wrote the journal, so the same cost bias that makes
@@ -480,7 +496,7 @@ final class CodexSessionManager: ObservableObject {
 
 
         === Heartbeat \(session.heartbeatCount) (\(isAudit ? "AUDIT" : "WORK")) at \(Date()) ===
-        sandbox_mode=\(session.sandboxMode.rawValue) sandbox_profile=\(session.sandboxMode == .sandbox ? sandboxProfileURL.path : "none") approval_mode=file-gated credential_allowlist=\(session.credentialAllowlist.joined(separator: ",")) exposed_credentials=\(availableCreds.joined(separator: ","))
+        sandbox_mode=\(session.sandboxMode.rawValue) sandbox_profile=\(session.sandboxMode == .sandbox ? sandboxProfileURL.path : "none") approval_mode=file-gated credential_allowlist=\(session.credentialAllowlist.joined(separator: ",")) \(Self.redactedCredentialLogLine(names: availableCreds, values: Array(credentialEnvironment.values)))
 
         """
         logHandle.write(header.data(using: .utf8) ?? Data())
@@ -1193,6 +1209,45 @@ final class CodexSessionManager: ObservableObject {
         scheduleHeartbeat(id: id)
     }
 
+    func grantCredential(id: String, name: String) {
+        let normalized = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty, let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
+        if !sessions[idx].credentialAllowlist.contains(normalized) {
+            sessions[idx].credentialAllowlist.append(normalized)
+            sessions[idx].credentialAllowlist.sort()
+            persistSessions()
+        }
+        appendEvent(
+            kind: .secretAccessed,
+            companyID: id,
+            actor: "user",
+            summary: "Credential grant updated",
+            metadata: [
+                "operation": "grant",
+                "credentialName": normalized,
+                "allowlist": sessions[idx].credentialAllowlist.joined(separator: ",")
+            ]
+        )
+    }
+
+    func revokeCredential(id: String, name: String) {
+        let normalized = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty, let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
+        sessions[idx].credentialAllowlist.removeAll { $0 == normalized }
+        persistSessions()
+        appendEvent(
+            kind: .secretAccessed,
+            companyID: id,
+            actor: "user",
+            summary: "Credential grant revoked",
+            metadata: [
+                "operation": "revoke",
+                "credentialName": normalized,
+                "allowlist": sessions[idx].credentialAllowlist.joined(separator: ",")
+            ]
+        )
+    }
+
     func pauseAll(reason: String = "fleet emergency stop") {
         for session in sessions {
             heartbeatTasks[session.id]?.cancel()
@@ -1786,6 +1841,11 @@ final class CodexSessionManager: ObservableObject {
             }
         }
         return values.filter { names.contains($0.key) }
+    }
+
+    nonisolated static func redactedCredentialLogLine(names: [String], values: [String]) -> String {
+        let valueCount = values.filter { !$0.isEmpty }.count
+        return "credential_names=\(names.sorted().joined(separator: ",")) credential_value_count=\(valueCount)"
     }
 
     nonisolated private static func unquoteCredentialValue(_ value: String) -> String {

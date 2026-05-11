@@ -721,9 +721,34 @@ struct CodexTasksView: View {
             }
             .font(.caption)
             .foregroundStyle(theme.palette.onCoralMuted)
+
+            let credentialNames = CodexSessionManager.loadCredentialNames()
+            if !credentialNames.isEmpty {
+                Text("Credential grants")
+                    .os1Style(theme.typography.label)
+                    .foregroundStyle(theme.palette.onCoralMuted)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(credentialNames, id: \.self) { name in
+                            let granted = session.credentialAllowlist.contains(name)
+                            Button {
+                                if granted {
+                                    manager.revokeCredential(id: session.id, name: name)
+                                } else {
+                                    manager.grantCredential(id: session.id, name: name)
+                                }
+                            } label: {
+                                Label(name, systemImage: granted ? "checkmark.circle.fill" : "circle")
+                                    .font(.caption2)
+                            }
+                            .buttonStyle(.os1Secondary)
+                        }
+                    }
+                }
+            }
         }
         .padding(20)
-        .frame(width: 760, height: 560)
+        .frame(width: 760, height: 640)
     }
 
     private func eventTimelineRow(_ event: CompanyEvent) -> some View {
@@ -948,6 +973,7 @@ struct CodexTasksView: View {
         case .companyPaused, .fleetPaused: return "pause.circle"
         case .companyResumed, .fleetResumed: return "arrow.clockwise.circle"
         case .companyKilled: return "xmark.octagon"
+        case .secretAccessed: return "key"
         case .approvalRequested: return "checkmark.shield"
         case .approvalApproved: return "checkmark.seal"
         case .approvalDenied: return "xmark.shield"
@@ -968,7 +994,7 @@ struct CodexTasksView: View {
             return .yellow
         case .heartbeatFinished, .lifecycleChanged, .companyResumed, .fleetResumed, .approvalApproved, .stateBackupCreated:
             return .green
-        case .companyCreated, .userInstruction:
+        case .companyCreated, .userInstruction, .secretAccessed:
             return theme.palette.onCoralMuted
         }
     }
