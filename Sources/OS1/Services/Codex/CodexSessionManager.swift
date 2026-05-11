@@ -1137,6 +1137,7 @@ final class CodexSessionManager: ObservableObject {
         7. Your work WILL be audited. Hallucinations get caught and reverted. Be honest in the journal — write "(unverified)" or "(failed)" when things didn't work. Lying creates more work for you, not less.
         8. Lifecycle discipline: validating means collect demand evidence; building means ship the smallest monetizable asset; launched means measure real users/revenue; revenuePositive means improve margin and repeatability. Do not scale without verified revenue and positive net.
         9. Approval gate: before spending money, increasing budget, creating/charging/refunding payments, publishing public content, messaging humans, deleting assets, changing credentials, signing contracts, or touching regulated/real-estate/legal/financial claims, write APPROVAL_REQUEST.json using the schema below and end with `BLOCKED: approval required for <action>`. Only execute a high-risk action when APPROVAL_GRANTED.json exists, is unexpired, and matches the action scope.
+        10. Browser automation gate: prefer a real API or connector over UI automation. If browser automation is still needed, BROWSER_POLICY.json must approve the domain/action, use selectors or semantic element names (never blind coordinates), and write a replayable trace with screenshot and DOM snapshot. Login expiry, captcha, rate limit, popup, layout, or selector failures must end in BLOCKED with context.
 
         ## YOUR WORKSPACE
         Working directory is your cwd. Files you should know about:
@@ -1147,6 +1148,8 @@ final class CodexSessionManager: ObservableObject {
         - APPROVAL_REQUEST.json — create this and BLOCK when a high-risk action needs review
         - APPROVAL_GRANTED.json — if present and unexpired, scope-limited permission from the operator
         - APPROVAL_DECISION.json — latest operator decision; if denied or changesRequested, follow it instead of executing the original action
+        - BROWSER_POLICY.json — approved browser domains/actions and API/connector preferences. If absent, browser automation is not approved.
+        - browser-traces/ — save replayable browser traces here. Each action trace needs selector or semantic target, screenshot path, DOM snapshot path, outcome, and recovery decision.
         - handoff.json — STRUCTURED record you MUST overwrite each heartbeat (schema below). Auditor parses this directly, not your prose
         - LESSONS.md — portfolio-wide lessons shared across ALL companies (symlink, read-mostly). If you learn something useful to other companies, append a short entry (use `flock LESSONS.md ...` to avoid races)
         - Your git HEAD was just tagged `heartbeat-pre-\(session.heartbeatCount)` before this run; run `git diff heartbeat-pre-\(session.heartbeatCount)..HEAD` at end of heartbeat to verify what you ACTUALLY changed vs claimed

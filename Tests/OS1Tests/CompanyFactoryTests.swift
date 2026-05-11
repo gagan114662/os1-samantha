@@ -24,6 +24,7 @@ struct CompanyFactoryTests {
         #expect(kinds.contains(.onboardingFlow))
         #expect(kinds.contains(.refundPolicy))
         #expect(kinds.contains(.salesScript))
+        #expect(kinds.contains(.browserPolicy))
     }
 
     @Test
@@ -71,5 +72,21 @@ struct CompanyFactoryTests {
         for gate in manifest.gates {
             #expect(checklist.contains(gate.title))
         }
+    }
+
+    @Test
+    func browserPolicyStarterDefinesApprovedDomainsAndActions() throws {
+        let manifest = CompanyFactory.manifest(
+            companyID: "company-1",
+            template: nil,
+            worktreePath: "/tmp/company-1"
+        )
+        let policy = try #require(manifest.assets.first { $0.kind == .browserPolicy })
+        let starter = CompanyFactory.starterContent(for: policy, manifest: manifest)
+
+        #expect(starter.contains("\"companyID\": \"company-1\""))
+        #expect(starter.contains("\"approvedDomains\""))
+        #expect(starter.contains("\"allowedActions\""))
+        #expect(starter.contains("\"preferredIntegrations\""))
     }
 }
