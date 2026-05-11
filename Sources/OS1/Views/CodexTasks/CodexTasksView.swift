@@ -1562,6 +1562,9 @@ struct CodexTasksView: View {
         case .approvalApproved: return "checkmark.seal"
         case .approvalDenied: return "xmark.shield"
         case .approvalChangesRequested: return "arrow.uturn.left.circle"
+        case .permissionChanged: return "person.crop.circle.badge.gearshape"
+        case .permissionDenied: return "lock.shield"
+        case .permissionEscalated: return "exclamationmark.shield"
         case .stateBackupCreated: return "externaldrive.badge.checkmark"
         case .ledgerEntryRecorded: return "dollarsign.circle"
         case .untrustedContentInfluencedDecision: return "exclamationmark.shield"
@@ -1570,16 +1573,17 @@ struct CodexTasksView: View {
 
     private func eventColor(_ kind: CompanyEvent.Kind) -> Color {
         switch kind {
-        case .budgetBlocked, .companyKilled, .approvalDenied, .complianceBlocked:
+        case .budgetBlocked, .companyKilled, .approvalDenied, .complianceBlocked, .permissionDenied:
             return theme.palette.danger
-        case .heartbeatQueued, .externalSideEffect:
+        case .heartbeatQueued, .externalSideEffect, .permissionChanged:
             return .purple
         case .companyPaused, .fleetPaused, .approvalRequested, .approvalChangesRequested,
-             .untrustedContentInfluencedDecision:
+             .untrustedContentInfluencedDecision, .permissionEscalated:
             return .orange
         case .heartbeatStarted:
             return .yellow
-        case .heartbeatFinished, .lifecycleChanged, .companyResumed, .fleetResumed, .approvalApproved, .stateBackupCreated, .ledgerEntryRecorded, .complianceChecked:
+        case .heartbeatFinished, .lifecycleChanged, .companyResumed, .fleetResumed, .approvalApproved,
+             .stateBackupCreated, .ledgerEntryRecorded, .complianceChecked:
             return .green
         case .companyCreated, .userInstruction, .secretAccessed:
             return theme.palette.onCoralMuted
