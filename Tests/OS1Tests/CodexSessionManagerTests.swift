@@ -193,6 +193,15 @@ struct CodexSessionManagerTests {
             budget: .defaultState(now: Date(timeIntervalSince1970: 1_700_000_000)),
             lifecycleStage: .validating,
             sandboxMode: .sandbox,
+            environment: CompanyEnvironmentState(mode: .staging, resources: [
+                CompanyEnvironmentResource(
+                    id: "staging-db",
+                    kind: .database,
+                    name: "Staging database",
+                    environment: .staging,
+                    reference: "postgres://staging"
+                )
+            ]),
             credentialAllowlist: ["STRIPE_API_KEY"],
             heartbeatLease: CodexSession.HeartbeatLease(
                 id: "lease-1",
@@ -218,6 +227,8 @@ struct CodexSessionManagerTests {
         #expect(round.templateID == "youtube-ai-tool-tutorials")
         #expect(round.lifecycleStage == .validating)
         #expect(round.sandboxMode == .sandbox)
+        #expect(round.environment.mode == .staging)
+        #expect(round.environment.resources.first?.name == "Staging database")
         #expect(round.credentialAllowlist == ["STRIPE_API_KEY"])
         #expect(round.heartbeatLease?.id == "lease-1")
         #expect(round.heartbeatLease?.ownerPID == 12345)
