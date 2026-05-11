@@ -1313,6 +1313,7 @@ struct CodexTasksView: View {
         case .approvalChangesRequested: return "arrow.uturn.left.circle"
         case .stateBackupCreated: return "externaldrive.badge.checkmark"
         case .ledgerEntryRecorded: return "dollarsign.circle"
+        case .untrustedContentInfluencedDecision: return "exclamationmark.shield"
         }
     }
 
@@ -1322,7 +1323,8 @@ struct CodexTasksView: View {
             return theme.palette.danger
         case .heartbeatQueued, .externalSideEffect:
             return .purple
-        case .companyPaused, .fleetPaused, .approvalRequested, .approvalChangesRequested:
+        case .companyPaused, .fleetPaused, .approvalRequested, .approvalChangesRequested,
+             .untrustedContentInfluencedDecision:
             return .orange
         case .heartbeatStarted:
             return .yellow
