@@ -891,6 +891,35 @@ struct CodexTasksView: View {
             .font(.caption)
             .foregroundStyle(theme.palette.onCoralMuted)
 
+            if let manifest = manager.factoryManifest(id: session.id) {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("Factory assets")
+                            .os1Style(theme.typography.label)
+                            .foregroundStyle(theme.palette.onCoralMuted)
+                        Spacer()
+                        Label(manifest.canLaunch ? "launch gates passed" : "launch gated", systemImage: manifest.canLaunch ? "checkmark.seal" : "lock.shield")
+                            .foregroundStyle(manifest.canLaunch ? .green : .orange)
+                    }
+                    ForEach(manifest.assets.prefix(6)) { asset in
+                        HStack {
+                            Label(asset.title, systemImage: asset.sandboxTestable ? "testtube.2" : "doc")
+                            Spacer()
+                            Text(URL(fileURLWithPath: asset.path).lastPathComponent)
+                                .font(.system(.caption2, design: .monospaced))
+                        }
+                    }
+                    HStack(spacing: 8) {
+                        ForEach(manifest.gates) { gate in
+                            Label(gate.kind.rawValue, systemImage: gate.passed ? "checkmark.circle" : "xmark.circle")
+                                .foregroundStyle(gate.passed ? .green : .orange)
+                        }
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(theme.palette.onCoralMuted)
+            }
+
             let credentialNames = CodexSessionManager.loadCredentialNames()
             if !credentialNames.isEmpty {
                 Text("Credential grants")

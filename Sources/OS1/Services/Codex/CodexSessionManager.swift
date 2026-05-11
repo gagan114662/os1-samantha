@@ -137,6 +137,8 @@ struct CodexSession: Identifiable, Codable, Hashable {
     var journalPath: String { worktreePath + "/JOURNAL.md" }
     var revenuePath: String { worktreePath + "/REVENUE.md" }
     var ledgerPath: String { worktreePath + "/LEDGER.json" }
+    var assetRegistryPath: String { worktreePath + "/COMPANY_ASSETS.json" }
+    var launchChecklistPath: String { worktreePath + "/launch-checklist.md" }
     var approvalRequestPath: String { worktreePath + "/APPROVAL_REQUEST.json" }
     var approvalDecisionPath: String { worktreePath + "/APPROVAL_DECISION.json" }
     var approvalGrantPath: String { worktreePath + "/APPROVAL_GRANTED.json" }
@@ -316,6 +318,19 @@ final class CodexSessionManager: ObservableObject {
         try "# Revenue\n\n- \(Self.todayString()) $0 baseline (no revenue API connected yet)\n"
             .write(toFile: worktreePath + "/REVENUE.md", atomically: true, encoding: .utf8)
         try "[]\n".write(toFile: worktreePath + "/LEDGER.json", atomically: true, encoding: .utf8)
+        let factoryManifest = CompanyFactory.manifest(
+            companyID: id,
+            template: templateID.flatMap(CompanyTemplateCatalog.template(id:)),
+            worktreePath: worktreePath
+        )
+        let manifestEncoder = JSONEncoder()
+        manifestEncoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try manifestEncoder.encode(factoryManifest)
+            .write(to: URL(fileURLWithPath: worktreePath + "/COMPANY_ASSETS.json"), options: [.atomic])
+        for asset in factoryManifest.assets {
+            try CompanyFactory.starterContent(for: asset, manifest: factoryManifest)
+                .write(toFile: asset.path, atomically: true, encoding: .utf8)
+        }
 
         let session = CodexSession(
             id: id,
@@ -754,6 +769,13 @@ final class CodexSessionManager: ObservableObject {
     func ledgerSummary(id: String) -> CompanyLedgerSummary {
         guard let session = sessions.first(where: { $0.id == id }) else { return .empty }
         return ledgerSummary(for: session)
+    }
+
+    func factoryManifest(id: String) -> CompanyFactoryManifest? {
+        guard let session = sessions.first(where: { $0.id == id }),
+              let data = try? Data(contentsOf: URL(fileURLWithPath: session.assetRegistryPath))
+        else { return nil }
+        return try? JSONDecoder().decode(CompanyFactoryManifest.self, from: data)
     }
 
     private func ledgerSummary(for session: CodexSession) -> CompanyLedgerSummary {
