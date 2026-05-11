@@ -29,10 +29,14 @@ struct CompanyLifecycleEngineTests {
         let loss = CompanyLifecycleEngine.decide(snapshot(stage: .launched, ledger: CompanyLedgerSummary(entries: [
             CompanyLedgerEntry(id: "loss", companyID: "c", occurredAt: nil, kind: .cost, amountUSD: 100, source: "manual", confidence: .manual, note: "loss")
         ])))
+        let hardBudget = CompanyLifecycleEngine.decide(snapshot(stage: .launched, budgetStatus: .hardStop))
+        let emergencyBudget = CompanyLifecycleEngine.decide(snapshot(stage: .launched, budgetStatus: .emergencyShutdown))
 
         #expect(critical.action == .kill)
         #expect(failures.action == .pause)
         #expect(loss.action == .pause)
+        #expect(hardBudget.action == .pause)
+        #expect(emergencyBudget.action == .kill)
     }
 
     @Test
@@ -64,6 +68,7 @@ struct CompanyLifecycleEngineTests {
         stage: CodexSession.LifecycleStage,
         validation: CompanyValidationResult.Decision? = nil,
         ledger: CompanyLedgerSummary = .empty,
+        budgetStatus: CompanyBudgetStatus? = nil,
         failures: Int = 0,
         risk: CompanyIdea.RiskTier = .low,
         artifacts: [String] = []
@@ -73,6 +78,21 @@ struct CompanyLifecycleEngineTests {
             stage: stage,
             validationDecision: validation,
             ledger: ledger,
+            budgetReport: budgetStatus.map {
+                CompanyBudgetReport(
+                    companyID: companyID,
+                    status: $0,
+                    companyEstimatedSpendUSD: 0,
+                    companyActualSpendUSD: 0,
+                    companyHardLimitUSD: 50,
+                    companyEmergencyLimitUSD: 100,
+                    globalSpendUSD: 0,
+                    globalHardLimitUSD: 500,
+                    globalEmergencyLimitUSD: 750,
+                    channelUsage: [],
+                    reasons: [$0.rawValue]
+                )
+            },
             distribution: nil,
             failureCount: failures,
             complianceRisk: risk,

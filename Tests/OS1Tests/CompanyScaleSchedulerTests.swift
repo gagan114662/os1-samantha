@@ -67,6 +67,54 @@ struct CompanyScaleSchedulerTests {
     }
 
     @Test
+    func schedulerStartsHealthyCompaniesBeforeBudgetWarningCompanies() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let warning = makeSession(id: "warning", status: .idle, nextHeartbeatAt: now.addingTimeInterval(-10))
+        let healthy = makeSession(id: "healthy", status: .idle, nextHeartbeatAt: now.addingTimeInterval(-1))
+        let warningReport = CompanyBudgetReport(
+            companyID: "warning",
+            status: .warning,
+            companyEstimatedSpendUSD: 0,
+            companyActualSpendUSD: 40,
+            companyHardLimitUSD: 50,
+            companyEmergencyLimitUSD: 100,
+            globalSpendUSD: 40,
+            globalHardLimitUSD: 500,
+            globalEmergencyLimitUSD: 750,
+            channelUsage: [],
+            reasons: ["companyWarningLimit"]
+        )
+        let healthyReport = CompanyBudgetReport(
+            companyID: "healthy",
+            status: .healthy,
+            companyEstimatedSpendUSD: 0,
+            companyActualSpendUSD: 0,
+            companyHardLimitUSD: 50,
+            companyEmergencyLimitUSD: 100,
+            globalSpendUSD: 40,
+            globalHardLimitUSD: 500,
+            globalEmergencyLimitUSD: 750,
+            channelUsage: [],
+            reasons: []
+        )
+
+        let plan = CompanyScaleScheduler.plan(
+            sessions: [warning, healthy],
+            now: now,
+            limits: CompanySchedulerLimits(
+                maxGlobalConcurrentHeartbeats: 1,
+                maxQueuedCompaniesBeforeBackpressure: 100,
+                maxFailedCompaniesBeforeBackpressure: 100
+            ),
+            budgetReports: ["warning": warningReport, "healthy": healthyReport]
+        )
+
+        #expect(plan.startNowIDs == ["healthy"])
+        #expect(plan.queuedIDs == ["warning"])
+        #expect(plan.budgetWarningIDs == ["warning"])
+    }
+
+    @Test
     func backpressureStopsNewStartsWhenQueueOrFailuresAreTooHigh() {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let sessions = [

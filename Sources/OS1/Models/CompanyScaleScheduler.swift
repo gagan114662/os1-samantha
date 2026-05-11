@@ -31,6 +31,7 @@ struct CompanyHeartbeatSchedulePlan: Codable, Hashable {
     var queuedIDs: [String]
     var blockedIDs: [String]
     var pauseIDs: [String]
+    var budgetWarningIDs: [String]
     var backpressureReasons: [String]
 }
 
@@ -44,6 +45,9 @@ struct CompanyFleetStatus: Codable, Hashable {
     var paused: Int
     var idle: Int
     var runners: [String: Int]
+    var budgetStatus: CompanyBudgetStatus
+    var globalSpendUSD: Double
+    var globalHardLimitUSD: Double
 }
 
 enum CompanyScaleScheduler {
@@ -55,18 +59,40 @@ enum CompanyScaleScheduler {
         limits: CompanySchedulerLimits = .productionDefault,
         runners: [CompanyRunner] = [.local],
         ledgerSummaries: [String: CompanyLedgerSummary] = [:],
-        profitabilityPolicy: CompanyProfitabilityPolicy = .productionDefault
+        profitabilityPolicy: CompanyProfitabilityPolicy = .productionDefault,
+        budgetReports: [String: CompanyBudgetReport] = [:]
     ) -> CompanyHeartbeatSchedulePlan {
         let activeCount = sessions.filter { $0.status == .running }.count
         let queuedCount = sessions.filter { $0.status == .queued }.count
         let failedCount = sessions.filter { $0.status == .failed }.count
         var backpressure: [String] = []
+        let computedBudgetReports: [String: CompanyBudgetReport] = budgetReports.isEmpty
+            ? Dictionary(uniqueKeysWithValues: sessions.compactMap { session in
+                guard let summary = ledgerSummaries[session.id] else { return nil }
+                return (
+                    session.id,
+                    CompanyBudgetGuardian.evaluate(
+                        companyID: session.id,
+                        ledger: summary,
+                        budget: session.budget,
+                        globalLedgerSummaries: Array(ledgerSummaries.values),
+                        now: now
+                    )
+                )
+            })
+            : budgetReports
+        let globalBudgetReport = CompanyBudgetGuardian.globalReport(summaries: Array(ledgerSummaries.values))
 
         if queuedCount > limits.maxQueuedCompaniesBeforeBackpressure {
             backpressure.append("queueDepth")
         }
         if failedCount > limits.maxFailedCompaniesBeforeBackpressure {
             backpressure.append("failureRate")
+        }
+        if globalBudgetReport.status == .warning {
+            backpressure.append("globalBudgetWarning")
+        } else if globalBudgetReport.shouldBlockHeartbeat {
+            backpressure.append("globalBudgetHardStop")
         }
 
         var runnerCapacity = Dictionary(uniqueKeysWithValues: runners.map {
@@ -80,6 +106,7 @@ enum CompanyScaleScheduler {
         var start: [String] = []
         var queued: [String] = []
         var blocked: [String] = []
+        var budgetWarningIDs: [String] = []
         let pauseIDs = sessions.compactMap { session -> String? in
             guard let summary = ledgerSummaries[session.id],
                   CompanyProfitabilityGuard.evaluate(summary: summary, policy: profitabilityPolicy).shouldPause
@@ -93,11 +120,29 @@ enum CompanyScaleScheduler {
             .sorted { lhs, rhs in
                 let lhsDate = lhs.nextHeartbeatAt ?? lhs.startedAt
                 let rhsDate = rhs.nextHeartbeatAt ?? rhs.startedAt
+                let lhsBudget = budgetPriority(computedBudgetReports[lhs.id])
+                let rhsBudget = budgetPriority(computedBudgetReports[rhs.id])
+                if lhsBudget != rhsBudget { return lhsBudget < rhsBudget }
                 if lhsDate == rhsDate { return lhs.id < rhs.id }
                 return lhsDate < rhsDate
             }
 
         for session in eligible {
+            if globalBudgetReport.shouldBlockHeartbeat {
+                blocked.append(session.id)
+                continue
+            }
+
+            if let report = computedBudgetReports[session.id] {
+                if report.shouldBlockHeartbeat {
+                    blocked.append(session.id)
+                    continue
+                }
+                if report.isNearLimit {
+                    budgetWarningIDs.append(session.id)
+                }
+            }
+
             if pauseSet.contains(session.id) {
                 blocked.append(session.id)
                 continue
@@ -144,6 +189,7 @@ enum CompanyScaleScheduler {
             queuedIDs: queued,
             blockedIDs: blocked,
             pauseIDs: pauseIDs,
+            budgetWarningIDs: budgetWarningIDs,
             backpressureReasons: backpressure
         )
     }
@@ -158,7 +204,8 @@ enum CompanyScaleScheduler {
 
     static func fleetStatus(
         sessions: [CodexSession],
-        profitableCompanyIDs: Set<String>
+        profitableCompanyIDs: Set<String>,
+        globalBudgetReport: CompanyBudgetReport? = nil
     ) -> CompanyFleetStatus {
         CompanyFleetStatus(
             total: sessions.count,
@@ -171,7 +218,20 @@ enum CompanyScaleScheduler {
             idle: sessions.filter { $0.status == .idle }.count,
             runners: sessions.reduce(into: [:]) { counts, session in
                 counts[session.assignedRunnerID, default: 0] += 1
-            }
+            },
+            budgetStatus: globalBudgetReport?.status ?? .healthy,
+            globalSpendUSD: globalBudgetReport?.globalSpendUSD ?? 0,
+            globalHardLimitUSD: globalBudgetReport?.globalHardLimitUSD ?? CompanyBudgetPolicy.productionDefault.globalHardLimitUSD
         )
+    }
+
+    private static func budgetPriority(_ report: CompanyBudgetReport?) -> Int {
+        guard let report else { return 0 }
+        switch report.status {
+        case .healthy: return 0
+        case .warning: return 1
+        case .hardStop: return 2
+        case .emergencyShutdown: return 3
+        }
     }
 }

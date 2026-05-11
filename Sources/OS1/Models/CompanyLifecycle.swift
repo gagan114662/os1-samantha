@@ -5,6 +5,7 @@ struct CompanyEvidenceSnapshot: Codable, Hashable {
     var stage: CodexSession.LifecycleStage
     var validationDecision: CompanyValidationResult.Decision?
     var ledger: CompanyLedgerSummary
+    var budgetReport: CompanyBudgetReport?
     var distribution: CompanyDistributionSummary?
     var failureCount: Int
     var complianceRisk: CompanyIdea.RiskTier
@@ -17,6 +18,8 @@ struct CompanyEvidenceSnapshot: Codable, Hashable {
         if ledger.canMarkProfitable { score += 30 }
         if ledger.netUSD > 0 { score += 15 }
         if distribution?.active.isEmpty == false { score += 10 }
+        if budgetReport?.status == .warning { score -= 8 }
+        if budgetReport?.shouldBlockHeartbeat == true { score -= 25 }
         score -= failureCount * 3
         if complianceRisk == .high || complianceRisk == .critical { score -= 10 }
         return max(0, score)
@@ -60,6 +63,12 @@ enum CompanyLifecycleEngine {
         }
         if evidence.failureCount >= 5 {
             return .init(action: .pause, from: evidence.stage, to: .paused, rationale: "Repeated failures breached lifecycle guard.", requiresOverride: false, evidence: evidence)
+        }
+        if evidence.budgetReport?.status == .emergencyShutdown {
+            return .init(action: .kill, from: evidence.stage, to: .killed, rationale: "Emergency budget shutdown threshold reached.", requiresOverride: false, evidence: evidence)
+        }
+        if evidence.budgetReport?.status == .hardStop {
+            return .init(action: .pause, from: evidence.stage, to: .paused, rationale: "Hard budget limit reached.", requiresOverride: false, evidence: evidence)
         }
         let profitability = CompanyProfitabilityGuard.evaluate(summary: evidence.ledger)
         if profitability.shouldPause {

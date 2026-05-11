@@ -24,14 +24,54 @@ struct CodexSession: Identifiable, Codable, Hashable {
         var dailyHeartbeatCount: Int
         var maxDailyHeartbeats: Int
         var maxHeartbeatsWithoutRevenueSignal: Int
+        var policy: CompanyBudgetPolicy
+        var approvals: [CompanyBudgetApproval]
+
+        init(
+            dailyWindowStart: Date,
+            dailyHeartbeatCount: Int,
+            maxDailyHeartbeats: Int,
+            maxHeartbeatsWithoutRevenueSignal: Int,
+            policy: CompanyBudgetPolicy = .productionDefault,
+            approvals: [CompanyBudgetApproval] = []
+        ) {
+            self.dailyWindowStart = dailyWindowStart
+            self.dailyHeartbeatCount = dailyHeartbeatCount
+            self.maxDailyHeartbeats = maxDailyHeartbeats
+            self.maxHeartbeatsWithoutRevenueSignal = maxHeartbeatsWithoutRevenueSignal
+            self.policy = policy
+            self.approvals = approvals
+        }
 
         static func defaultState(now: Date = Date()) -> BudgetState {
             BudgetState(
                 dailyWindowStart: now,
                 dailyHeartbeatCount: 0,
                 maxDailyHeartbeats: 12,
-                maxHeartbeatsWithoutRevenueSignal: 18
+                maxHeartbeatsWithoutRevenueSignal: 18,
+                policy: .productionDefault,
+                approvals: []
             )
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case dailyWindowStart
+            case dailyHeartbeatCount
+            case maxDailyHeartbeats
+            case maxHeartbeatsWithoutRevenueSignal
+            case policy
+            case approvals
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            let defaults = BudgetState.defaultState()
+            dailyWindowStart = try container.decodeIfPresent(Date.self, forKey: .dailyWindowStart) ?? defaults.dailyWindowStart
+            dailyHeartbeatCount = try container.decodeIfPresent(Int.self, forKey: .dailyHeartbeatCount) ?? defaults.dailyHeartbeatCount
+            maxDailyHeartbeats = try container.decodeIfPresent(Int.self, forKey: .maxDailyHeartbeats) ?? defaults.maxDailyHeartbeats
+            maxHeartbeatsWithoutRevenueSignal = try container.decodeIfPresent(Int.self, forKey: .maxHeartbeatsWithoutRevenueSignal) ?? defaults.maxHeartbeatsWithoutRevenueSignal
+            policy = try container.decodeIfPresent(CompanyBudgetPolicy.self, forKey: .policy) ?? defaults.policy
+            approvals = try container.decodeIfPresent([CompanyBudgetApproval].self, forKey: .approvals) ?? []
         }
     }
 
@@ -717,6 +757,45 @@ final class CodexSessionManager: ObservableObject {
             budget.dailyWindowStart = now
             budget.dailyHeartbeatCount = 0
         }
+        sessions[idx].budget = budget
+
+        let report = budgetReport(for: sessions[idx], now: now)
+        if report.status == .emergencyShutdown {
+            sessions[idx].status = .killed
+            sessions[idx].lifecycleStage = .killed
+            sessions[idx].blockedReason = "budget guard: emergency shutdown after \(money(report.companySpendUSD)) spend"
+            sessions[idx].nextHeartbeatAt = nil
+            appendSystemNote(
+                id: id,
+                text: "KILLED by budget guard: emergency shutdown threshold reached. Reasons: \(report.reasons.joined(separator: ","))."
+            )
+            persistSessions()
+            appendEvent(
+                kind: .budgetBlocked,
+                companyID: id,
+                summary: "Budget guard emergency shutdown",
+                metadata: budgetMetadata(report)
+            )
+            return false
+        }
+
+        if report.status == .hardStop {
+            sessions[idx].status = .blocked
+            sessions[idx].blockedReason = "budget guard: hard spend limit reached (\(report.reasons.joined(separator: ",")))"
+            sessions[idx].nextHeartbeatAt = nil
+            appendSystemNote(
+                id: id,
+                text: "BLOCKED by budget guard: hard spend limit reached. Write APPROVAL_REQUEST.json for any budget increase before more paid work."
+            )
+            persistSessions()
+            appendEvent(
+                kind: .budgetBlocked,
+                companyID: id,
+                summary: "Budget guard blocked company at hard spend limit",
+                metadata: budgetMetadata(report)
+            )
+            return false
+        }
 
         if sessions[idx].heartbeatCount >= budget.maxHeartbeatsWithoutRevenueSignal {
             let summary = ledgerSummary(for: sessions[idx])
@@ -766,9 +845,45 @@ final class CodexSessionManager: ObservableObject {
         return true
     }
 
+    private func enforceSpendPolicy(id: String) {
+        guard let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
+        let report = budgetReport(for: sessions[idx])
+        guard report.shouldBlockHeartbeat else { return }
+
+        if report.status == .emergencyShutdown {
+            sessions[idx].status = .killed
+            sessions[idx].lifecycleStage = .killed
+            sessions[idx].blockedReason = "budget guard: emergency shutdown after \(money(report.companySpendUSD)) spend"
+        } else {
+            sessions[idx].status = .blocked
+            sessions[idx].blockedReason = "budget guard: hard spend limit reached (\(report.reasons.joined(separator: ",")))"
+        }
+        sessions[idx].nextHeartbeatAt = nil
+        appendEvent(
+            kind: .budgetBlocked,
+            companyID: id,
+            summary: report.status == .emergencyShutdown ? "Budget guard emergency shutdown after spend sync" : "Budget guard blocked company after spend sync",
+            metadata: budgetMetadata(report)
+        )
+    }
+
     func ledgerSummary(id: String) -> CompanyLedgerSummary {
         guard let session = sessions.first(where: { $0.id == id }) else { return .empty }
         return ledgerSummary(for: session)
+    }
+
+    func budgetReport(id: String) -> CompanyBudgetReport {
+        guard let session = sessions.first(where: { $0.id == id }) else {
+            return CompanyBudgetGuardian.globalReport(summaries: [])
+        }
+        return budgetReport(for: session)
+    }
+
+    func fleetBudgetReport() -> CompanyBudgetReport {
+        CompanyBudgetGuardian.globalReport(
+            summaries: sessions.map { ledgerSummary(for: $0) },
+            budget: sessions.first?.budget
+        )
     }
 
     func factoryManifest(id: String) -> CompanyFactoryManifest? {
@@ -782,6 +897,32 @@ final class CodexSessionManager: ObservableObject {
         let revenue = (try? String(contentsOfFile: session.revenuePath, encoding: .utf8)) ?? ""
         let ledger = (try? String(contentsOfFile: session.ledgerPath, encoding: .utf8)) ?? ""
         return CompanyLedgerParser.summarize(revenueMarkdown: revenue, ledgerJSON: ledger)
+    }
+
+    private func budgetReport(for session: CodexSession, now: Date = Date()) -> CompanyBudgetReport {
+        let summaries = sessions.map { ledgerSummary(for: $0) }
+        return CompanyBudgetGuardian.evaluate(
+            companyID: session.id,
+            ledger: ledgerSummary(for: session),
+            budget: session.budget,
+            globalLedgerSummaries: summaries,
+            now: now
+        )
+    }
+
+    private func budgetMetadata(_ report: CompanyBudgetReport) -> [String: String] {
+        [
+            "budgetStatus": report.status.rawValue,
+            "companySpendUSD": money(report.companySpendUSD),
+            "companyHardLimitUSD": money(report.companyHardLimitUSD),
+            "globalSpendUSD": money(report.globalSpendUSD),
+            "globalHardLimitUSD": money(report.globalHardLimitUSD),
+            "reasons": report.reasons.joined(separator: ",")
+        ]
+    }
+
+    private func money(_ value: Double) -> String {
+        String(format: "%.2f", value)
     }
 
     func recordManualLedgerEntry(
@@ -966,7 +1107,13 @@ final class CodexSessionManager: ObservableObject {
             ? "No platform credentials are exposed to this company sandbox. If your mission needs Stripe/Resend/YouTube/etc, write APPROVAL_REQUEST.json if the action is high-risk, then emit BLOCKED: <which credential/scope>."
             : "Available platform credentials in this company's sandbox environment (already exported, just use them within approved scope): \(availableCreds.joined(separator: ", "))"
         let budget = session.budget ?? .defaultState()
-        let budgetLine = "Budget guard: \(budget.dailyHeartbeatCount)/\(budget.maxDailyHeartbeats) heartbeats used in current 24h window; OS1 blocks after \(budget.maxHeartbeatsWithoutRevenueSignal) total heartbeats without verified revenue in REVENUE.md."
+        let budgetReport = budgetReport(for: session)
+        let channelSpend = budgetReport.channelUsage
+            .filter { $0.totalUSD > 0 || $0.hardLimitUSD != nil }
+            .prefix(6)
+            .map { "\($0.category.rawValue)=\(money($0.totalUSD))/\($0.hardLimitUSD.map(money) ?? "unlimited")" }
+            .joined(separator: ", ")
+        let budgetLine = "Budget guard: \(budget.dailyHeartbeatCount)/\(budget.maxDailyHeartbeats) heartbeats used in current 24h window; spend status \(budgetReport.status.rawValue); company spend $\(money(budgetReport.companySpendUSD))/$\(money(budgetReport.companyHardLimitUSD)) hard, emergency $\(money(budgetReport.companyEmergencyLimitUSD)); global spend $\(money(budgetReport.globalSpendUSD))/$\(money(budgetReport.globalHardLimitUSD)) hard; channels \(channelSpend). OS1 blocks after \(budget.maxHeartbeatsWithoutRevenueSignal) total heartbeats without verified revenue in REVENUE.md. Budget increases require APPROVAL_REQUEST.json plus an unexpired approval before more paid work."
         let sandboxLine = "Sandbox mode: \(session.sandboxMode.rawValue). Credential allowlist: \(session.credentialAllowlist.isEmpty ? "(empty)" : session.credentialAllowlist.joined(separator: ", "))."
 
         let summaryNudge = (session.heartbeatCount > 0 && session.heartbeatCount % 10 == 0)
@@ -989,7 +1136,7 @@ final class CodexSessionManager: ObservableObject {
         6. Track money in REVENUE.md and LEDGER.json. Every heartbeat: append the day's revenue/costs (from a real Stripe/etc API call), or "(no revenue API connected yet)".
         7. Your work WILL be audited. Hallucinations get caught and reverted. Be honest in the journal — write "(unverified)" or "(failed)" when things didn't work. Lying creates more work for you, not less.
         8. Lifecycle discipline: validating means collect demand evidence; building means ship the smallest monetizable asset; launched means measure real users/revenue; revenuePositive means improve margin and repeatability. Do not scale without verified revenue and positive net.
-        9. Approval gate: before spending money, creating/charging/refunding payments, publishing public content, messaging humans, deleting assets, changing credentials, signing contracts, or touching regulated/real-estate/legal/financial claims, write APPROVAL_REQUEST.json using the schema below and end with `BLOCKED: approval required for <action>`. Only execute a high-risk action when APPROVAL_GRANTED.json exists, is unexpired, and matches the action scope.
+        9. Approval gate: before spending money, increasing budget, creating/charging/refunding payments, publishing public content, messaging humans, deleting assets, changing credentials, signing contracts, or touching regulated/real-estate/legal/financial claims, write APPROVAL_REQUEST.json using the schema below and end with `BLOCKED: approval required for <action>`. Only execute a high-risk action when APPROVAL_GRANTED.json exists, is unexpired, and matches the action scope.
 
         ## YOUR WORKSPACE
         Working directory is your cwd. Files you should know about:
@@ -1162,8 +1309,9 @@ final class CodexSessionManager: ObservableObject {
         } else {
             sessions[idx].status = .idle
             updateLifecycleAfterHeartbeat(id: id)
+            enforceSpendPolicy(id: id)
             enforceProfitabilityPolicy(id: id)
-            guard sessions[idx].status != .paused else {
+            guard sessions[idx].status == .idle else {
                 sessions[idx].nextHeartbeatAt = nil
                 sessions[idx].exitCode = exitCode
                 sessions[idx].heartbeatLease = nil
@@ -1533,7 +1681,7 @@ final class CodexSessionManager: ObservableObject {
         note: String,
         grantHours: Int?
     ) {
-        guard let session = sessions.first(where: { $0.id == request.companyID }) else { return }
+        guard let idx = sessions.firstIndex(where: { $0.id == request.companyID }) else { return }
         let now = Date()
         var decided = request
         decided.status = status
@@ -1547,17 +1695,18 @@ final class CodexSessionManager: ObservableObject {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         if let data = try? encoder.encode(decided) {
-            try? data.write(to: URL(fileURLWithPath: session.approvalRequestPath), options: [.atomic])
-            try? data.write(to: URL(fileURLWithPath: session.approvalDecisionPath), options: [.atomic])
+            try? data.write(to: URL(fileURLWithPath: sessions[idx].approvalRequestPath), options: [.atomic])
+            try? data.write(to: URL(fileURLWithPath: sessions[idx].approvalDecisionPath), options: [.atomic])
             if status == .approved {
-                try? data.write(to: URL(fileURLWithPath: session.approvalGrantPath), options: [.atomic])
+                try? data.write(to: URL(fileURLWithPath: sessions[idx].approvalGrantPath), options: [.atomic])
             } else {
-                try? FileManager.default.removeItem(atPath: session.approvalGrantPath)
+                try? FileManager.default.removeItem(atPath: sessions[idx].approvalGrantPath)
             }
         }
 
         switch status {
         case .approved:
+            applyBudgetApprovalIfNeeded(request: decided, sessionIndex: idx)
             appendEvent(
                 kind: .approvalApproved,
                 companyID: request.companyID,
@@ -1596,6 +1745,32 @@ final class CodexSessionManager: ObservableObject {
         case .pending, .expired:
             break
         }
+    }
+
+    private func applyBudgetApprovalIfNeeded(request: CompanyApprovalRequest, sessionIndex idx: Int) {
+        guard let approval = CompanyBudgetGuardian.approval(
+            from: request,
+            approvedAt: request.decidedAt ?? Date(),
+            expiresAt: request.expiresAt
+        ) else { return }
+
+        var budget = sessions[idx].budget ?? .defaultState()
+        budget.approvals.removeAll { $0.id == approval.id }
+        budget.approvals.append(approval)
+        sessions[idx].budget = budget
+        persistSessions()
+        appendEvent(
+            kind: .approvalApproved,
+            companyID: request.companyID,
+            actor: "user",
+            summary: "Budget increase approved: \(request.proposedAction)",
+            metadata: [
+                "requestID": request.id,
+                "companyIncreaseUSD": money(approval.companyIncreaseUSD),
+                "globalIncreaseUSD": money(approval.globalIncreaseUSD),
+                "expiresAt": approval.expiresAt.map { ISO8601DateFormatter().string(from: $0) } ?? ""
+            ]
+        )
     }
 
     // MARK: - Auto-resume scheduler on app start
@@ -1820,7 +1995,8 @@ final class CodexSessionManager: ObservableObject {
 
     func schedulerPlan(now: Date = Date()) -> CompanyHeartbeatSchedulePlan {
         let summaries = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, ledgerSummary(for: $0)) })
-        return CompanyScaleScheduler.plan(sessions: sessions, now: now, ledgerSummaries: summaries)
+        let reports = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, budgetReport(for: $0, now: now)) })
+        return CompanyScaleScheduler.plan(sessions: sessions, now: now, ledgerSummaries: summaries, budgetReports: reports)
     }
 
     func fleetStatus() -> CompanyFleetStatus {
@@ -1828,7 +2004,11 @@ final class CodexSessionManager: ObservableObject {
             let summary = ledgerSummary(for: session)
             return summary.canMarkProfitable ? session.id : nil
         })
-        return CompanyScaleScheduler.fleetStatus(sessions: sessions, profitableCompanyIDs: profitable)
+        return CompanyScaleScheduler.fleetStatus(
+            sessions: sessions,
+            profitableCompanyIDs: profitable,
+            globalBudgetReport: fleetBudgetReport()
+        )
     }
 
     func portfolioRanks() -> [CompanyPortfolioRank] {
@@ -1839,6 +2019,7 @@ final class CodexSessionManager: ObservableObject {
                 stage: session.lifecycleStage,
                 validationDecision: nil,
                 ledger: ledgerSummary(for: session),
+                budgetReport: budgetReport(for: session),
                 distribution: factoryManifest(id: session.id).map {
                     CompanyDistributionEngine.summarize(
                         campaigns: CompanyDistributionEngine.proposedCampaigns(companyID: session.id, manifest: $0),

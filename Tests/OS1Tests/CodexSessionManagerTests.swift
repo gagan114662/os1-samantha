@@ -282,6 +282,35 @@ struct CodexSessionManagerTests {
         #expect(session.sandboxMode == .sandbox)
     }
 
+    @Test
+    func legacyBudgetStateDecodesWithSpendPolicyDefaults() throws {
+        let legacyJSON = """
+        [{
+            "id": "budget",
+            "title": "legacy-budget",
+            "task": "do stuff",
+            "worktreePath": "/tmp/budget",
+            "branch": "company/budget",
+            "status": "idle",
+            "startedAt": 800000000.0,
+            "budget": {
+                "dailyWindowStart": 800000000.0,
+                "dailyHeartbeatCount": 3,
+                "maxDailyHeartbeats": 6,
+                "maxHeartbeatsWithoutRevenueSignal": 12
+            }
+        }]
+        """.data(using: .utf8)!
+
+        let decoded = try JSONDecoder().decode([CodexSession].self, from: legacyJSON)
+        let session = try #require(decoded.first)
+
+        #expect(session.budget?.dailyHeartbeatCount == 3)
+        #expect(session.budget?.maxDailyHeartbeats == 6)
+        #expect(session.budget?.policy.companyHardLimitUSD == CompanyBudgetPolicy.productionDefault.companyHardLimitUSD)
+        #expect(session.budget?.approvals.isEmpty == true)
+    }
+
     // MARK: - Restart recovery / leases
 
     @Test

@@ -167,4 +167,21 @@ struct CompanyLedgerTests {
         #expect(CompanyProfitabilityGuard.evaluate(summary: loss).shouldPause)
         #expect(override.canMarkProfitable)
     }
+
+    @Test
+    func ledgerParserClassifiesOperationalSpendChannels() {
+        let markdown = """
+        - verified Codex token cost: $3.25 receipt=codex_1
+        - verified Orgo VM cloud cost: $8.00 receipt=orgo_1
+        - manual paid API tool spend: $12.00
+        - domain purchase: $14.00 receipt=domain_1
+        """
+
+        let summary = CompanyLedgerParser.summarize(revenueMarkdown: markdown)
+
+        #expect(summary.entries.contains { $0.category == .tokenUsage && $0.amountUSD == 3.25 })
+        #expect(summary.entries.contains { $0.category == .cloudCompute && $0.amountUSD == 8.00 })
+        #expect(summary.entries.contains { $0.category == .tools && $0.amountUSD == 12.00 })
+        #expect(summary.entries.contains { $0.category == .purchases && $0.amountUSD == 14.00 })
+    }
 }

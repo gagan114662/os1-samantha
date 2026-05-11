@@ -17,6 +17,7 @@ struct CompanyLedgerEntry: Codable, Hashable, Identifiable {
         case tokenUsage
         case manualLabor
         case paymentFees
+        case purchases
         case other
     }
 
@@ -279,11 +280,12 @@ enum CompanyLedgerParser {
         if kind == .refund { return .refund }
         if lower.contains("subscription") { return .subscription }
         if lower.contains(" ad ") || lower.contains("ads") || lower.contains("advertis") { return .ads }
-        if lower.contains("tool") || lower.contains("software") { return .tools }
+        if lower.contains("tool") || lower.contains("software") || lower.contains("api") { return .tools }
         if lower.contains("cloud") || lower.contains("orgo") || lower.contains("vm") || lower.contains("compute") { return .cloudCompute }
         if lower.contains("token") || lower.contains("codex") || lower.contains("claude") || lower.contains("openai") { return .tokenUsage }
         if lower.contains("labor") || lower.contains("contractor") || lower.contains("manual work") { return .manualLabor }
         if lower.contains("fee") || lower.contains("stripe") || lower.contains("paypal") { return .paymentFees }
+        if lower.contains("purchase") || lower.contains("bought") || lower.contains("domain") { return .purchases }
         if kind == .revenue { return .sales }
         return .other
     }

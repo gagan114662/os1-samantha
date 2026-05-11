@@ -56,6 +56,7 @@ struct CodexTasksView: View {
 
     private var header: some View {
         let status = manager.fleetStatus()
+        let budget = manager.fleetBudgetReport()
         return HStack(spacing: 10) {
             Image(systemName: "square.grid.2x2.fill")
                 .font(.system(size: 14, weight: .semibold))
@@ -105,6 +106,9 @@ struct CodexTasksView: View {
                     .os1Style(theme.typography.label)
                     .foregroundStyle(theme.palette.danger)
             }
+            Text("budget \(moneyLabel(budget.globalSpendUSD))/\(moneyLabel(budget.globalHardLimitUSD))")
+                .os1Style(theme.typography.label)
+                .foregroundStyle(budget.status == .healthy ? theme.palette.onCoralMuted : theme.palette.danger)
             if status.profitable > 0 {
                 Text("profitable \(status.profitable)")
                     .os1Style(theme.typography.label)
@@ -623,6 +627,7 @@ struct CodexTasksView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 8) {
+                let budgetReport = manager.budgetReport(id: session.id)
                 Label("hb #\(session.heartbeatCount)", systemImage: "waveform.path.ecg")
                     .font(.caption2)
                     .foregroundStyle(theme.palette.onCoralMuted)
@@ -637,6 +642,9 @@ struct CodexTasksView: View {
                         .font(.caption2)
                         .foregroundStyle(theme.palette.onCoralMuted)
                 }
+                Label("\(moneyLabel(budgetReport.companySpendUSD))/\(moneyLabel(budgetReport.companyHardLimitUSD))", systemImage: "creditcard.trianglebadge.exclamationmark")
+                    .font(.caption2)
+                    .foregroundStyle(budgetReport.status == .healthy ? theme.palette.onCoralMuted : theme.palette.danger)
                 let ledger = manager.ledgerSummary(id: session.id)
                 Label(moneyLabel(ledger.netUSD), systemImage: "dollarsign.circle")
                     .font(.caption2)
@@ -829,6 +837,40 @@ struct CodexTasksView: View {
                 .foregroundStyle(theme.palette.onCoralMuted)
 
             let ledger = manager.ledgerSummary(id: session.id)
+            let budget = manager.budgetReport(id: session.id)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Budget")
+                        .os1Style(theme.typography.label)
+                        .foregroundStyle(theme.palette.onCoralMuted)
+                    Spacer()
+                    Label(budget.status.rawValue, systemImage: budget.status == .healthy ? "checkmark.seal" : "exclamationmark.triangle")
+                        .foregroundStyle(budget.status == .healthy ? .green : .orange)
+                }
+                HStack(spacing: 12) {
+                    Label("spend \(moneyLabel(budget.companySpendUSD))", systemImage: "creditcard")
+                    Label("actual \(moneyLabel(budget.companyActualSpendUSD))", systemImage: "checkmark.circle")
+                    Label("estimated \(moneyLabel(budget.companyEstimatedSpendUSD))", systemImage: "questionmark.circle")
+                    Label("hard \(moneyLabel(budget.companyHardLimitUSD))", systemImage: "gauge.with.dots.needle.67percent")
+                    Label("global \(moneyLabel(budget.globalSpendUSD))/\(moneyLabel(budget.globalHardLimitUSD))", systemImage: "globe")
+                }
+                HStack(spacing: 12) {
+                    ForEach(budget.channelUsage.filter { $0.totalUSD > 0 }.prefix(5), id: \.category) { channel in
+                        Label("\(channel.category.rawValue) \(moneyLabel(channel.totalUSD))", systemImage: "chart.bar")
+                    }
+                    if budget.channelUsage.filter({ $0.totalUSD > 0 }).isEmpty {
+                        Label("no tracked spend", systemImage: "checkmark.circle")
+                    }
+                }
+                if !budget.reasons.isEmpty {
+                    Text(budget.reasons.joined(separator: ", "))
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(theme.palette.danger)
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(theme.palette.onCoralMuted)
+
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Text("P&L")
