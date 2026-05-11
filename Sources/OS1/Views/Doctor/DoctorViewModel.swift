@@ -96,26 +96,34 @@ final class DoctorViewModel: ObservableObject {
         defer { isRefreshing = false }
         actionError = nil
 
+        // Local stack checks always run — they don't depend on a host
+        // being selected. These cover the moving parts that historically
+        // failed silently (codex auth, claude CLI, WUPHF, launchd plists,
+        // keychain credentials, voice-port freshness).
+        let localChecks = await makeLocalStackChecks()
+
         guard let connection = currentConnection else {
-            checks = [Check(
+            checks = localChecks + [Check(
                 id: "no-connection",
                 title: L10n.string("No host selected"),
                 severity: .unknown,
-                summary: L10n.string("Connect to a host on the Host tab to run checks."),
+                summary: L10n.string("Pick a host on the Host tab to run host-level checks (gateway, Hermes, Telegram)."),
                 detail: nil,
                 actions: []
             )]
+            lastRefreshedAt = Date()
             return
         }
 
-        // Probe the host. If this fails, every downstream check is
-        // moot — surface a single transport-level error row.
+        // Probe the host. If this fails, host-level checks are moot — but
+        // local stack checks still matter (in fact more so, because a
+        // local stack issue may be the reason the host is unreachable).
         let statusResult: TelegramVMResult
         do {
             statusResult = try await telegramInstaller.checkStatus(on: connection)
         } catch {
             let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            checks = [Check(
+            checks = localChecks + [Check(
                 id: "host-unreachable",
                 title: L10n.string("Host unreachable"),
                 severity: .error,
@@ -133,10 +141,289 @@ final class DoctorViewModel: ObservableObject {
         let availability = await probeHermesAvailability(on: connection)
         publishHermesAvailability(availability)
         let hermesCheck = makeHermesCheck(availability: availability)
-        // Order: gateway (primary health), Hermes version (often the
-        // explanation when gateway misbehaves), telegram (downstream).
-        checks = [gatewayCheck, hermesCheck, telegramCheck]
+        // Order: local stack first (machine-side state user can fix without
+        // touching the VM), then host-level (gateway, Hermes version,
+        // Telegram downstream).
+        checks = localChecks + [gatewayCheck, hermesCheck, telegramCheck]
         lastRefreshedAt = Date()
+    }
+
+    // MARK: - Local stack checks
+
+    /// Probe the Mac-side moving parts that the rest of OS1 depends on.
+    /// Each runs with a short timeout and returns a Check row; never throws.
+    private func makeLocalStackChecks() async -> [Check] {
+        async let codex = makeBinaryCheck(id: "cli-codex", title: "Codex CLI", binary: "codex", versionArgs: ["--version"])
+        async let claude = makeBinaryCheck(id: "cli-claude", title: "Claude Code CLI", binary: "claude", versionArgs: ["--version"])
+        async let wuphf = makeWUPHFCheck()
+        async let launchd = makeLaunchdCheck()
+        async let voicePort = makeVoicePortCheck()
+        async let keychain = makeKeychainCheck()
+        async let notarization = makeNotarizationCheck()
+        return await [codex, claude, wuphf, launchd, voicePort, keychain, notarization]
+    }
+
+    /// Reports whether the built OS1.app bundle is Developer-ID-signed +
+    /// notarized + stapled. Matters when distributing to anyone other than
+    /// yourself — without notarization, fresh Macs show "unidentified
+    /// developer" Gatekeeper warnings.
+    private func makeNotarizationCheck() async -> Check {
+        let appPath = "/Users/gaganarora/Desktop/my projects/hermes-desktop-os1/dist/OS1.app"
+        guard FileManager.default.fileExists(atPath: appPath) else {
+            return Check(
+                id: "notarization",
+                title: "App bundle signing",
+                severity: .unknown,
+                summary: L10n.string("dist/OS1.app not built yet"),
+                detail: L10n.string("Run scripts/build-macos-app.sh to produce a bundle. Then this check will report its signing + notarization state."),
+                actions: []
+            )
+        }
+        let codesignOut = await runWithTimeout(
+            executable: "/usr/bin/codesign",
+            args: ["-dv", "--verbose=2", appPath],
+            timeoutSec: 4
+        ) ?? ""
+        let isAdhoc = codesignOut.contains("Signature=adhoc")
+        let hardenedRuntime = codesignOut.contains("flags=0x10000(runtime)") || codesignOut.contains("hardened")
+
+        let spctlOut = await runWithTimeout(
+            executable: "/usr/sbin/spctl",
+            args: ["--assess", "--type", "execute", "-vv", appPath],
+            timeoutSec: 4
+        ) ?? ""
+        let notarized = spctlOut.contains("source=Notarized Developer ID")
+        let stapleOut = await runWithTimeout(
+            executable: "/usr/bin/xcrun",
+            args: ["stapler", "validate", appPath],
+            timeoutSec: 4
+        ) ?? ""
+        let stapled = stapleOut.contains("worked")
+
+        if notarized && stapled {
+            return Check(
+                id: "notarization",
+                title: "App bundle signing",
+                severity: .ok,
+                summary: L10n.string("Notarized + stapled, hardened runtime"),
+                detail: codesignOut.prefix(400) + "\n---\n" + spctlOut.prefix(200),
+                actions: []
+            )
+        }
+        if isAdhoc {
+            return Check(
+                id: "notarization",
+                title: "App bundle signing",
+                severity: .warn,
+                summary: L10n.string("Ad-hoc signed only — fine for local dev, not shippable"),
+                detail: L10n.string("To ship: set OS1_CODESIGN_IDENTITY to a Developer ID Application cert and re-run scripts/build-macos-app.sh, then run scripts/notarize.sh. See the script header for the one-time `xcrun notarytool store-credentials` setup."),
+                actions: []
+            )
+        }
+        return Check(
+            id: "notarization",
+            title: "App bundle signing",
+            severity: .warn,
+            summary: L10n.string("Signed but not notarized"),
+            detail: L10n.string("Hardened runtime: %@. Notarized: %@. Stapled: %@. Run scripts/notarize.sh to complete the chain.",
+                                hardenedRuntime ? "yes" : "no",
+                                notarized ? "yes" : "no",
+                                stapled ? "yes" : "no"),
+            actions: []
+        )
+    }
+
+    private func makeBinaryCheck(id: String, title: String, binary: String, versionArgs: [String]) async -> Check {
+        let path = which(binary)
+        guard let path else {
+            return Check(
+                id: id,
+                title: title,
+                severity: .warn,
+                summary: L10n.string("Not installed or not on PATH."),
+                detail: L10n.string("OS1 looked for `%@` on PATH but didn't find it. Install it before agentic features that depend on it will work.", binary),
+                actions: []
+            )
+        }
+        let version = await runWithTimeout(executable: path, args: versionArgs, timeoutSec: 4) ?? ""
+        let short = version.components(separatedBy: .newlines).first?.trimmingCharacters(in: .whitespaces) ?? "(no version output)"
+        return Check(
+            id: id,
+            title: title,
+            severity: .ok,
+            summary: short,
+            detail: "\(path)\n\n\(version.prefix(400))",
+            actions: []
+        )
+    }
+
+    private func makeWUPHFCheck() async -> Check {
+        guard let url = URL(string: "http://127.0.0.1:7891/api/channels") else {
+            return Check(id: "wuphf", title: "WUPHF office", severity: .warn, summary: "Bad URL", detail: nil, actions: [])
+        }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 3
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            if code == 200 {
+                let agentCount = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["channels"] as? [Any]
+                return Check(
+                    id: "wuphf",
+                    title: "WUPHF office",
+                    severity: .ok,
+                    summary: L10n.string("Reachable on :7891 — %lld channel(s)", agentCount?.count ?? 0),
+                    detail: "http://127.0.0.1:7891 responding. The autonomous AI employees layer is up.",
+                    actions: []
+                )
+            }
+            return Check(id: "wuphf", title: "WUPHF office", severity: .warn, summary: "Unexpected HTTP \(code)", detail: nil, actions: [])
+        } catch {
+            return Check(
+                id: "wuphf",
+                title: "WUPHF office",
+                severity: .warn,
+                summary: L10n.string("Not reachable on :7891"),
+                detail: L10n.string("Start it with `launchctl load -w ~/Library/LaunchAgents/com.os1.wuphf.plist` (or run `wuphf --no-open --no-nex --pack starter` once for development). Error: %@", error.localizedDescription),
+                actions: []
+            )
+        }
+    }
+
+    private func makeLaunchdCheck() async -> Check {
+        let output = await runWithTimeout(executable: "/bin/launchctl", args: ["list"], timeoutSec: 3) ?? ""
+        let labels = ["com.os1.wuphf", "com.os1.app", "com.os1.samantha-bot", "com.os1.coo"]
+        let loaded = labels.filter { output.contains($0) }
+        let missing = labels.filter { !output.contains($0) }
+        if missing.isEmpty {
+            return Check(
+                id: "launchd",
+                title: "Launchd plists",
+                severity: .ok,
+                summary: L10n.string("All %lld OS1 agents loaded", labels.count),
+                detail: loaded.joined(separator: "\n"),
+                actions: []
+            )
+        }
+        return Check(
+            id: "launchd",
+            title: "Launchd plists",
+            severity: .warn,
+            summary: L10n.string("%lld of %lld OS1 agents loaded", loaded.count, labels.count),
+            detail: "Loaded: \(loaded.joined(separator: ", "))\nMissing: \(missing.joined(separator: ", "))\n\nLoad missing ones with `launchctl load -w ~/Library/LaunchAgents/<label>.plist`.",
+            actions: []
+        )
+    }
+
+    private func makeVoicePortCheck() async -> Check {
+        let path = NSString(string: "~/.os1/voice-port").expandingTildeInPath
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let mtime = attrs[.modificationDate] as? Date else {
+            return Check(
+                id: "voice-port",
+                title: "Voice server port",
+                severity: .warn,
+                summary: L10n.string("No ~/.os1/voice-port file"),
+                detail: L10n.string("OS1's voice server writes its TCP port here when it starts. Missing file = voice runtime never mounted (boot animation didn't finish, or the voice section was disabled)."),
+                actions: []
+            )
+        }
+        let age = Date().timeIntervalSince(mtime)
+        let port = (try? String(contentsOfFile: path, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "?"
+        if age < 300 {
+            return Check(
+                id: "voice-port",
+                title: "Voice server port",
+                severity: .ok,
+                summary: L10n.string("Port %@ (fresh, %.0fs old)", port, age),
+                detail: path,
+                actions: []
+            )
+        }
+        return Check(
+            id: "voice-port",
+            title: "Voice server port",
+            severity: .warn,
+            summary: L10n.string("Port %@ (stale, %.0f min old)", port, age / 60),
+            detail: L10n.string("Voice server hasn't refreshed its port file recently. Could be a stale file from a prior OS1 process. Restart OS1 to rewrite it."),
+            actions: []
+        )
+    }
+
+    private func makeKeychainCheck() async -> Check {
+        // Probe each service+account pair without reading the value
+        // (avoids Mac prompting "Allow OS1 to access Keychain?").
+        let entries: [(label: String, service: String, account: String)] = [
+            ("Orgo",         "ai.orgo.mac.api-key",       "default"),
+            ("ElevenLabs",   "io.elevenlabs.api-key",     "default"),
+            ("Composio",     "dev.composio.connect.api-key", "default"),
+            ("Telegram bot", "org.telegram.bot-token",    "default"),
+        ]
+        var present: [String] = []
+        var missing: [String] = []
+        for entry in entries {
+            let found = await runWithTimeout(
+                executable: "/usr/bin/security",
+                args: ["find-generic-password", "-s", entry.service, "-a", entry.account],
+                timeoutSec: 2
+            ) != nil
+            (found ? present.append(entry.label) : missing.append(entry.label))
+        }
+        if missing.isEmpty {
+            return Check(
+                id: "keychain",
+                title: "Keychain credentials",
+                severity: .ok,
+                summary: L10n.string("All %lld credentials present", entries.count),
+                detail: present.joined(separator: ", "),
+                actions: []
+            )
+        }
+        return Check(
+            id: "keychain",
+            title: "Keychain credentials",
+            severity: .warn,
+            summary: L10n.string("Missing: %@", missing.joined(separator: ", ")),
+            detail: L10n.string("Save missing ones via the Providers / Connectors tabs, or `security add-generic-password -s <service> -a default -w <secret>`."),
+            actions: []
+        )
+    }
+
+    private func which(_ binary: String) -> String? {
+        let env = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin"
+        let extra = ["/opt/homebrew/bin", "/usr/local/bin", NSString(string: "~/.local/bin").expandingTildeInPath]
+        let dirs = (extra + env.split(separator: ":").map(String.init))
+        for d in dirs {
+            let path = (d as NSString).appendingPathComponent(binary)
+            if FileManager.default.isExecutableFile(atPath: path) { return path }
+        }
+        return nil
+    }
+
+    /// Run a subprocess synchronously with a hard timeout. Returns combined
+    /// stdout/stderr on exit 0, nil otherwise. Never throws — Doctor checks
+    /// should always produce a row, even when the underlying call dies.
+    private func runWithTimeout(executable: String, args: [String], timeoutSec: Double) async -> String? {
+        await withCheckedContinuation { (cont: CheckedContinuation<String?, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let proc = Process()
+                proc.executableURL = URL(fileURLWithPath: executable)
+                proc.arguments = args
+                let pipe = Pipe()
+                proc.standardOutput = pipe
+                proc.standardError = pipe
+                do { try proc.run() } catch { cont.resume(returning: nil); return }
+                let killer = DispatchWorkItem {
+                    if proc.isRunning { proc.terminate() }
+                }
+                DispatchQueue.global().asyncAfter(deadline: .now() + timeoutSec, execute: killer)
+                proc.waitUntilExit()
+                killer.cancel()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let out = String(data: data, encoding: .utf8)
+                cont.resume(returning: proc.terminationStatus == 0 ? out : nil)
+            }
+        }
     }
 
     // MARK: - Actions
