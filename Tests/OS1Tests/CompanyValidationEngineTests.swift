@@ -5,7 +5,7 @@ import Testing
 struct CompanyValidationEngineTests {
     @Test
     func everyIdeaHasValidationPlanAndMeasurableThresholds() {
-        let idea = CompanyIdeaEngine.candidates(limit: 1)[0]
+        let idea = fixtureIdea()
         let plan = CompanyValidationEngine.plan(for: idea)
 
         #expect(plan.ideaID == idea.id)
@@ -17,11 +17,13 @@ struct CompanyValidationEngineTests {
         #expect(plan.hasMeasurableThreshold)
         #expect(plan.successThreshold.interviewsCompleted == 5)
         #expect(plan.successThreshold.willingnessToPayCount == 2)
+        #expect(plan.policy.minimumDemandSignalsToBuild == 2)
+        #expect(plan.experiments.allSatisfy { $0.action.contains(idea.channel) })
     }
 
     @Test
     func outboundValidationIsDraftOnlyWhenApprovalPolicyRequiresIt() {
-        let idea = CompanyIdeaEngine.candidates(limit: 1)[0]
+        let idea = fixtureIdea()
         let plan = CompanyValidationEngine.plan(for: idea)
         let outreach = plan.experiments.first { $0.kind == .coldOutreach }
 
@@ -32,7 +34,7 @@ struct CompanyValidationEngineTests {
 
     @Test
     func validationDecisionCanRejectNeedMoreEvidenceOrMarkReadyToBuild() {
-        let idea = CompanyIdeaEngine.candidates(limit: 1)[0]
+        let idea = fixtureIdea()
         let plan = CompanyValidationEngine.plan(for: idea)
         let rejected = CompanyValidationEngine.decide(
             idea: idea,
@@ -51,7 +53,7 @@ struct CompanyValidationEngineTests {
             plan: plan,
             result: CompanyValidationResult(
                 ideaID: idea.id,
-                metrics: .init(interviewsCompleted: 5, replyRate: 0.04, signupRate: 0.03, willingnessToPayCount: 1, competitorDensity: 3, cacEstimateUSD: 60, timeToFirstDollarDays: 20),
+                metrics: .init(interviewsCompleted: 5, replyRate: 0.04, signupRate: 0.03, willingnessToPayCount: 1, competitorDensity: 1, cacEstimateUSD: 60, timeToFirstDollarDays: 20),
                 sourceLinks: ["https://example.com/research"],
                 screenshots: [],
                 rawResearchArtifacts: ["notes.md"],
@@ -79,7 +81,7 @@ struct CompanyValidationEngineTests {
 
     @Test
     func validationResultsFeedLaunchDecisionThroughScorecard() {
-        let idea = CompanyIdeaEngine.candidates(limit: 1)[0]
+        let idea = fixtureIdea()
         let plan = CompanyValidationEngine.plan(for: idea)
         let ready = CompanyValidationEngine.decide(
             idea: idea,
@@ -98,5 +100,53 @@ struct CompanyValidationEngineTests {
         #expect(ready.adjustedScorecard.customerPain >= idea.scorecard.customerPain)
         #expect(ready.adjustedScorecard.willingnessToPay >= idea.scorecard.willingnessToPay)
         #expect(ready.adjustedScorecard.distributionChannel >= idea.scorecard.distributionChannel)
+    }
+
+    @Test
+    func singleMetricCannotPromoteIdeaToReadyToBuild() {
+        let idea = fixtureIdea()
+        let plan = CompanyValidationEngine.plan(for: idea)
+        let decision = CompanyValidationEngine.decide(
+            idea: idea,
+            plan: plan,
+            result: CompanyValidationResult(
+                ideaID: idea.id,
+                metrics: .init(interviewsCompleted: 0, replyRate: 0.20, signupRate: 0.01, willingnessToPayCount: 3, competitorDensity: 1, cacEstimateUSD: 10, timeToFirstDollarDays: 3),
+                sourceLinks: ["https://example.com/research"],
+                screenshots: ["proof.png"],
+                rawResearchArtifacts: ["research.json"],
+                rationale: "Only reply rate worked"
+            )
+        )
+
+        #expect(decision.decision == .needsMoreEvidence)
+    }
+
+    private func fixtureIdea() -> CompanyIdea {
+        CompanyIdea(
+            id: "idea-fixture",
+            title: "Fixture lead-gen company",
+            sourceTemplateID: nil,
+            status: .backlog,
+            icp: "Local accountants who buy qualified tax-season leads.",
+            offer: "Sell verified consultation requests for local accountants.",
+            channel: "SEO/local search",
+            riskTier: .medium,
+            expectedFirstExperiment: "Interview 5 accountants and test one landing page.",
+            requiredCredentials: [],
+            evidenceLinks: ["template://fixture/evidence"],
+            rationale: "High-intent search and measurable willingness to pay.",
+            rejectionReason: nil,
+            nextAction: "Run interview and landing page validation.",
+            scorecard: .init(
+                customerPain: 8,
+                willingnessToPay: 8,
+                distributionChannel: 7,
+                legalComplianceRisk: 6,
+                buildComplexity: 7,
+                timeToFirstDollar: 6,
+                credentialReadiness: 9
+            )
+        )
     }
 }

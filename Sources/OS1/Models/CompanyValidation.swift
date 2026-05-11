@@ -25,6 +25,7 @@ struct CompanyValidationPlan: Codable, Hashable, Identifiable {
     var ideaID: String
     var experiments: [CompanyValidationExperiment]
     var successThreshold: CompanyValidationResult.Metrics
+    var policy: CompanyValidationPolicy
     var sourceLinks: [String]
     var rawArtifactPaths: [String]
 
@@ -64,8 +65,51 @@ struct CompanyValidationDecision: Codable, Hashable {
     var adjustedScorecard: CompanyIdea.Scorecard
 }
 
+struct CompanyValidationPolicy: Codable, Hashable {
+    var minimumInterviews: Int
+    var minimumReplyRate: Double
+    var minimumSignupRate: Double
+    var minimumWillingnessToPayCount: Int
+    var minimumCompetitorDensity: Int
+    var maximumCACEstimateUSD: Double
+    var maximumTimeToFirstDollarDays: Int
+    var minimumDemandSignalsToBuild: Int
+    var rejectionReplyRateCeiling: Double
+    var rejectionSignupRateCeiling: Double
+
+    // Conservative defaults for first-pass validation: enough signal to avoid
+    // building from one vanity metric, but still small enough for cheap tests.
+    static let productionDefault = CompanyValidationPolicy(
+        minimumInterviews: 5,
+        minimumReplyRate: 0.10,
+        minimumSignupRate: 0.08,
+        minimumWillingnessToPayCount: 2,
+        minimumCompetitorDensity: 3,
+        maximumCACEstimateUSD: 50,
+        maximumTimeToFirstDollarDays: 14,
+        minimumDemandSignalsToBuild: 2,
+        rejectionReplyRateCeiling: 0.02,
+        rejectionSignupRateCeiling: 0.02
+    )
+
+    var successThreshold: CompanyValidationResult.Metrics {
+        .init(
+            interviewsCompleted: minimumInterviews,
+            replyRate: minimumReplyRate,
+            signupRate: minimumSignupRate,
+            willingnessToPayCount: minimumWillingnessToPayCount,
+            competitorDensity: minimumCompetitorDensity,
+            cacEstimateUSD: maximumCACEstimateUSD,
+            timeToFirstDollarDays: maximumTimeToFirstDollarDays
+        )
+    }
+}
+
 enum CompanyValidationEngine {
-    static func plan(for idea: CompanyIdea) -> CompanyValidationPlan {
+    static func plan(
+        for idea: CompanyIdea,
+        policy: CompanyValidationPolicy = .productionDefault
+    ) -> CompanyValidationPlan {
         let experiments = [
             experiment(
                 id: "\(idea.id)-interviews",
@@ -118,15 +162,8 @@ enum CompanyValidationEngine {
             id: "validation-\(idea.id)",
             ideaID: idea.id,
             experiments: experiments,
-            successThreshold: .init(
-                interviewsCompleted: 5,
-                replyRate: 0.10,
-                signupRate: 0.08,
-                willingnessToPayCount: 2,
-                competitorDensity: 3,
-                cacEstimateUSD: 50,
-                timeToFirstDollarDays: 14
-            ),
+            successThreshold: policy.successThreshold,
+            policy: policy,
             sourceLinks: idea.evidenceLinks,
             rawArtifactPaths: experiments.flatMap(\.artifactRequirements)
         )
@@ -138,13 +175,19 @@ enum CompanyValidationEngine {
         result: CompanyValidationResult
     ) -> CompanyValidationDecision {
         let threshold = plan.successThreshold
+        let policy = plan.policy
         let metrics = result.metrics
-        let hasEnoughEvidence = metrics.interviewsCompleted >= threshold.interviewsCompleted ||
-            metrics.signupRate >= threshold.signupRate ||
-            metrics.replyRate >= threshold.replyRate
+        let demandSignalCount = [
+            metrics.interviewsCompleted >= threshold.interviewsCompleted,
+            metrics.signupRate >= threshold.signupRate,
+            metrics.replyRate >= threshold.replyRate,
+            metrics.competitorDensity >= threshold.competitorDensity
+        ].filter { $0 }.count
+        let hasEnoughEvidence = demandSignalCount >= policy.minimumDemandSignalsToBuild
         let hasWillingnessToPay = metrics.willingnessToPayCount >= threshold.willingnessToPayCount
         let acquisitionWorks = metrics.cacEstimateUSD <= threshold.cacEstimateUSD
         let speedWorks = metrics.timeToFirstDollarDays <= threshold.timeToFirstDollarDays
+        let marketplaceWorks = metrics.competitorDensity >= threshold.competitorDensity
         let hasArtifacts = !result.sourceLinks.isEmpty && (!result.screenshots.isEmpty || !result.rawResearchArtifacts.isEmpty)
 
         var scorecard = idea.scorecard
@@ -153,10 +196,17 @@ enum CompanyValidationEngine {
         if acquisitionWorks { scorecard.distributionChannel = min(10, scorecard.distributionChannel + 1) }
         if !hasArtifacts { scorecard.credentialReadiness = max(1, scorecard.credentialReadiness - 2) }
 
-        if hasEnoughEvidence && hasWillingnessToPay && acquisitionWorks && speedWorks && hasArtifacts {
-            return .init(decision: .readyToBuild, rationale: "Validation met demand, WTP, CAC, speed, and artifact thresholds.", adjustedScorecard: scorecard)
+        if hasEnoughEvidence && hasWillingnessToPay && acquisitionWorks && speedWorks && marketplaceWorks && hasArtifacts {
+            return .init(decision: .readyToBuild, rationale: "Validation met multi-signal demand, WTP, CAC, speed, marketplace, and artifact thresholds.", adjustedScorecard: scorecard)
         }
-        if !hasEnoughEvidence && metrics.willingnessToPayCount == 0 && metrics.replyRate < 0.02 && metrics.signupRate < 0.02 {
+        let hasCompletedWeakTest = metrics.interviewsCompleted >= threshold.interviewsCompleted ||
+            metrics.competitorDensity > 0 ||
+            hasArtifacts
+        if !hasEnoughEvidence &&
+            hasCompletedWeakTest &&
+            metrics.willingnessToPayCount == 0 &&
+            metrics.replyRate < policy.rejectionReplyRateCeiling &&
+            metrics.signupRate < policy.rejectionSignupRateCeiling {
             return .init(decision: .rejected, rationale: "Validation failed to produce demand or willingness-to-pay evidence.", adjustedScorecard: scorecard)
         }
         return .init(decision: .needsMoreEvidence, rationale: "Some signals exist, but thresholds are incomplete.", adjustedScorecard: scorecard)
@@ -165,7 +215,7 @@ enum CompanyValidationEngine {
     private static func experiment(
         id: String,
         kind: CompanyValidationExperiment.Kind,
-        idea _: CompanyIdea,
+        idea: CompanyIdea,
         hypothesis: String,
         action: String,
         threshold: String,
@@ -176,8 +226,8 @@ enum CompanyValidationEngine {
         return CompanyValidationExperiment(
             id: id,
             kind: kind,
-            hypothesis: hypothesis,
-            action: action,
+            hypothesis: "\(hypothesis) ICP: \(idea.icp)",
+            action: "\(action) Offer: \(idea.offer) Channel: \(idea.channel).",
             measurableThreshold: threshold,
             approvalRequired: approvalRequired,
             draftOnly: approvalRequired,

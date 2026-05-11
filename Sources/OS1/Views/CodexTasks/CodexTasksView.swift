@@ -298,6 +298,10 @@ struct CodexTasksView: View {
         CompanyIdeaEngine.topIdeas(count: 10, from: CompanyIdeaEngine.candidates(limit: 50))
     }
 
+    private var rankedIdeaPlans: [(idea: CompanyIdea, plan: CompanyValidationPlan)] {
+        rankedIdeas.map { ($0, CompanyValidationEngine.plan(for: $0)) }
+    }
+
     private var ideaBacklog: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
@@ -312,8 +316,8 @@ struct CodexTasksView: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .top, spacing: 8) {
-                    ForEach(rankedIdeas) { idea in
-                        ideaCard(idea)
+                    ForEach(rankedIdeaPlans, id: \.idea.id) { item in
+                        ideaCard(item.idea, validationPlan: item.plan)
                     }
                 }
             }
@@ -322,8 +326,7 @@ struct CodexTasksView: View {
         .padding(.bottom, 10)
     }
 
-    private func ideaCard(_ idea: CompanyIdea) -> some View {
-        let validationPlan = CompanyValidationEngine.plan(for: idea)
+    private func ideaCard(_ idea: CompanyIdea, validationPlan: CompanyValidationPlan) -> some View {
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text("#\(idea.score)")
