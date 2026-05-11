@@ -29,6 +29,7 @@ struct CodexTasksView: View {
             header
             spawnBar
             templateBar
+            ideaBacklog
             approvalConsole
             eventConsole
             metricsStrip
@@ -291,6 +292,79 @@ struct CodexTasksView: View {
 
     private var batchTemplates: [CompanyTemplate] {
         Array(filteredTemplates.prefix(bulkLaunchLimit))
+    }
+
+    private var rankedIdeas: [CompanyIdea] {
+        CompanyIdeaEngine.topIdeas(count: 10, from: CompanyIdeaEngine.candidates(limit: 50))
+    }
+
+    private var ideaBacklog: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Label("Idea backlog", systemImage: "lightbulb")
+                    .os1Style(theme.typography.label)
+                    .foregroundStyle(theme.palette.onCoralPrimary)
+                Text("50 candidates · top 10 ranked")
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(theme.palette.onCoralMuted)
+                Spacer()
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 8) {
+                    ForEach(rankedIdeas) { idea in
+                        ideaCard(idea)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.bottom, 10)
+    }
+
+    private func ideaCard(_ idea: CompanyIdea) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("#\(idea.score)")
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.green)
+                Spacer()
+                Text(idea.status.rawValue)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(theme.palette.onCoralMuted)
+            }
+            Text(idea.title)
+                .os1Style(theme.typography.label)
+                .foregroundStyle(theme.palette.onCoralPrimary)
+                .lineLimit(2)
+            Text(idea.icp)
+                .font(.caption2)
+                .foregroundStyle(theme.palette.onCoralSecondary)
+                .lineLimit(2)
+            HStack(spacing: 6) {
+                Label(idea.riskTier.rawValue, systemImage: "shield.lefthalf.filled")
+                Label("\(idea.evidenceLinks.count) evidence", systemImage: "link")
+            }
+            .font(.caption2)
+            .foregroundStyle(theme.palette.onCoralMuted)
+            Text(idea.nextAction)
+                .font(.caption2)
+                .foregroundStyle(theme.palette.onCoralMuted)
+                .lineLimit(2)
+            Button("Validate") {
+                validateIdea(idea)
+            }
+            .buttonStyle(.os1Secondary)
+            .disabled(!idea.canAdvanceToValidation)
+        }
+        .frame(width: 260, alignment: .leading)
+        .padding(10)
+        .background(theme.palette.glassFill.opacity(0.72))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(theme.palette.glassBorder, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     // MARK: - Approval console
@@ -971,6 +1045,31 @@ struct CodexTasksView: View {
         } catch {
             spawnError = (error as NSError).localizedDescription
         }
+    }
+
+    private func validateIdea(_ idea: CompanyIdea) {
+        guard let advanced = CompanyIdeaEngine.advanceToValidation(idea),
+              let templateID = advanced.sourceTemplateID,
+              let template = CompanyTemplateCatalog.template(id: templateID)
+        else { return }
+        selectedTemplateID = template.id
+        newCompanyName = template.companyName
+        newTaskText = """
+        \(template.missionPrompt)
+
+        IDEA SCORE: \(advanced.score)/70
+        ICP: \(advanced.icp)
+        OFFER: \(advanced.offer)
+        CHANNEL: \(advanced.channel)
+        RISK TIER: \(advanced.riskTier.rawValue)
+        FIRST EXPERIMENT: \(advanced.expectedFirstExperiment)
+        EVIDENCE:
+        \(advanced.evidenceLinks.map { "- \($0)" }.joined(separator: "\n"))
+
+        Start in validation mode. Do not build until the first experiment has real evidence.
+        """
+        newCadenceMinutes = template.suggestedCadenceMinutes
+        spawnError = ""
     }
 
     private func createBackup() {
