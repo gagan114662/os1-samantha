@@ -1,0 +1,75 @@
+name: Coverage
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  swift-coverage:
+    name: Swift test coverage
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Show Swift version
+        run: swift --version
+
+      - name: Install Python test dependencies
+        run: |
+          python3 -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install PyYAML
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+
+      - name: Run tests with coverage
+        run: swift test --enable-code-coverage
+
+      - name: Locate coverage artifacts
+        id: cov
+        run: |
+          BIN_PATH=$(swift build --show-bin-path)
+          PROF=$(find "$BIN_PATH" -name "*.profdata" | head -n1)
+          XCTEST=$(find "$BIN_PATH" -name "*PackageTests.xctest" -o -name "*Tests.xctest" | head -n1)
+          echo "profdata=$PROF" >> "$GITHUB_OUTPUT"
+          echo "xctest=$XCTEST" >> "$GITHUB_OUTPUT"
+
+      - name: Export lcov
+        if: steps.cov.outputs.profdata != '' && steps.cov.outputs.xctest != ''
+        run: |
+          XCTEST_PATH="${{ steps.cov.outputs.xctest }}"
+          BIN="$XCTEST_PATH/Contents/MacOS/$(basename "$XCTEST_PATH" .xctest)"
+          xcrun llvm-cov export \
+            -format=lcov \
+            -instr-profile "${{ steps.cov.outputs.profdata }}" \
+            "$BIN" > coverage.lcov
+          xcrun llvm-cov report \
+            -instr-profile "${{ steps.cov.outputs.profdata }}" \
+            "$BIN" | tee coverage-summary.txt
+
+      - name: Upload coverage artifact
+        if: hashFiles('coverage.lcov') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: swift-coverage
+          path: |
+            coverage.lcov
+            coverage-summary.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Publish coverage summary
+        if: hashFiles('coverage-summary.txt') != ''
+        run: |
+          {
+            echo '## Swift coverage summary'
+            echo '```'
+            cat coverage-summary.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
