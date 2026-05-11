@@ -1565,6 +1565,7 @@ struct CodexTasksView: View {
         case .permissionChanged: return "person.crop.circle.badge.gearshape"
         case .permissionDenied: return "lock.shield"
         case .permissionEscalated: return "exclamationmark.shield"
+        case .governanceDecisionRecorded: return "doc.badge.clock"
         case .stateBackupCreated: return "externaldrive.badge.checkmark"
         case .ledgerEntryRecorded: return "dollarsign.circle"
         case .untrustedContentInfluencedDecision: return "exclamationmark.shield"
@@ -1575,7 +1576,7 @@ struct CodexTasksView: View {
         switch kind {
         case .budgetBlocked, .companyKilled, .approvalDenied, .complianceBlocked, .permissionDenied:
             return theme.palette.danger
-        case .heartbeatQueued, .externalSideEffect, .permissionChanged:
+        case .heartbeatQueued, .externalSideEffect, .permissionChanged, .governanceDecisionRecorded:
             return .purple
         case .companyPaused, .fleetPaused, .approvalRequested, .approvalChangesRequested,
              .untrustedContentInfluencedDecision, .permissionEscalated:
