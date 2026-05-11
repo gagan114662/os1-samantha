@@ -246,6 +246,21 @@ extension CodexSession {
     }
 }
 
+struct CodexHeartbeatLaunchPlan: Hashable {
+    let executablePath: String
+    let arguments: [String]
+    let launchedCommand: String
+    let codexCommand: String
+    let sandboxProfilePath: String?
+    let usesMacOSSandbox: Bool
+    let usesCodexInternalSandboxBypass: Bool
+    let warningEventSummary: String?
+
+    var sandboxRuntimeLabel: String {
+        usesMacOSSandbox ? "ON" : "OFF"
+    }
+}
+
 /// Spawns and tracks parallel `codex exec` sessions, each in its own
 /// git worktree branched off `~/.os1/codex-tasks/base`.
 ///
@@ -282,6 +297,42 @@ final class CodexSessionManager: ObservableObject {
     /// Caps "missed" heartbeats across a Mac sleep — we only fire the most recent
     /// missed one with a small jitter, instead of N stacked overdue heartbeats.
     private let maxJitterSeconds: Double = 30.0
+
+    nonisolated static func heartbeatLaunchPlan(
+        session: CodexSession,
+        sandboxProfileURL: URL,
+        promptFile: String
+    ) -> CodexHeartbeatLaunchPlan {
+        // Prompt is piped via stdin so no user text touches the shell command line.
+        let codexCommand = "cat \(Self.shellEscape(promptFile))"
+            + " | codex exec --dangerously-bypass-approvals-and-sandbox -"
+        if session.sandboxMode == .sandbox {
+            let arguments = ["-f", sandboxProfileURL.path, "/usr/bin/env", "zsh", "-l", "-c", codexCommand]
+            return CodexHeartbeatLaunchPlan(
+                executablePath: "/usr/bin/sandbox-exec",
+                arguments: arguments,
+                launchedCommand: "/usr/bin/sandbox-exec \(arguments.map(Self.shellEscape).joined(separator: " "))",
+                codexCommand: codexCommand,
+                sandboxProfilePath: sandboxProfileURL.path,
+                usesMacOSSandbox: true,
+                usesCodexInternalSandboxBypass: true,
+                warningEventSummary: nil
+            )
+        }
+
+        let arguments = ["zsh", "-l", "-c", codexCommand]
+        return CodexHeartbeatLaunchPlan(
+            executablePath: "/usr/bin/env",
+            arguments: arguments,
+            launchedCommand: "/usr/bin/env \(arguments.map(Self.shellEscape).joined(separator: " "))",
+            codexCommand: codexCommand,
+            sandboxProfilePath: nil,
+            usesMacOSSandbox: false,
+            usesCodexInternalSandboxBypass: true,
+            warningEventSummary: "Codex heartbeat sandbox: OFF - localDevelopment heartbeats are not wrapped by "
+                + "macOS sandbox-exec."
+        )
+    }
 
     private init() {
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -656,7 +707,12 @@ final class CodexSessionManager: ObservableObject {
                 return
             }
         }
-        proc.executableURL = URL(fileURLWithPath: session.sandboxMode == .sandbox ? "/usr/bin/sandbox-exec" : "/usr/bin/env")
+        let launchPlan = Self.heartbeatLaunchPlan(
+            session: session,
+            sandboxProfileURL: sandboxProfileURL,
+            promptFile: promptFile
+        )
+        proc.executableURL = URL(fileURLWithPath: launchPlan.executablePath)
         var environment = ProcessInfo.processInfo.environment
         for (name, value) in credentialEnvironment {
             environment[name] = value
@@ -677,14 +733,25 @@ final class CodexSessionManager: ObservableObject {
         environment["TMP"] = companyTemp.path
         environment["TEMP"] = companyTemp.path
         proc.environment = environment
-        // Prompt is piped via stdin so no user text touches the shell command line.
-        let codexCommand = "cat \(Self.shellEscape(promptFile)) | codex exec --dangerously-bypass-approvals-and-sandbox -"
-        let launchedCommand = session.sandboxMode == .sandbox
-            ? "/usr/bin/sandbox-exec -f \(sandboxProfileURL.path) /usr/bin/env zsh -l -c \(codexCommand)"
-            : "/usr/bin/env zsh -l -c \(codexCommand)"
-        proc.arguments = session.sandboxMode == .sandbox
-            ? ["-f", sandboxProfileURL.path, "/usr/bin/env", "zsh", "-l", "-c", codexCommand]
-            : ["zsh", "-l", "-c", codexCommand]
+        proc.arguments = launchPlan.arguments
+        if let warning = launchPlan.warningEventSummary {
+            appendEvent(
+                kind: .complianceChecked,
+                companyID: id,
+                actor: "os1",
+                summary: warning,
+                runID: session.heartbeatLease?.id,
+                tool: "codex exec",
+                riskTier: session.environment.mode.rawValue,
+                approvalState: "sandbox-off",
+                metadata: [
+                    "heartbeat": "\(session.heartbeatCount)",
+                    "sandboxRuntime": launchPlan.sandboxRuntimeLabel,
+                    "sandboxMode": session.sandboxMode.rawValue,
+                    "command": launchPlan.launchedCommand
+                ]
+            )
+        }
         appendEvent(
             kind: .externalSideEffect,
             companyID: id,
@@ -699,11 +766,13 @@ final class CodexSessionManager: ObservableObject {
                 "heartbeat": "\(session.heartbeatCount)",
                 "environment": session.environment.mode.rawValue,
                 "environmentBanner": session.environment.banner,
-                "command": launchedCommand,
+                "command": launchPlan.launchedCommand,
                 "cwd": session.worktreePath,
                 "promptFile": promptFile,
                 "logFile": logFile.path,
-                "sandboxProfile": session.sandboxMode == .sandbox ? sandboxProfileURL.path : ""
+                "sandboxRuntime": launchPlan.sandboxRuntimeLabel,
+                "sandboxProfile": launchPlan.sandboxProfilePath ?? "",
+                "codexInternalSandboxBypass": launchPlan.usesCodexInternalSandboxBypass ? "true" : "false"
             ]
         )
         proc.standardOutput = logHandle
@@ -742,7 +811,7 @@ final class CodexSessionManager: ObservableObject {
                     "heartbeat": "\(session.heartbeatCount)",
                     "exitCode": "-1",
                     "status": CodexSession.Status.failed.rawValue,
-                    "command": launchedCommand,
+                    "command": launchPlan.launchedCommand,
                     "logFile": logFile.path
                 ]
             )
@@ -2698,7 +2767,7 @@ final class CodexSessionManager: ObservableObject {
         return String(firstLine.prefix(60))
     }
 
-    private static func shellEscape(_ s: String) -> String {
+    nonisolated private static func shellEscape(_ s: String) -> String {
         "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 

@@ -74,7 +74,8 @@ Current foundations:
 - **Sandbox-first execution**: new companies default to sandbox mode.
   Codex heartbeats are wrapped by generated macOS `sandbox-exec`
   profiles so a company can mutate only its own worktree, prompt/log
-  files, and approved shared lessons file.
+  files, and approved shared lessons file. The exact runtime contract is
+  documented in [Codex Heartbeat Sandbox Runtime](docs/codex-heartbeat-sandbox.md).
 - **Least-privilege credentials**: companies start with no platform
   credentials. You can grant or revoke specific provider credential
   names per company. Secret reads are audited by name/count only; secret
@@ -306,7 +307,9 @@ License: [MIT](LICENSE). All upstream copyrights are preserved.
 ## Status
 
 This is still an early build. The Samantha company path now has real
-guardrails: sandboxed Codex heartbeats, per-company credential
+guardrails: sandboxed Codex heartbeats (see
+[Codex Heartbeat Sandbox Runtime](docs/codex-heartbeat-sandbox.md)),
+per-company credential
 allowlists, approval gates, append-only event logs, run timelines,
 revenue ledgers, validation gates, factory gates, distribution policy,
 budget guards, heartbeat locks, restart recovery, Doctor production

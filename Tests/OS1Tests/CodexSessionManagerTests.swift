@@ -294,6 +294,58 @@ struct CodexSessionManagerTests {
     }
 
     @Test
+    func sandboxHeartbeatLaunchPlanUsesMacOSSandboxExec() {
+        let session = CodexSession(
+            id: "sandboxed",
+            title: "sandboxed-company",
+            task: "test",
+            worktreePath: "/tmp/sandboxed",
+            branch: "company/sandboxed",
+            status: .idle,
+            startedAt: Date(timeIntervalSince1970: 1),
+            sandboxMode: .sandbox
+        )
+        let plan = CodexSessionManager.heartbeatLaunchPlan(
+            session: session,
+            sandboxProfileURL: URL(fileURLWithPath: "/tmp/sandboxed.sb"),
+            promptFile: "/tmp/sandboxed.prompt"
+        )
+
+        #expect(plan.executablePath == "/usr/bin/sandbox-exec")
+        #expect(Array(plan.arguments.prefix(3)) == ["-f", "/tmp/sandboxed.sb", "/usr/bin/env"])
+        #expect(plan.codexCommand.contains("codex exec --dangerously-bypass-approvals-and-sandbox -"))
+        #expect(plan.sandboxProfilePath == "/tmp/sandboxed.sb")
+        #expect(plan.usesMacOSSandbox)
+        #expect(plan.usesCodexInternalSandboxBypass)
+        #expect(plan.warningEventSummary == nil)
+    }
+
+    @Test
+    func localDevelopmentHeartbeatLaunchPlanEmitsSandboxOffWarning() {
+        let session = CodexSession(
+            id: "localdev",
+            title: "local-dev-company",
+            task: "test",
+            worktreePath: "/tmp/localdev",
+            branch: "company/localdev",
+            status: .idle,
+            startedAt: Date(timeIntervalSince1970: 1),
+            sandboxMode: .localDevelopment
+        )
+        let plan = CodexSessionManager.heartbeatLaunchPlan(
+            session: session,
+            sandboxProfileURL: URL(fileURLWithPath: "/tmp/localdev.sb"),
+            promptFile: "/tmp/localdev.prompt"
+        )
+
+        #expect(plan.executablePath == "/usr/bin/env")
+        #expect(!plan.arguments.contains("-f"))
+        #expect(!plan.usesMacOSSandbox)
+        #expect(plan.sandboxProfilePath == nil)
+        #expect(plan.warningEventSummary?.contains("Codex heartbeat sandbox: OFF") == true)
+    }
+
+    @Test
     func legacyBudgetStateDecodesWithSpendPolicyDefaults() throws {
         let legacyJSON = """
         [{
