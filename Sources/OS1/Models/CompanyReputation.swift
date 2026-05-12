@@ -80,6 +80,10 @@ struct CompanyReputationHealth: Codable, Hashable, Identifiable {
     var isShared: Bool {
         ownerCompanyIDs.count > 1
     }
+
+    var isPlaceholderSenderDomain: Bool {
+        kind == .senderDomain && CompanyReputationEngine.isReservedSenderDomain(label)
+    }
 }
 
 struct CompanyReputationDashboard: Codable, Hashable {
@@ -122,6 +126,7 @@ enum CompanyReputationEngine {
         signals: [CompanyReputationSignal],
         policy: CompanyReputationPolicy = .productionDefault
     ) -> CompanyReputationHealth {
+        let isPlaceholderSenderDomain = asset.kind == .senderDomain && isReservedSenderDomain(asset.label)
         let related = signals.filter { $0.assetID == asset.id }
         let sent = related.map(\.sent).reduce(0, +)
         let bounced = related.map(\.bounced).reduce(0, +)
@@ -140,7 +145,7 @@ enum CompanyReputationEngine {
         let bounceRate = rate(bounced, sent)
         let complaintRate = rate(complaints, sent)
         let unsubscribeRate = rate(unsubscribes, sent)
-        let risk = riskTier(
+        let risk = isPlaceholderSenderDomain ? CompanyIdea.RiskTier.high : riskTier(
             asset: asset,
             bounceRate: bounceRate,
             complaintRate: complaintRate,
@@ -150,12 +155,25 @@ enum CompanyReputationEngine {
             bans: bans,
             policy: policy
         )
-        let escalationTasks = escalationTasks(
+        var reputationWarnings = warnings + thresholdWarnings(
+            bounceRate: bounceRate,
+            complaintRate: complaintRate,
+            unsubscribeRate: unsubscribeRate,
+            reviewAverage: reviewAverage,
+            policy: policy
+        )
+        if isPlaceholderSenderDomain {
+            reputationWarnings.insert("placeholder sender domain; provision a real domain before email warmup", at: 0)
+        }
+        var escalationTasks = escalationTasks(
             asset: asset,
             risk: risk,
             warnings: warnings,
             bans: bans
         )
+        if isPlaceholderSenderDomain {
+            escalationTasks.insert("Provision a real sender domain for \(asset.ownerCompanyIDs.sorted().joined(separator: ", "))", at: 0)
+        }
         return CompanyReputationHealth(
             assetID: asset.id,
             kind: asset.kind,
@@ -167,17 +185,22 @@ enum CompanyReputationEngine {
             unsubscribeRate: unsubscribeRate,
             reviewAverage: reviewAverage,
             risk: risk,
-            canUseForOutbound: canUseForOutbound(asset: asset, risk: risk),
-            recommendedDailyLimit: recommendedDailyLimit(asset: asset, risk: risk, policy: policy),
-            warnings: warnings + thresholdWarnings(
-                bounceRate: bounceRate,
-                complaintRate: complaintRate,
-                unsubscribeRate: unsubscribeRate,
-                reviewAverage: reviewAverage,
-                policy: policy
-            ),
+            canUseForOutbound: !isPlaceholderSenderDomain && canUseForOutbound(asset: asset, risk: risk),
+            recommendedDailyLimit: isPlaceholderSenderDomain ? 0 : recommendedDailyLimit(asset: asset, risk: risk, policy: policy),
+            warnings: reputationWarnings,
             escalationTasks: escalationTasks
         )
+    }
+
+    static func isReservedSenderDomain(_ domain: String) -> Bool {
+        let trimmed = domain
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let normalized = URLComponents(string: trimmed)?.host ?? trimmed
+        let host = normalized.hasPrefix("www.") ? String(normalized.dropFirst(4)) : normalized
+        return [".example", ".test", ".invalid", ".localhost"].contains { suffix in
+            host == String(suffix.dropFirst()) || host.hasSuffix(suffix)
+        }
     }
 
     static func blocksSend(

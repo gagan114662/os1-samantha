@@ -7,13 +7,15 @@ struct RealtimeVoicePanelView: View {
     @State private var pageStatus = "idle"
 
     let onClose: () -> Void
+    let onConfigureProviders: () -> Void
 
     init(
         elevenLabsAPIKey: String? = nil,
         elevenLabsAgentID: String? = nil,
         orgoAPIKey: String? = nil,
         orgoDefaultComputerID: String? = nil,
-        onClose: @escaping () -> Void
+        onClose: @escaping () -> Void,
+        onConfigureProviders: @escaping () -> Void = {}
     ) {
         _server = StateObject(wrappedValue: RealtimeVoiceSessionServer(
             elevenLabsAPIKeyProvider: { elevenLabsAPIKey ?? ProcessInfo.processInfo.environment["ELEVENLABS_API_KEY"] },
@@ -22,6 +24,7 @@ struct RealtimeVoicePanelView: View {
             orgoDefaultComputerIDProvider: { orgoDefaultComputerID ?? ProcessInfo.processInfo.environment["ORGO_DEFAULT_COMPUTER_ID"] }
         ))
         self.onClose = onClose
+        self.onConfigureProviders = onConfigureProviders
     }
 
     var body: some View {
@@ -50,13 +53,21 @@ struct RealtimeVoicePanelView: View {
             .foregroundStyle(theme.palette.onCoralPrimary)
 
             if let error = server.lastError {
-                Text(error)
-                    .os1Style(theme.typography.body)
-                    .foregroundStyle(theme.palette.onCoralSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .os1GlassSurface(cornerRadius: 8)
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(error)
+                        .os1Style(theme.typography.body)
+                        .foregroundStyle(theme.palette.onCoralSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button {
+                        onConfigureProviders()
+                    } label: {
+                        Label(L10n.string("Configure in Providers"), systemImage: "key")
+                    }
+                    .buttonStyle(.os1Secondary)
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .os1GlassSurface(cornerRadius: 8)
             } else if let endpointURL = server.endpointURL {
                 RealtimeVoiceWebView(url: endpointURL) { status in
                     pageStatus = status

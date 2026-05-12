@@ -156,6 +156,7 @@ struct CodexSession: Identifiable, Codable, Hashable {
         case paused        // user paused the heartbeat loop
         case completed     // mission marked done by user
         case failed        // last heartbeat returned non-zero too many times
+        case failedCodexStartup = "failed-codex-startup" // Codex CLI could not initialize under the launch profile
         case killed        // user terminated
     }
 
@@ -168,6 +169,7 @@ struct CodexSession: Identifiable, Codable, Hashable {
         case .paused:    "gray"
         case .completed: "green"
         case .failed:    "red"
+        case .failedCodexStartup: "red"
         case .killed:    "gray"
         }
     }
@@ -184,6 +186,8 @@ struct CodexSession: Identifiable, Codable, Hashable {
     var approvalDecisionPath: String { worktreePath + "/APPROVAL_DECISION.json" }
     var approvalGrantPath: String { worktreePath + "/APPROVAL_GRANTED.json" }
     var compliancePolicyPath: String { worktreePath + "/COMPLIANCE_POLICY.json" }
+    var complianceMetadataPath: String { worktreePath + "/COMPLIANCE_METADATA.json" }
+    var validationEvidencePath: String { worktreePath + "/validation-evidence.jsonl" }
 }
 
 extension CodexSession {
@@ -363,6 +367,42 @@ final class CodexSessionManager: ObservableObject {
         loadPersistedSessions()
     }
 
+    #if DEBUG
+    init(testRoot: URL) {
+        self.baseDir = testRoot.appendingPathComponent("base", isDirectory: true)
+        self.sessionsDir = testRoot.appendingPathComponent("sessions", isDirectory: true)
+        self.logDir = testRoot.appendingPathComponent("logs", isDirectory: true)
+        self.lessonsDir = testRoot.appendingPathComponent("lessons", isDirectory: true)
+        self.sandboxDir = testRoot.appendingPathComponent("sandboxes", isDirectory: true)
+        self.heartbeatLockDir = testRoot.appendingPathComponent("heartbeat-locks", isDirectory: true)
+        try? FileManager.default.createDirectory(at: baseDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: sessionsDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: lessonsDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: sandboxDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: heartbeatLockDir, withIntermediateDirectories: true)
+        let portfolioLessons = lessonsDir.appendingPathComponent("portfolio.md").path
+        if !FileManager.default.fileExists(atPath: portfolioLessons) {
+            let seed = """
+            # Portfolio Lessons
+            # Test-only portfolio lessons file.
+
+            """
+            try? seed.write(toFile: portfolioLessons, atomically: true, encoding: .utf8)
+        }
+        loadPersistedSessions()
+    }
+
+    func replaceSessionsForTesting(_ sessions: [CodexSession]) {
+        self.sessions = sessions
+        persistSessions()
+    }
+
+    func flushLogsForTesting() {
+        logQueue.sync {}
+    }
+    #endif
+
     // MARK: - Create company
 
     @discardableResult
@@ -417,10 +457,12 @@ final class CodexSessionManager: ObservableObject {
         try "# Revenue\n\n- \(Self.todayString()) $0 baseline (no revenue API connected yet)\n"
             .write(toFile: worktreePath + "/REVENUE.md", atomically: true, encoding: .utf8)
         try "[]\n".write(toFile: worktreePath + "/LEDGER.json", atomically: true, encoding: .utf8)
+        let factoryTemplate = templateID.flatMap(CompanyTemplateCatalog.template(id:))
         let factoryManifest = CompanyFactory.manifest(
             companyID: id,
-            template: templateID.flatMap(CompanyTemplateCatalog.template(id:)),
-            worktreePath: worktreePath
+            template: factoryTemplate,
+            worktreePath: worktreePath,
+            offer: factoryTemplate == nil ? mission : nil
         )
         let manifestEncoder = JSONEncoder()
         manifestEncoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -1546,6 +1588,9 @@ final class CodexSessionManager: ObservableObject {
             // often recovers on its own (e.g. after wake from sleep).
             sessions[idx].status = .idle
             sessions[idx].nextHeartbeatAt = Date(timeIntervalSinceNow: 60 + Double.random(in: 0...30))
+        } else if failureAssessment.kind == "codexStartup" {
+            sessions[idx].status = .failedCodexStartup
+            sessions[idx].blockedReason = failureAssessment.operatorAction
         } else if exitCode != 0 {
             sessions[idx].status = .failed
         } else if let reason = blockedReason {
@@ -1600,6 +1645,17 @@ final class CodexSessionManager: ObservableObject {
                 sessions[idx].nextHeartbeatAt = Date(timeIntervalSinceNow: TimeInterval(sessions[idx].cadenceMinutes) * 60)
             }
         }
+        applyStalemateGuard(
+            id: id,
+            currentStatus: sessions[idx].status,
+            currentReason: heartbeatStalemateReason(
+                status: sessions[idx].status,
+                blockedReason: sessions[idx].blockedReason,
+                failureAssessment: failureAssessment,
+                exitCode: exitCode
+            ),
+            completedHeartbeat: completedHeartbeat
+        )
         sessions[idx].exitCode = exitCode
         sessions[idx].heartbeatLease = nil
         persistSessions()
@@ -1640,6 +1696,62 @@ final class CodexSessionManager: ObservableObject {
             scheduleHeartbeat(id: id)
             dispatchFleetHeartbeats(triggeredBy: id)
         }
+    }
+
+    private func heartbeatStalemateReason(
+        status: CodexSession.Status,
+        blockedReason: String?,
+        failureAssessment: (isTransient: Bool, kind: String, operatorAction: String),
+        exitCode: Int32
+    ) -> String {
+        if status == .blocked, let blockedReason, !blockedReason.isEmpty {
+            return blockedReason
+        }
+        if status == .failed || status == .failedCodexStartup {
+            if !failureAssessment.kind.isEmpty && failureAssessment.kind != "none" {
+                return failureAssessment.kind
+            }
+            if !failureAssessment.operatorAction.isEmpty {
+                return failureAssessment.operatorAction
+            }
+            return "heartbeat exited with code \(exitCode)"
+        }
+        return ""
+    }
+
+    private func applyStalemateGuard(
+        id: String,
+        currentStatus: CodexSession.Status,
+        currentReason: String,
+        completedHeartbeat: Int
+    ) {
+        guard let idx = sessions.firstIndex(where: { $0.id == id }),
+              let decision = CompanyStalemateDetector.detect(
+                companyID: id,
+                currentStatus: currentStatus,
+                currentReason: currentReason,
+                previousEvents: eventTimeline(companyID: id, limit: CompanyStalemateDetector.defaultThreshold - 1),
+                threshold: CompanyStalemateDetector.defaultThreshold
+              )
+        else { return }
+
+        sessions[idx].status = decision.action
+        sessions[idx].lifecycleStage = decision.lifecycleStage
+        sessions[idx].nextHeartbeatAt = nil
+        sessions[idx].heartbeatLease = nil
+        sessions[idx].blockedReason = "stalemate: \(decision.reason)"
+        appendEvent(
+            kind: .lifecycleStalemate,
+            companyID: id,
+            summary: decision.summary,
+            metadata: [
+                "reason": decision.reason,
+                "consecutiveCount": "\(decision.consecutiveCount)",
+                "heartbeat": "\(completedHeartbeat)",
+                "operatorAction": "needs evidence, metadata, instruction, or removal",
+                "status": CodexSession.Status.paused.rawValue
+            ]
+        )
     }
 
     private struct HandoffCommandRun: Decodable {
@@ -1880,6 +1992,162 @@ final class CodexSessionManager: ObservableObject {
     // MARK: - Approval console
 
     func approvalRequests(status: CompanyApprovalRequest.Status? = nil) -> [CompanyApprovalRequest] {
+        applyApprovalQueueRules()
+        return approvalRequestSnapshot(status: status)
+    }
+
+    func approvalQueuePlan(now: Date = Date()) -> CompanyApprovalQueuePlan {
+        applyApprovalQueueRules(now: now)
+        return CompanyApprovalQueueEngine.plan(
+            requests: approvalRequestSnapshot(status: nil),
+            policies: autoApprovalPolicies(),
+            now: now
+        )
+    }
+
+    func tickApprovalQueue(now: Date = Date()) {
+        applyApprovalQueueRules(now: now)
+    }
+
+    @discardableResult
+    func approveBatch(batchKey: String, hours: Int = 4, note: String? = nil) -> Int {
+        applyApprovalQueueRules()
+        let requests = approvalRequestSnapshot(status: .pending)
+        let plan = CompanyApprovalQueueEngine.plan(
+            requests: requests,
+            policies: autoApprovalPolicies(),
+            now: Date()
+        )
+        let requestIDs = Set(plan.batches[batchKey] ?? [])
+        let batch = requests.filter { requestIDs.contains($0.id) }
+        for request in batch {
+            recordApprovalDecision(
+                request: request,
+                status: .approved,
+                note: note ?? "Batch approved by operator for \(batchKey)",
+                grantHours: hours,
+                remainingUses: nil,
+                approvalMode: "manual_batch"
+            )
+        }
+        return batch.count
+    }
+
+    func createAutoApprovalPolicy(
+        from request: CompanyApprovalRequest,
+        createdBy: String = "operator",
+        companyPattern: String? = nil,
+        thresholdCount: Int = 3,
+        windowDays: Int = 14
+    ) -> CompanyApprovalAutoPolicy {
+        let policy = CompanyApprovalQueueEngine.appendOnlyPolicy(
+            id: "policy-\(UUID().uuidString)",
+            createdBy: createdBy,
+            companyPattern: companyPattern ?? request.companyID,
+            actionType: CompanyApprovalQueueEngine.actionType(for: request.proposedAction),
+            riskTier: request.riskTier,
+            createdAt: Date(),
+            thresholdCount: thresholdCount,
+            windowDays: windowDays
+        )
+        appendAutoApprovalPolicy(policy)
+        appendEvent(
+            kind: .approvalApproved,
+            companyID: request.companyID,
+            actor: createdBy,
+            summary: "Auto-approval policy created for \(policy.actionType)",
+            riskTier: request.riskTier.rawValue,
+            approvalState: "auto-policy-created",
+            metadata: [
+                "policyID": policy.id,
+                "companyPattern": policy.companyPattern,
+                "actionType": policy.actionType,
+                "thresholdCount": "\(policy.thresholdCount)",
+                "windowDays": "\(policy.windowDays)",
+                "revoked": "false"
+            ]
+        )
+        return policy
+    }
+
+    func revokeAutoApprovalPolicy(id: String, reason: String, revokedBy: String = "operator") {
+        guard let policy = autoApprovalPolicies(includeRevoked: true).first(where: { $0.id == id }) else { return }
+        let revoked = CompanyApprovalQueueEngine.revoke(policy, at: Date(), reason: reason)
+        appendAutoApprovalPolicy(revoked)
+        appendEvent(
+            kind: .approvalDenied,
+            companyID: nil,
+            actor: revokedBy,
+            summary: "Auto-approval policy revoked for \(revoked.actionType)",
+            riskTier: revoked.riskTier.rawValue,
+            approvalState: "auto-policy-revoked",
+            metadata: [
+                "policyID": revoked.id,
+                "companyPattern": revoked.companyPattern,
+                "actionType": revoked.actionType,
+                "revokedAt": revoked.revokedAt.map { ISO8601DateFormatter().string(from: $0) } ?? "",
+                "reason": reason
+            ]
+        )
+    }
+
+    func autoApprovalPolicies(includeRevoked: Bool = false) -> [CompanyApprovalAutoPolicy] {
+        guard let text = try? String(contentsOf: approvalPolicyLogURL, encoding: .utf8) else { return [] }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let latestByID = text
+            .split(separator: "\n")
+            .compactMap { line -> CompanyApprovalAutoPolicy? in
+                guard let data = String(line).data(using: .utf8) else { return nil }
+                return try? decoder.decode(CompanyApprovalAutoPolicy.self, from: data)
+            }
+            .reduce(into: [String: CompanyApprovalAutoPolicy]()) { result, policy in
+                result[policy.id] = policy
+            }
+        return latestByID.values
+            .filter { includeRevoked || !$0.isRevoked }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    private func promoteAutoApprovalPolicyIfEligible(
+        request: CompanyApprovalRequest,
+        approvedAt: Date,
+        approvalMode: String,
+        thresholdCount: Int = 3,
+        windowDays: Int = 14
+    ) {
+        guard approvalMode != "auto" else { return }
+        let actionType = CompanyApprovalQueueEngine.actionType(for: request.proposedAction)
+        let companyPattern = request.companyID
+        let policies = autoApprovalPolicies(includeRevoked: true)
+        let sameScopePolicies = policies.filter {
+            $0.companyPattern == companyPattern &&
+                $0.actionType == actionType &&
+                $0.riskTier == request.riskTier
+        }
+        guard sameScopePolicies.isEmpty else { return }
+
+        let since = approvedAt.addingTimeInterval(TimeInterval(-windowDays * 86_400))
+        let priorApprovals = recentEvents(limit: 10_000).filter { event in
+            event.kind == .approvalApproved &&
+                event.companyID == request.companyID &&
+                event.occurredAt >= since &&
+                event.metadata["approval_mode"] != "auto" &&
+                event.metadata["actionType"] == actionType &&
+                event.riskTier == request.riskTier.rawValue
+        }
+        guard priorApprovals.count + 1 >= thresholdCount else { return }
+
+        _ = createAutoApprovalPolicy(
+            from: request,
+            createdBy: "approval-history",
+            companyPattern: companyPattern,
+            thresholdCount: thresholdCount,
+            windowDays: windowDays
+        )
+    }
+
+    private func approvalRequestSnapshot(status: CompanyApprovalRequest.Status? = nil) -> [CompanyApprovalRequest] {
         sessions.compactMap(readApprovalRequest)
             .filter { request in
                 status.map { request.status == $0 } ?? true
@@ -1887,12 +2155,105 @@ final class CodexSessionManager: ObservableObject {
             .sorted { $0.requestedAt > $1.requestedAt }
     }
 
+    private func applyApprovalQueueRules(now: Date = Date(), expirySeconds: TimeInterval = 86_400) {
+        let requests = approvalRequestSnapshot(status: .pending)
+        guard !requests.isEmpty else { return }
+        let plan = CompanyApprovalQueueEngine.plan(
+            requests: requests,
+            policies: autoApprovalPolicies(),
+            now: now,
+            expirySeconds: expirySeconds
+        )
+        let requestsByID = Dictionary(uniqueKeysWithValues: requests.map { ($0.id, $0) })
+        for item in plan.items {
+            guard let request = requestsByID[item.requestID] else { continue }
+            if item.status == .expired {
+                expireApprovalRequest(request, now: now, releaseBy: item.releasesLeaseBy)
+            } else if item.approvalMode == "auto" {
+                recordApprovalDecision(
+                    request: request,
+                    status: .approved,
+                    note: "Auto-approved by policy for \(item.batchKey)",
+                    grantHours: 4,
+                    remainingUses: nil,
+                    approvalMode: "auto"
+                )
+            }
+        }
+    }
+
+    private func appendAutoApprovalPolicy(_ policy: CompanyApprovalAutoPolicy) {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? encoder.encode(policy),
+              var line = String(data: data, encoding: .utf8) else { return }
+        line.append("\n")
+        logQueue.sync { [approvalPolicyLogURL] in
+            if !FileManager.default.fileExists(atPath: approvalPolicyLogURL.path) {
+                FileManager.default.createFile(atPath: approvalPolicyLogURL.path, contents: nil)
+            }
+            guard let handle = try? FileHandle(forWritingTo: approvalPolicyLogURL) else { return }
+            defer { try? handle.close() }
+            _ = try? handle.seekToEnd()
+            handle.write(line.data(using: .utf8) ?? Data())
+        }
+    }
+
+    private func expireApprovalRequest(
+        _ request: CompanyApprovalRequest,
+        now: Date,
+        releaseBy: Date?
+    ) {
+        guard let idx = sessions.firstIndex(where: { $0.id == request.companyID }) else { return }
+        var expired = request
+        expired.status = .expired
+        expired.decisionNote = "Expired after approval SLA; company paused awaiting review."
+        expired.decidedAt = now
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        if let data = try? encoder.encode(expired) {
+            try? data.write(to: URL(fileURLWithPath: sessions[idx].approvalRequestPath), options: [.atomic])
+            try? data.write(to: URL(fileURLWithPath: sessions[idx].approvalDecisionPath), options: [.atomic])
+        }
+        try? FileManager.default.removeItem(atPath: sessions[idx].approvalGrantPath)
+        if let lease = sessions[idx].heartbeatLease {
+            Self.releaseHeartbeatLock(lockURL: heartbeatLockURL(id: request.companyID), leaseID: lease.id)
+        }
+        heartbeatTasks[request.companyID]?.cancel()
+        heartbeatTasks.removeValue(forKey: request.companyID)
+        sessions[idx].status = .paused
+        sessions[idx].lifecycleStage = .paused
+        sessions[idx].nextHeartbeatAt = nil
+        sessions[idx].heartbeatLease = nil
+        sessions[idx].blockedReason = "paused_awaiting_review"
+        persistSessions()
+        appendSystemNote(
+            id: request.companyID,
+            text: "Approval request \(request.id) expired; OS1 paused the company awaiting operator review."
+        )
+        appendEvent(
+            kind: .companyPaused,
+            companyID: request.companyID,
+            summary: "Approval request expired; company paused awaiting review",
+            runID: request.id,
+            riskTier: request.riskTier.rawValue,
+            approvalState: "expired",
+            metadata: [
+                "requestID": request.id,
+                "actionType": CompanyApprovalQueueEngine.actionType(for: request.proposedAction),
+                "releasesLeaseBy": releaseBy.map { ISO8601DateFormatter().string(from: $0) } ?? "",
+                "companyState": "paused_awaiting_review"
+            ]
+        )
+    }
+
     func approve(request: CompanyApprovalRequest, hours: Int = 4, note: String = "Approved by operator") {
-        recordApprovalDecision(request: request, status: .approved, note: note, grantHours: hours, remainingUses: nil)
+        recordApprovalDecision(request: request, status: .approved, note: note, grantHours: hours, remainingUses: nil, approvalMode: "manual")
     }
 
     func approveOnce(request: CompanyApprovalRequest, note: String = "Approved once by operator") {
-        recordApprovalDecision(request: request, status: .approved, note: note, grantHours: nil, remainingUses: 1)
+        recordApprovalDecision(request: request, status: .approved, note: note, grantHours: nil, remainingUses: 1, approvalMode: "manual_once")
     }
 
     func approveWithinBudget(request: CompanyApprovalRequest, hours: Int = 4) {
@@ -1902,12 +2263,13 @@ final class CodexSessionManager: ObservableObject {
             status: .approved,
             note: "Approved within requested budget \(cost)",
             grantHours: hours,
-            remainingUses: nil
+            remainingUses: nil,
+            approvalMode: "manual_budget"
         )
     }
 
     func deny(request: CompanyApprovalRequest, note: String = "Denied by operator") {
-        recordApprovalDecision(request: request, status: .denied, note: note, grantHours: nil, remainingUses: nil)
+        recordApprovalDecision(request: request, status: .denied, note: note, grantHours: nil, remainingUses: nil, approvalMode: "manual")
     }
 
     func requestChanges(request: CompanyApprovalRequest, note: String) {
@@ -1916,7 +2278,8 @@ final class CodexSessionManager: ObservableObject {
             status: .changesRequested,
             note: note,
             grantHours: nil,
-            remainingUses: nil
+            remainingUses: nil,
+            approvalMode: "manual"
         )
     }
 
@@ -1929,7 +2292,8 @@ final class CodexSessionManager: ObservableObject {
             status: .alwaysRequireApproval,
             note: note,
             grantHours: nil,
-            remainingUses: nil
+            remainingUses: nil,
+            approvalMode: "manual"
         )
     }
 
@@ -1988,7 +2352,8 @@ final class CodexSessionManager: ObservableObject {
         status: CompanyApprovalRequest.Status,
         note: String,
         grantHours: Int?,
-        remainingUses: Int?
+        remainingUses: Int?,
+        approvalMode: String
     ) {
         guard let idx = sessions.firstIndex(where: { $0.id == request.companyID }) else { return }
         if status == .approved {
@@ -2053,10 +2418,19 @@ final class CodexSessionManager: ObservableObject {
                 companyID: request.companyID,
                 actor: "user",
                 summary: "Approval granted: \(request.proposedAction)",
+                riskTier: request.riskTier.rawValue,
+                approvalState: "approved",
                 metadata: [
                     "requestID": request.id,
-                    "expiresAt": decided.expiresAt.map { ISO8601DateFormatter().string(from: $0) } ?? ""
+                    "expiresAt": decided.expiresAt.map { ISO8601DateFormatter().string(from: $0) } ?? "",
+                    "approval_mode": approvalMode,
+                    "actionType": CompanyApprovalQueueEngine.actionType(for: request.proposedAction)
                 ]
+            )
+            promoteAutoApprovalPolicyIfEligible(
+                request: request,
+                approvedAt: now,
+                approvalMode: approvalMode
             )
             injectInstruction(
                 id: request.companyID,
@@ -2264,6 +2638,10 @@ final class CodexSessionManager: ObservableObject {
         sessionsDir.deletingLastPathComponent().appendingPathComponent("events.jsonl")
     }
 
+    private var approvalPolicyLogURL: URL {
+        sessionsDir.deletingLastPathComponent().appendingPathComponent("approval-auto-policies.jsonl")
+    }
+
     private var backupsDir: URL {
         sessionsDir.deletingLastPathComponent().appendingPathComponent("backups", isDirectory: true)
     }
@@ -2344,6 +2722,179 @@ final class CodexSessionManager: ObservableObject {
             .filter { $0.companyID == companyID }
             .prefix(max(0, limit))
             .map { $0 }
+    }
+
+    func complianceMetadata(id: String) -> CompanyComplianceMetadata? {
+        guard let session = sessions.first(where: { $0.id == id }),
+              let data = try? Data(contentsOf: URL(fileURLWithPath: session.complianceMetadataPath))
+        else { return nil }
+        return try? JSONDecoder().decode(CompanyComplianceMetadata.self, from: data)
+    }
+
+    func saveComplianceMetadata(id: String, metadata: CompanyComplianceMetadata) {
+        guard let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        if let data = try? encoder.encode(metadata) {
+            try? data.write(to: URL(fileURLWithPath: sessions[idx].complianceMetadataPath), options: [.atomic])
+        }
+        let policy = [
+            "metadata": "complete",
+            "legalBasis": metadata.legalBasis ?? "",
+            "unsubscribePath": metadata.unsubscribePath ?? "",
+            "disclosureText": metadata.disclosureText ?? "",
+            "targetAudience": metadata.targetAudience ?? "",
+            "contactSource": metadata.contactSource ?? "",
+            "dataRetentionPolicy": metadata.dataRetentionPolicy ?? ""
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: policy, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: URL(fileURLWithPath: sessions[idx].compliancePolicyPath), options: [.atomic])
+        }
+        if sessions[idx].status == .failed || sessions[idx].status == .paused {
+            sessions[idx].status = .idle
+            sessions[idx].nextHeartbeatAt = Date()
+        }
+        persistSessions()
+        appendEvent(
+            kind: .complianceChecked,
+            companyID: id,
+            actor: "user",
+            summary: "Compliance metadata saved for distribution gates",
+            metadata: [
+                "hasRequiredOutboundFields": "\(metadata.hasRequiredOutboundFields)",
+                "policyFile": sessions[idx].compliancePolicyPath
+            ]
+        )
+    }
+
+    func latestValidationResult(id: String) -> CompanyValidationResult? {
+        guard let session = sessions.first(where: { $0.id == id }),
+              let text = try? String(contentsOfFile: session.validationEvidencePath, encoding: .utf8)
+        else { return nil }
+        let decoder = JSONDecoder()
+        return text
+            .split(separator: "\n")
+            .reversed()
+            .compactMap { line -> CompanyValidationResult? in
+                guard let data = String(line).data(using: .utf8) else { return nil }
+                return try? decoder.decode(CompanyValidationResult.self, from: data)
+            }
+            .first
+    }
+
+    func recordValidationEvidence(
+        id: String,
+        metrics: CompanyValidationResult.Metrics,
+        sourceLinks: [String],
+        screenshots: [String] = [],
+        rawResearchArtifacts: [String],
+        rationale: String
+    ) {
+        guard let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
+        let idea = validationIdea(for: sessions[idx])
+        let plan = CompanyValidationEngine.plan(for: idea)
+        let result = CompanyValidationResult(
+            ideaID: idea.id,
+            metrics: metrics,
+            sourceLinks: sourceLinks,
+            screenshots: screenshots,
+            rawResearchArtifacts: rawResearchArtifacts,
+            rationale: rationale
+        )
+        let decision = CompanyValidationEngine.decide(idea: idea, plan: plan, result: result)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        if let data = try? encoder.encode(result),
+           var line = String(data: data, encoding: .utf8) {
+            line.append("\n")
+            if !FileManager.default.fileExists(atPath: sessions[idx].validationEvidencePath) {
+                FileManager.default.createFile(atPath: sessions[idx].validationEvidencePath, contents: nil)
+            }
+            if let handle = try? FileHandle(forWritingTo: URL(fileURLWithPath: sessions[idx].validationEvidencePath)) {
+                defer { try? handle.close() }
+                _ = try? handle.seekToEnd()
+                handle.write(line.data(using: .utf8) ?? Data())
+            }
+        }
+
+        let previousStage = sessions[idx].lifecycleStage
+        switch decision.decision {
+        case .readyToBuild:
+            sessions[idx].lifecycleStage = .building
+            sessions[idx].status = .idle
+            sessions[idx].blockedReason = nil
+            sessions[idx].pendingUserInstruction = "Validation evidence cleared the gate. Use validation-evidence.jsonl and advance toward the first build artifact."
+            sessions[idx].nextHeartbeatAt = Date()
+        case .needsMoreEvidence:
+            sessions[idx].lifecycleStage = .validating
+            if sessions[idx].status == .failed || sessions[idx].status == .paused {
+                sessions[idx].status = .idle
+                sessions[idx].nextHeartbeatAt = Date()
+            }
+            sessions[idx].pendingUserInstruction = "Validation evidence was added but more proof is needed. Read validation-evidence.jsonl and run the next validation experiment."
+        case .rejected:
+            sessions[idx].lifecycleStage = .pivoting
+            sessions[idx].status = .paused
+            sessions[idx].nextHeartbeatAt = nil
+            sessions[idx].blockedReason = "validation rejected: \(decision.rationale)"
+        }
+        persistSessions()
+        appendEvent(
+            kind: .experimentDecided,
+            companyID: id,
+            actor: "user",
+            summary: "Validation evidence recorded: \(decision.decision.rawValue)",
+            metadata: [
+                "decision": decision.decision.rawValue,
+                "rationale": decision.rationale,
+                "evidenceFile": sessions[idx].validationEvidencePath
+            ]
+        )
+        if previousStage != sessions[idx].lifecycleStage {
+            appendEvent(
+                kind: .lifecycleChanged,
+                companyID: id,
+                summary: "Lifecycle changed from \(previousStage.rawValue) to \(sessions[idx].lifecycleStage.rawValue) after validation evidence",
+                metadata: [
+                    "from": previousStage.rawValue,
+                    "to": sessions[idx].lifecycleStage.rawValue,
+                    "decision": decision.decision.rawValue
+                ]
+            )
+        }
+    }
+
+    private func validationIdea(for session: CodexSession) -> CompanyIdea {
+        if let templateID = session.templateID,
+           let template = CompanyTemplateCatalog.template(id: templateID),
+           let idea = CompanyIdeaEngine.candidates(from: [template], limit: 1).first {
+            return idea
+        }
+        return CompanyIdea(
+            id: "manual-\(session.id)",
+            title: session.title,
+            sourceTemplateID: session.templateID,
+            status: .validating,
+            icp: "Target customer",
+            offer: session.task,
+            channel: "Manual validation",
+            riskTier: .medium,
+            expectedFirstExperiment: "Collect interviews, signup intent, willingness-to-pay, and competitor evidence.",
+            requiredCredentials: [],
+            evidenceLinks: [],
+            rationale: session.task,
+            rejectionReason: nil,
+            nextAction: "Record validation evidence.",
+            scorecard: .init(
+                customerPain: 5,
+                willingnessToPay: 5,
+                distributionChannel: 5,
+                legalComplianceRisk: 5,
+                buildComplexity: 5,
+                timeToFirstDollar: 5,
+                credentialReadiness: 5
+            )
+        )
     }
 
     func metricsSnapshot(companyID: String? = nil) -> CompanyMetricsSnapshot {
@@ -2739,6 +3290,16 @@ final class CodexSessionManager: ObservableObject {
                 false,
                 "authentication",
                 "Refresh or revoke the affected credential, then rerun the heartbeat."
+            )
+        }
+
+        if logTail.localizedCaseInsensitiveContains("failed to initialize in-process app-server client")
+            || (logTail.localizedCaseInsensitiveContains("operation not permitted")
+                && logTail.localizedCaseInsensitiveContains("codex")) {
+            return (
+                false,
+                "codexStartup",
+                "Codex CLI failed to initialize under the heartbeat sandbox. Check sandbox profile permissions for ~/.codex, temp directories, and IPC primitives before rerunning."
             )
         }
 

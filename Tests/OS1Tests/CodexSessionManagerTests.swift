@@ -546,6 +546,14 @@ struct CodexSessionManagerTests {
         #expect(!auth.isTransient)
         #expect(auth.kind == "authentication")
         #expect(auth.operatorAction.contains("credential"))
+
+        let startup = CodexSessionManager.heartbeatFailureAssessment(
+            exitCode: 1,
+            logTail: "Error: failed to initialize in-process app-server client: Operation not permitted (os error 1)"
+        )
+        #expect(!startup.isTransient)
+        #expect(startup.kind == "codexStartup")
+        #expect(startup.operatorAction.contains("sandbox"))
     }
 
     @Test
@@ -613,6 +621,7 @@ struct CodexSessionManagerTests {
             .paused,
             .completed,
             .failed,
+            .failedCodexStartup,
             .killed,
         ] {
             var session = CodexSession(
