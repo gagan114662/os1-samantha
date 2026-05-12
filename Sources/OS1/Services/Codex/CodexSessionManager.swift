@@ -1170,10 +1170,7 @@ final class CodexSessionManager: ObservableObject {
                 "sourceReference": sourceReference ?? ""
             ]
         )
-        var entries = CompanyLedgerParser.decodeJSONEntries(
-            (try? String(contentsOfFile: session.ledgerPath, encoding: .utf8)) ?? ""
-        )
-        entries.append(
+        try appendLedgerEntry(
             CompanyLedgerEntry(
                 id: "manual-\(event.id.uuidString)",
                 companyID: id,
@@ -1186,13 +1183,218 @@ final class CodexSessionManager: ObservableObject {
                 sourceReference: sourceReference,
                 confidence: confidence,
                 note: normalizedNote
-            )
+            ),
+            to: session
         )
+    }
+
+    @discardableResult
+    func recordStripeWebhook(
+        companyID: String,
+        payload: Data,
+        signatureHeader: String?,
+        endpointSecret: String? = nil,
+        credentialProfileId: String? = nil,
+        seenEventStore: PaymentWebhookSeenEventStore? = nil,
+        now: Date = Date()
+    ) throws -> CompanyLedgerEntry {
+        guard let session = sessions.first(where: { $0.id == companyID }) else {
+            throw PaymentWebhookReceiver.Error.paymentsCapabilityNotGranted(companyID)
+        }
+        let secret = endpointSecret
+            ?? PaymentCredentialStore.shared.loadSecret(.stripeWebhookSecret, forProfileId: credentialProfileId)
+            ?? ""
+        let event = try PaymentWebhookReceiver.verifiedStripe(
+            companyID: companyID,
+            payload: payload,
+            signatureHeader: signatureHeader,
+            endpointSecret: secret,
+            seenEventStore: seenEventStore ?? paymentWebhookSeenEventStore(),
+            now: now
+        )
+        return try appendVerifiedPaymentLedgerEntry(
+            PaymentWebhookReceiver.ledgerEntry(for: event),
+            to: session,
+            provider: "stripe",
+            eventID: event.id
+        )
+    }
+
+    @discardableResult
+    func recordGumroadWebhook(
+        companyID: String,
+        payload: Data,
+        signatureHeader: String?,
+        applicationSecret: String? = nil,
+        credentialProfileId: String? = nil,
+        seenEventStore: PaymentWebhookSeenEventStore? = nil,
+        now: Date = Date()
+    ) throws -> CompanyLedgerEntry {
+        guard let session = sessions.first(where: { $0.id == companyID }) else {
+            throw PaymentWebhookReceiver.Error.paymentsCapabilityNotGranted(companyID)
+        }
+        let secret = applicationSecret
+            ?? PaymentCredentialStore.shared.loadSecret(.gumroadApplicationSecret, forProfileId: credentialProfileId)
+            ?? ""
+        let event = try PaymentWebhookReceiver.verifiedGumroad(
+            companyID: companyID,
+            payload: payload,
+            signatureHeader: signatureHeader,
+            applicationSecret: secret,
+            seenEventStore: seenEventStore ?? paymentWebhookSeenEventStore(),
+            now: now
+        )
+        return try appendVerifiedPaymentLedgerEntry(
+            PaymentWebhookReceiver.ledgerEntry(for: event),
+            to: session,
+            provider: "gumroad",
+            eventID: event.id
+        )
+    }
+
+    @discardableResult
+    func generateStripeSandboxCheckoutLink(
+        id: String,
+        productName: String,
+        amountUSD: Double,
+        postID: String = "sandbox-checkout",
+        client: StripeCheckoutSessionClient = StripeCheckoutSessionClient()
+    ) async throws -> CompanyCheckoutLink {
+        guard sessions.contains(where: { $0.id == id }) else {
+            throw PaymentWebhookReceiver.Error.paymentsCapabilityNotGranted(id)
+        }
+        CompanyAccessControl.grantCapabilities([.payments], companyID: id)
+        let link = try await client.createTestCheckoutSession(
+            companyID: id,
+            productName: productName,
+            amountUSD: amountUSD,
+            postID: postID
+        )
+        appendEvent(
+            kind: .externalSideEffect,
+            companyID: id,
+            actor: "user",
+            summary: "Generated Stripe sandbox checkout link",
+            tool: "stripe.checkout.sessions.create",
+            outputSummary: link.checkoutURL?.absoluteString,
+            riskTier: "sandbox",
+            approvalState: "operator-initiated",
+            metadata: [
+                "provider": "stripe",
+                "checkoutID": link.id,
+                "amountUSD": String(format: "%.2f", link.amountUSD),
+                "mode": "test"
+            ]
+        )
+        return link
+    }
+
+    @discardableResult
+    func ingestStripePaymentWebhook(
+        id: String,
+        payload: Data,
+        signatureHeader: String?,
+        endpointSecret: String,
+        seenEventStore: PaymentWebhookSeenEventStore,
+        now: Date = Date()
+    ) throws -> CompanyLedgerEntry {
+        let event = try PaymentWebhookReceiver.verifiedStripe(
+            companyID: id,
+            payload: payload,
+            signatureHeader: signatureHeader,
+            endpointSecret: endpointSecret,
+            seenEventStore: seenEventStore,
+            now: now
+        )
+        return try recordVerifiedPaymentEvent(event)
+    }
+
+    @discardableResult
+    func ingestGumroadPaymentWebhook(
+        id: String,
+        payload: Data,
+        signatureHeader: String?,
+        applicationSecret: String,
+        seenEventStore: PaymentWebhookSeenEventStore,
+        now: Date = Date()
+    ) throws -> CompanyLedgerEntry {
+        let event = try PaymentWebhookReceiver.verifiedGumroad(
+            companyID: id,
+            payload: payload,
+            signatureHeader: signatureHeader,
+            applicationSecret: applicationSecret,
+            seenEventStore: seenEventStore,
+            now: now
+        )
+        return try recordVerifiedPaymentEvent(event)
+    }
+
+    @discardableResult
+    func recordVerifiedPaymentEvent(_ event: CompanyPaymentConversionEvent) throws -> CompanyLedgerEntry {
+        guard let session = sessions.first(where: { $0.id == event.companyID }) else {
+            return PaymentWebhookReceiver.ledgerEntry(for: event)
+        }
+        return try appendVerifiedPaymentLedgerEntry(
+            PaymentWebhookReceiver.ledgerEntry(for: event),
+            to: session,
+            provider: event.provider.rawValue,
+            eventID: event.id
+        )
+    }
+
+    @discardableResult
+    private func appendVerifiedPaymentLedgerEntry(
+        _ entry: CompanyLedgerEntry,
+        to session: CodexSession,
+        provider: String,
+        eventID: String
+    ) throws -> CompanyLedgerEntry {
+        if let existing = CompanyLedgerParser.decodeJSONEntries(
+            (try? String(contentsOfFile: session.ledgerPath, encoding: .utf8)) ?? ""
+        ).first(where: { $0.id == entry.id }) {
+            return existing
+        }
+        var ledgerEntry = entry
+        let auditEvent = appendEvent(
+            kind: .ledgerEntryRecorded,
+            companyID: session.id,
+            actor: "payments",
+            summary: "Verified \(provider) payment ledger entry recorded",
+            metadata: [
+                "provider": provider,
+                "eventID": eventID,
+                "ledgerEntryID": entry.id,
+                "amountUSD": String(format: "%.2f", entry.amountUSD),
+                "sourceReference": entry.sourceReference ?? ""
+            ]
+        )
+        ledgerEntry.sourceEventID = auditEvent.id
+        try appendLedgerEntry(ledgerEntry, to: session)
+        updateLifecycleAfterHeartbeat(id: session.id)
+        persistSessions()
+        return ledgerEntry
+    }
+
+    private func appendLedgerEntry(_ entry: CompanyLedgerEntry, to session: CodexSession) throws {
+        var entries = CompanyLedgerParser.decodeJSONEntries(
+            (try? String(contentsOfFile: session.ledgerPath, encoding: .utf8)) ?? ""
+        )
+        if let index = entries.firstIndex(where: { $0.id == entry.id }) {
+            entries[index] = entry
+        } else {
+            entries.append(entry)
+        }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(entries)
         try data.write(to: URL(fileURLWithPath: session.ledgerPath), options: [.atomic])
+    }
+
+    private func paymentWebhookSeenEventStore() -> PaymentWebhookSeenEventStore {
+        PaymentWebhookSeenEventStore(
+            url: sessionsDir.appendingPathComponent("payment-webhook-seen-events.sqlite")
+        )
     }
 
     private func enforceProfitabilityPolicy(id: String) {

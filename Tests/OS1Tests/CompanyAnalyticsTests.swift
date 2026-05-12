@@ -139,6 +139,32 @@ struct CompanyAnalyticsTests {
     }
 
     @Test
+    func signedStripeWebhookRejectsCompanyIDMismatch() throws {
+        let companyID = "stripe-company-\(UUID().uuidString)"
+        let otherCompanyID = "stripe-other-\(UUID().uuidString)"
+        Self.grantPayments(companyID)
+        let payload = Data(#"{"id":"evt_wrong_company","type":"checkout.session.completed","amount_total":2900,"currency":"usd","payment_intent":"pi_wrong","metadata":{"company_id":"\#(otherCompanyID)","utm_campaign":"\#(otherCompanyID)","utm_content":"post-1"}}"#.utf8)
+        let timestamp = 1_800_000_000
+        let header = PaymentWebhookReceiver.stripeSignatureHeader(
+            payload: payload,
+            timestamp: timestamp,
+            endpointSecret: "whsec_test"
+        )
+
+        #expect(throws: PaymentWebhookReceiver.Error.companyIDMismatch(expected: companyID, actual: otherCompanyID)) {
+            _ = try PaymentWebhookReceiver.verifiedStripe(
+                companyID: companyID,
+                payload: payload,
+                signatureHeader: header,
+                endpointSecret: "whsec_test",
+                seenEventIDs: [],
+                now: Date(timeIntervalSince1970: TimeInterval(timestamp + 10)),
+                toleranceSeconds: 300
+            )
+        }
+    }
+
+    @Test
     func signedStripeWebhookReplayStorePersistsAcrossInstances() throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("stripe-seen-events-\(UUID().uuidString).sqlite")
@@ -420,6 +446,7 @@ struct CompanyAnalyticsTests {
 
         #expect(link?.metadata["utm_campaign"] == "co")
         #expect(link?.metadata["utm_content"] == "post")
+        #expect(link?.metadata["company_id"] == "co")
     }
 
     @Test
