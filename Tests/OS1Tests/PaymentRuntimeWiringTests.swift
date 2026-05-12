@@ -50,7 +50,7 @@ struct PaymentRuntimeWiringTests {
             url: root.appendingPathComponent("seen.sqlite")
         )
 
-        let entry = try await MainActor.run {
+        let result = try await MainActor.run {
             let manager = CodexSessionManager(testRoot: root)
             let session = CodexSession(
                 id: "co",
@@ -63,7 +63,7 @@ struct PaymentRuntimeWiringTests {
             )
             manager.replaceSessionsForTesting([session])
             CompanyAccessControl.grantCapabilities([.payments], companyID: "co")
-            return try manager.recordStripeWebhook(
+            let entry = try manager.recordStripeWebhook(
                 companyID: "co",
                 payload: payload,
                 signatureHeader: header,
@@ -71,16 +71,25 @@ struct PaymentRuntimeWiringTests {
                 seenEventStore: store,
                 now: Date(timeIntervalSince1970: TimeInterval(timestamp + 10))
             )
+            let summary = manager.ledgerSummary(id: "co")
+            return (
+                entry: entry,
+                entryCount: summary.entries.count,
+                verifiedCount: summary.verifiedEntryCount,
+                tracedCount: summary.tracedEntryCount,
+                revenueUSD: summary.revenueUSD
+            )
         }
 
-        let ledgerJSON = try String(contentsOf: worktree.appendingPathComponent("LEDGER.json"), encoding: .utf8)
-        let entries = CompanyLedgerParser.decodeJSONEntries(ledgerJSON)
-        #expect(entries.count == 1)
-        #expect(entries.first?.id == entry.id)
-        #expect(entries.first?.confidence == .verified)
-        #expect(entries.first?.source == "stripe")
-        #expect(entries.first?.sourceReference == "pi_ledger")
-        #expect(entries.first?.sourceEventID != nil)
+        #expect(result.entry.id == "payment-evt_ledger")
+        #expect(result.entry.confidence == .verified)
+        #expect(result.entry.source == "stripe")
+        #expect(result.entry.sourceReference == "pi_ledger")
+        #expect(result.entry.sourceEventID != nil)
+        #expect(result.entryCount == 1)
+        #expect(result.verifiedCount == 1)
+        #expect(result.tracedCount == 1)
+        #expect(result.revenueUSD == 29)
     }
 }
 
