@@ -31,6 +31,7 @@ struct CompanyEvent: Codable, Hashable, Identifiable {
         case ledgerEntryRecorded
         case untrustedContentInfluencedDecision
         case driftDetected
+        case lifecycleStalemate
         case experimentDecided
     }
 
