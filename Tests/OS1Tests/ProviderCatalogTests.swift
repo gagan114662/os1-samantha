@@ -106,7 +106,7 @@ struct ProviderCatalogTests {
     }
 
     @Test
-    func mediaProvidersCoverEveryRequiredModality() {
+    func mediaProvidersCoverEveryRequiredModality() throws {
         let required: Set<ProviderCatalogEntry.Modality> = [.video, .image, .tts, .voiceClone, .music, .avatar, .render]
         let actual = Set(ProviderCatalog.entries.map(\.modality))
 
@@ -117,7 +117,65 @@ struct ProviderCatalogTests {
             for entry in entries {
                 #expect(entry.dashboardURL.scheme == "https")
                 #expect(entry.docsURL?.scheme == "https")
+                let cap = try #require(entry.dailyCostCapUSD, "\(entry.slug) needs an explicit daily cost cap.")
+                #expect(cap > 0, "\(entry.slug) daily cost cap should be positive.")
             }
         }
+    }
+
+    @Test
+    func doctorReportsProviderKeyPresenceAndLastSuccessfulCall() throws {
+        let timestamp = Date(timeIntervalSince1970: 1_800_000_000)
+        let rows = DoctorViewModel.providerKeyHealthRows(
+            credentialStatuses: ["elevenlabs-tts": true],
+            lastSuccessfulCalls: ["elevenlabs-tts": timestamp]
+        )
+        let eleven = try #require(rows.first { $0.providerSlug == "elevenlabs-tts" })
+        let fal = try #require(rows.first { $0.providerSlug == "fal-ai" })
+
+        #expect(eleven.hasKey)
+        #expect(eleven.lastSuccessfulCall == timestamp)
+        #expect(eleven.summary.contains("key present"))
+        #expect(fal.summary.contains("key missing"))
+        #expect(fal.summary.contains("last successful call: never"))
+    }
+
+    @Test
+    func doctorProviderKeyHealthUsesLatestSuccessfulProviderEvent() {
+        let older = Date(timeIntervalSince1970: 1_800_000_000)
+        let newer = older.addingTimeInterval(60)
+        let calls = DoctorViewModel.lastSuccessfulProviderCalls(from: [
+            CompanyEvent(
+                occurredAt: newer.addingTimeInterval(60),
+                kind: .externalSideEffect,
+                summary: "Blocked provider call",
+                tool: "elevenlabs-tts",
+                approvalState: "blocked"
+            ),
+            CompanyEvent(
+                occurredAt: older,
+                kind: .externalSideEffect,
+                summary: "Rendered narration",
+                tool: "elevenlabs-tts",
+                approvalState: "approved"
+            ),
+            CompanyEvent(
+                occurredAt: newer,
+                kind: .externalSideEffect,
+                summary: "Rendered narration again",
+                tool: "elevenlabs-tts",
+                approvalState: "approved"
+            ),
+            CompanyEvent(
+                occurredAt: newer,
+                kind: .externalSideEffect,
+                summary: "Unknown provider",
+                tool: "not-in-catalog",
+                approvalState: "approved"
+            )
+        ])
+
+        #expect(calls["elevenlabs-tts"] == newer)
+        #expect(calls["not-in-catalog"] == nil)
     }
 }

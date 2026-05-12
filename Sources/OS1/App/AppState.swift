@@ -132,6 +132,7 @@ final class AppState: ObservableObject {
     let connectorsViewModel: ConnectorsViewModel
 
     let providerCredentialStore: ProviderCredentialStore
+    let providerCallHealthStore: ProviderCallHealthStore
     let providerVMInstaller: ProviderVMInstaller
     let openRouterOAuthService: OpenRouterOAuthService
     let providersViewModel: ProvidersViewModel
@@ -249,16 +250,19 @@ final class AppState: ObservableObject {
         )
 
         let providerCredentialStore = ProviderCredentialStore()
+        let providerCallHealthStore = ProviderCallHealthStore()
         let providerVMInstaller = ProviderVMInstaller(
             orgoTransport: orgoTransport,
             multiplexed: transport
         )
         let openRouterOAuthService = OpenRouterOAuthService()
         self.providerCredentialStore = providerCredentialStore
+        self.providerCallHealthStore = providerCallHealthStore
         self.providerVMInstaller = providerVMInstaller
         self.openRouterOAuthService = openRouterOAuthService
         self.providersViewModel = ProvidersViewModel(
             credentialStore: providerCredentialStore,
+            healthStore: providerCallHealthStore,
             installer: providerVMInstaller,
             oauthService: openRouterOAuthService,
             urlOpener: { url in
@@ -283,6 +287,8 @@ final class AppState: ObservableObject {
         )
         self.doctorViewModel = DoctorViewModel(
             credentialStore: telegramCredentialStore,
+            providerCredentialStore: providerCredentialStore,
+            providerCallHealthStore: providerCallHealthStore,
             telegramInstaller: telegramVMInstaller,
             hermesUpdater: hermesUpdater
         )

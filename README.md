@@ -98,6 +98,15 @@ Current foundations:
   files prevent duplicate heartbeats across duplicate app/launchd starts.
   Restart recovery queues active leases instead of replaying work
   immediately, and stale locks can be recovered after crashes.
+- **Provider failover matrix**: Codex/OpenAI remains the default company
+  runtime, but request classes have explicit fallback posture: chat/tool
+  work can route through alternate model providers, embeddings can queue
+  or downshift when org headroom is low, image generation uses Codex
+  imagegen first and an operator-permitted alternate only during quota or
+  outage events, and voice work queues cleanly when no approved provider
+  is healthy. Every provider attempt records provider, model, request
+  class, and attempt number so Doctor can show green/yellow/red health by
+  provider and request class.
 - **Portfolio controls**: fleet pause/resume, per-company pause/resume,
   kill heartbeat, remove company, local state backups, revenue/cost
   ledger summaries, and Doctor production checks.
@@ -188,7 +197,7 @@ The bundle lands at `dist/OS1.app`.
 swift test
 ```
 
-At the time this README was updated, the local suite passed with 422
+At the time this README was updated, the local suite passed with 439
 tests, including focused coverage for company sandbox isolation,
 credential redaction, Doctor production checks, event metrics, heartbeat
 locks, stale-lock recovery, restart recovery, validation policy,

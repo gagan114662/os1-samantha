@@ -45,6 +45,21 @@ final class DoctorViewModel: ObservableObject {
         let detail: String
     }
 
+    struct ProviderKeyHealthRow: Equatable, Sendable {
+        let providerSlug: String
+        let displayName: String
+        let hasKey: Bool
+        let lastSuccessfulCall: Date?
+
+        var summary: String {
+            let keyStatus = hasKey ? "key present" : "key missing"
+            let last = lastSuccessfulCall
+                .map { ISO8601DateFormatter().string(from: $0) }
+                ?? "never"
+            return "\(displayName): \(keyStatus), last successful call: \(last)"
+        }
+    }
+
     @Published private(set) var checks: [Check] = []
     @Published private(set) var paymentsSnapshot: PaymentsHealthSnapshot = .empty
     @Published private(set) var fleetSnapshot: CompanyFleetHealthSnapshot = .empty
@@ -54,6 +69,8 @@ final class DoctorViewModel: ObservableObject {
     @Published private(set) var lastRefreshedAt: Date?
 
     private let credentialStore: TelegramCredentialStore
+    private let providerCredentialStore: ProviderCredentialStore
+    private let providerCallHealthStore: ProviderCallHealthStore
     private let telegramAPI: TelegramAPIClient
     private let telegramInstaller: TelegramVMInstaller
     private let hermesUpdater: HermesUpdater
@@ -69,11 +86,15 @@ final class DoctorViewModel: ObservableObject {
 
     init(
         credentialStore: TelegramCredentialStore,
+        providerCredentialStore: ProviderCredentialStore = ProviderCredentialStore(),
+        providerCallHealthStore: ProviderCallHealthStore = ProviderCallHealthStore(),
         telegramAPI: TelegramAPIClient = TelegramAPIClient(),
         telegramInstaller: TelegramVMInstaller,
         hermesUpdater: HermesUpdater
     ) {
         self.credentialStore = credentialStore
+        self.providerCredentialStore = providerCredentialStore
+        self.providerCallHealthStore = providerCallHealthStore
         self.telegramAPI = telegramAPI
         self.telegramInstaller = telegramInstaller
         self.hermesUpdater = hermesUpdater
@@ -116,7 +137,8 @@ final class DoctorViewModel: ObservableObject {
             events: CodexSessionManager.shared.recentEvents(limit: 10_000),
             now: now
         )
-        let localChecks = await makeLocalStackChecks()
+        let recentEvents = CodexSessionManager.shared.recentEvents(limit: 10_000)
+        let localChecks = await makeLocalStackChecks(recentEvents: recentEvents)
 
         guard let connection = currentConnection else {
             checks = localChecks + [Check(
@@ -168,7 +190,7 @@ final class DoctorViewModel: ObservableObject {
 
     /// Probe the Mac-side moving parts that the rest of OS1 depends on.
     /// Each runs with a short timeout and returns a Check row; never throws.
-    private func makeLocalStackChecks() async -> [Check] {
+    private func makeLocalStackChecks(recentEvents: [CompanyEvent]) async -> [Check] {
         async let codex = makeBinaryCheck(id: "cli-codex", title: "Codex CLI", binary: "codex", versionArgs: ["--version"])
         async let claude = makeBinaryCheck(id: "cli-claude", title: "Claude Code CLI", binary: "claude", versionArgs: ["--version"])
         async let wuphf = makeWUPHFCheck()
@@ -185,6 +207,7 @@ final class DoctorViewModel: ObservableObject {
         async let heartbeatSandbox = makeCodexHeartbeatSandboxCheck()
         async let codexFeatures = makeCodexFeatureMatrixCheck()
         async let browserStealth = makeBrowserStealthCoverageCheck()
+        async let providerKeys = makeProviderKeyHealthCheck(recentEvents: recentEvents)
         return await [
             codex,
             claude,
@@ -202,7 +225,67 @@ final class DoctorViewModel: ObservableObject {
             heartbeatSandbox,
             codexFeatures,
             browserStealth,
+            providerKeys,
         ]
+    }
+
+    private func makeProviderKeyHealthCheck(recentEvents: [CompanyEvent]) async -> Check {
+        let credentialStatuses = providerCredentialStore.loadConnectionStatuses(forProfileId: currentProfileId)
+        let storedCalls = providerCallHealthStore.loadLastSuccessfulCalls(forProfileId: currentProfileId)
+        let eventCalls = Self.lastSuccessfulProviderCalls(from: recentEvents)
+        let rows = Self.providerKeyHealthRows(
+            credentialStatuses: credentialStatuses,
+            lastSuccessfulCalls: Self.mergeLatestProviderCalls(storedCalls, eventCalls)
+        )
+        let missing = rows.filter { !$0.hasKey }.count
+        return Check(
+            id: "provider-key-health",
+            title: "Provider keys",
+            severity: missing == 0 ? .ok : .warn,
+            summary: missing == 0 ? "All provider keys are present" : "\(missing) provider key(s) missing",
+            detail: rows.map(\.summary).joined(separator: "\n"),
+            actions: []
+        )
+    }
+
+    nonisolated static func providerKeyHealthRows(
+        credentialStatuses: [String: Bool],
+        lastSuccessfulCalls: [String: Date]
+    ) -> [ProviderKeyHealthRow] {
+        ProviderCatalog.entries.map { entry in
+            ProviderKeyHealthRow(
+                providerSlug: entry.slug,
+                displayName: entry.displayName,
+                hasKey: credentialStatuses[entry.slug] ?? false,
+                lastSuccessfulCall: lastSuccessfulCalls[entry.slug]
+            )
+        }
+    }
+
+    nonisolated static func lastSuccessfulProviderCalls(from events: [CompanyEvent]) -> [String: Date] {
+        let providerSlugs = Set(ProviderCatalog.entries.map(\.slug))
+        return events.reduce(into: [:]) { result, event in
+            guard event.kind == .externalSideEffect,
+                  let providerSlug = event.tool,
+                  providerSlugs.contains(providerSlug),
+                  event.approvalState != "blocked"
+            else { return }
+            let occurredAt = event.occurredAt
+            if let previous = result[providerSlug], previous >= occurredAt { return }
+            result[providerSlug] = occurredAt
+        }
+    }
+
+    nonisolated static func mergeLatestProviderCalls(
+        _ first: [String: Date],
+        _ second: [String: Date]
+    ) -> [String: Date] {
+        var result = first
+        for (slug, date) in second {
+            if let previous = result[slug], previous >= date { continue }
+            result[slug] = date
+        }
+        return result
     }
 
     private func makeBrowserStealthCoverageCheck() async -> Check {

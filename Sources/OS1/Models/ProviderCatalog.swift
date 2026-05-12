@@ -24,8 +24,39 @@ struct ProviderCatalogEntry: Identifiable, Equatable, Sendable {
     let kind: Kind
     let validation: Validation
     let supportsOAuth: Bool
+    let dailyCostCapUSD: Double?
 
     var id: String { slug }
+
+    init(
+        slug: String,
+        displayName: String,
+        tagline: String,
+        symbolName: String,
+        keyPrefixHint: String,
+        dashboardURL: URL,
+        docsURL: URL?,
+        envVar: String,
+        baseURL: URL,
+        kind: Kind,
+        validation: Validation,
+        supportsOAuth: Bool,
+        dailyCostCapUSD: Double? = nil
+    ) {
+        self.slug = slug
+        self.displayName = displayName
+        self.tagline = tagline
+        self.symbolName = symbolName
+        self.keyPrefixHint = keyPrefixHint
+        self.dashboardURL = dashboardURL
+        self.docsURL = docsURL
+        self.envVar = envVar
+        self.baseURL = baseURL
+        self.kind = kind
+        self.validation = validation
+        self.supportsOAuth = supportsOAuth
+        self.dailyCostCapUSD = dailyCostCapUSD
+    }
 
     enum Kind: Equatable, Sendable {
         case builtin(typeKey: String)
@@ -194,7 +225,8 @@ enum ProviderCatalog {
             baseURL: URL(string: "https://fal.run")!,
             kind: .mediaProvider(modality: .video, freeTierQuota: .init(unit: "credits", amount: 0)),
             validation: .skip(reason: "Fal provider validation is model-specific; save and probe at first call."),
-            supportsOAuth: false
+            supportsOAuth: false,
+            dailyCostCapUSD: 10
         ),
         ProviderCatalogEntry(
             slug: "replicate",
@@ -208,7 +240,8 @@ enum ProviderCatalog {
             baseURL: URL(string: "https://api.replicate.com/v1")!,
             kind: .mediaProvider(modality: .image, freeTierQuota: nil),
             validation: .modelsEndpoint(path: "/models"),
-            supportsOAuth: false
+            supportsOAuth: false,
+            dailyCostCapUSD: 5
         ),
         ProviderCatalogEntry(
             slug: "elevenlabs-tts",
@@ -222,7 +255,8 @@ enum ProviderCatalog {
             baseURL: URL(string: "https://api.elevenlabs.io/v1")!,
             kind: .mediaProvider(modality: .tts, freeTierQuota: .init(unit: "characters", amount: 10000)),
             validation: .modelsEndpoint(path: "/models"),
-            supportsOAuth: false
+            supportsOAuth: false,
+            dailyCostCapUSD: 3
         ),
         ProviderCatalogEntry(
             slug: "elevenlabs-voice-clone",
@@ -236,7 +270,8 @@ enum ProviderCatalog {
             baseURL: URL(string: "https://api.elevenlabs.io/v1")!,
             kind: .mediaProvider(modality: .voiceClone, freeTierQuota: nil),
             validation: .modelsEndpoint(path: "/voices"),
-            supportsOAuth: false
+            supportsOAuth: false,
+            dailyCostCapUSD: 5
         ),
         ProviderCatalogEntry(
             slug: "suno",
@@ -250,7 +285,8 @@ enum ProviderCatalog {
             baseURL: URL(string: "https://api.sunoapi.org/api/v1")!,
             kind: .mediaProvider(modality: .music, freeTierQuota: nil),
             validation: .skip(reason: "Suno-compatible gateways vary; validate during provider-specific calls."),
-            supportsOAuth: false
+            supportsOAuth: false,
+            dailyCostCapUSD: 5
         ),
         ProviderCatalogEntry(
             slug: "heygen",
@@ -264,7 +300,8 @@ enum ProviderCatalog {
             baseURL: URL(string: "https://api.heygen.com/v2")!,
             kind: .mediaProvider(modality: .avatar, freeTierQuota: nil),
             validation: .skip(reason: "HeyGen health probes require account-specific API permissions."),
-            supportsOAuth: false
+            supportsOAuth: false,
+            dailyCostCapUSD: 10
         ),
         ProviderCatalogEntry(
             slug: "json2video",
@@ -278,7 +315,8 @@ enum ProviderCatalog {
             baseURL: URL(string: "https://api.json2video.com/v2")!,
             kind: .mediaProvider(modality: .render, freeTierQuota: nil),
             validation: .skip(reason: "Render validation should be a dry-run render, not a save-time probe."),
-            supportsOAuth: false
+            supportsOAuth: false,
+            dailyCostCapUSD: 5
         )
     ]
 

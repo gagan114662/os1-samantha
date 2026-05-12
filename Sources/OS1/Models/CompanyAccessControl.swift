@@ -349,6 +349,22 @@ struct CompanyAccessControl: Codable, Hashable {
         var requiresApproval: Bool { status == .approvalRequired }
     }
 
+    struct MediaProviderAccessDecision: Codable, Hashable {
+        enum Status: String, Codable, Hashable {
+            case denied
+            case approvalRequired = "approval_required"
+            case allowed
+        }
+
+        var status: Status
+        var reason: String
+        var providerSlug: String
+        var forecastLedgerEntry: CompanyLedgerEntry?
+        var approvalEvent: CompanyEvent?
+
+        var requiresApproval: Bool { status == .approvalRequired }
+    }
+
     var companyID: String
     var mediaProviderAllowlist: Set<String>
     var seoProviderAllowlist: Set<String>
@@ -391,6 +407,72 @@ struct CompanyAccessControl: Codable, Hashable {
             return entry.modality == modality
         }
         return true
+    }
+
+    func mediaProviderAccess(
+        providerSlug: String,
+        modality: ProviderCatalogEntry.Modality,
+        estimatedDailyCostUSD: Double,
+        priorApprovedCallCount: Int,
+        now: Date = Date()
+    ) -> MediaProviderAccessDecision {
+        guard allowsMediaProvider(providerSlug, modality: modality),
+              let provider = ProviderCatalog.entry(for: providerSlug) else {
+            return MediaProviderAccessDecision(
+                status: .denied,
+                reason: "media provider not allowlisted",
+                providerSlug: providerSlug,
+                forecastLedgerEntry: nil,
+                approvalEvent: nil
+            )
+        }
+
+        let forecastAmount = min(max(estimatedDailyCostUSD, 0), provider.dailyCostCapUSD ?? estimatedDailyCostUSD)
+        let forecast = CompanyLedgerEntry(
+            id: "\(companyID)-\(providerSlug)-daily-cost-forecast",
+            companyID: companyID,
+            occurredAt: now,
+            kind: .cost,
+            category: .tools,
+            amountUSD: forecastAmount,
+            source: "media-provider-forecast",
+            sourceReference: providerSlug,
+            confidence: .estimated,
+            note: "forecast daily media provider cap for \(provider.displayName)"
+        )
+
+        guard priorApprovedCallCount > 0 else {
+            let event = CompanyEvent(
+                occurredAt: now,
+                companyID: companyID,
+                kind: .approvalRequested,
+                summary: "Approval required before first media provider call to \(provider.displayName)",
+                tool: providerSlug,
+                costUSD: forecastAmount,
+                riskTier: "medium",
+                approvalState: "approval-required",
+                metadata: [
+                    "providerSlug": providerSlug,
+                    "modality": modality.rawValue,
+                    "dailyCostCapUSD": String(format: "%.2f", forecastAmount)
+                ]
+            )
+            return MediaProviderAccessDecision(
+                status: .approvalRequired,
+                reason: "first media provider call requires approval",
+                providerSlug: providerSlug,
+                forecastLedgerEntry: forecast,
+                approvalEvent: event
+            )
+        }
+
+        return MediaProviderAccessDecision(
+            status: .allowed,
+            reason: "media provider allowlisted",
+            providerSlug: providerSlug,
+            forecastLedgerEntry: forecast,
+            approvalEvent: nil
+        )
     }
 
     func composioToolkitAccess(
