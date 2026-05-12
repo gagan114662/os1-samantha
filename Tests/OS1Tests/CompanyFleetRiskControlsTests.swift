@@ -234,26 +234,102 @@ struct CompanyFleetRiskControlsTests {
     func pnlPriorsRankTopSevenRecommendKillsAndTrackCalibration() {
         let winnerPrior = CompanyProfitPrior(templateID: "saas", expectedMonthlyRevenueUSD: 1_000, tractability: 0.8, killThresholdEVUSD: 200)
         let weakPrior = CompanyProfitPrior(templateID: "newsletter", expectedMonthlyRevenueUSD: 100, tractability: 0.4, killThresholdEVUSD: 80)
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
         let posteriors = [
-            CompanyProfitPriorEngine.posterior(companyID: "winner", prior: winnerPrior, actualRevenueUSD: 1_200),
-            CompanyProfitPriorEngine.posterior(companyID: "weak", prior: weakPrior, actualRevenueUSD: 10, overrideReason: "operator changed niche prior after interviews")
+            CompanyProfitPriorEngine.posterior(companyID: "winner", prior: winnerPrior, actualRevenueUSD: 1_200, companyAgeDays: 60, now: now),
+            CompanyProfitPriorEngine.posterior(
+                companyID: "weak",
+                prior: weakPrior,
+                actualRevenueUSD: 10,
+                metricObservations: [.mrr60: 10, .grossMargin: 0.2, .churn: 0.3],
+                companyAgeDays: 60,
+                now: now,
+                overrideReason: "operator changed niche prior after interviews"
+            )
         ]
 
         let ranked = CompanyProfitPriorEngine.topSeven(posteriors)
+        let digest = CompanyProfitPriorEngine.portfolioDigestTopSeven(posteriors)
         let kills = CompanyProfitPriorEngine.killRecommendations(
             posteriors,
             priors: ["saas": winnerPrior, "newsletter": weakPrior]
         )
         let calibration = CompanyProfitPriorEngine.calibrationReport(
             predicted: ["winner": 1_000, "weak": 100],
-            actual: ["winner": 1_100, "weak": 20]
+            actual: ["winner": 1_100, "weak": 20],
+            quarter: "2026-Q1",
+            historicalCalibrationError: ["2025-Q4": 0.18]
         )
 
         #expect(ranked.map(\.companyID) == ["winner", "weak"])
+        #expect(posteriors.allSatisfy { $0.metricEstimates.count == CompanyProfitMetric.allCases.count })
+        #expect(posteriors.allSatisfy { $0.lowerCredibleUSD < $0.expectedValueUSD && $0.expectedValueUSD < $0.upperCredibleUSD })
+        #expect(digest.first?.rank == 1)
+        #expect(digest.first?.reasoning.joined(separator: " ").contains("tractability") == true)
         #expect(kills == [CompanyKillRecommendation(companyID: "weak", approvalGated: true, reason: "belowTemplateKillThreshold")])
         #expect(posteriors[1].overrideReason?.contains("operator changed") == true)
         #expect(calibration.predictedVsActual.count == 2)
         #expect(calibration.calibrationError > 0)
+        #expect(calibration.quarter == "2026-Q1")
+        #expect(calibration.historicalCalibrationError.keys.contains("2025-Q4"))
+        #expect(calibration.historicalCalibrationError.keys.contains("2026-Q1"))
+    }
+
+    @Test
+    func pnlPriorsExposeNightlySnapshotsOverridesAndBacktestAccuracy() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let saas = CompanyProfitPrior(templateID: "saas", expectedMonthlyRevenueUSD: 1_000, tractability: 0.8, killThresholdEVUSD: 200)
+        let newsletter = CompanyProfitPrior(templateID: "newsletter", expectedMonthlyRevenueUSD: 120, tractability: 0.4, killThresholdEVUSD: 100)
+        let snapshot = CompanyProfitPriorEngine.nightlySnapshot(
+            companies: [
+                CompanyProfitActiveCompanyInput(
+                    companyID: "winner",
+                    templateID: "saas",
+                    companyAgeDays: 45,
+                    actualRevenueUSD: 900,
+                    metricObservations: [.mrr30: 400, .mrr60: 900, .grossMargin: 0.72],
+                    isActive: true
+                ),
+                CompanyProfitActiveCompanyInput(
+                    companyID: "paused",
+                    templateID: "newsletter",
+                    companyAgeDays: 80,
+                    actualRevenueUSD: 5,
+                    metricObservations: [:],
+                    isActive: false
+                )
+            ],
+            priors: ["saas": saas, "newsletter": newsletter],
+            now: now
+        )
+        let override = CompanyProfitPriorOverride(
+            companyID: "winner",
+            templateID: "saas",
+            metric: .mrr90,
+            expectedValue: 1_400,
+            reason: "closed enterprise pilot after interviews",
+            createdBy: "operator",
+            createdAt: now
+        )
+        let overrideResult = CompanyProfitPriorEngine.overridePrior(saas, override: override)
+        let backtest = CompanyProfitPriorEngine.backtest(
+            history: [
+                CompanyClosedCompanyHistory(companyID: "keep-1", templateID: "saas", day60RevenueUSD: 800, day180MRRUSD: 1_200, actualKept: true),
+                CompanyClosedCompanyHistory(companyID: "keep-2", templateID: "saas", day60RevenueUSD: 650, day180MRRUSD: 900, actualKept: true),
+                CompanyClosedCompanyHistory(companyID: "kill-1", templateID: "newsletter", day60RevenueUSD: 0, day180MRRUSD: 20, actualKept: false),
+                CompanyClosedCompanyHistory(companyID: "kill-2", templateID: "newsletter", day60RevenueUSD: 15, day180MRRUSD: 25, actualKept: false)
+            ],
+            priors: ["saas": saas, "newsletter": newsletter]
+        )
+
+        #expect(snapshot.generatedAt == now)
+        #expect(snapshot.posteriors.map(\.companyID) == ["winner"])
+        #expect(snapshot.posteriors.first?.metricEstimates.contains { $0.metric == .mrr90 } == true)
+        #expect(overrideResult.prior.effectiveMetricPriors[.mrr90]?.expectedValue == 1_400)
+        #expect(overrideResult.event.kind == .governanceDecisionRecorded)
+        #expect(overrideResult.event.metadata["reason"]?.contains("enterprise pilot") == true)
+        #expect(backtest.decisions.count == 4)
+        #expect(backtest.accuracy >= 0.70)
     }
 
     private func eval(
