@@ -28,6 +28,7 @@ struct RootView: View {
         minPrimaryWidth: workbenchPrimaryColumnWidth,
         defaultPrimaryWidth: workbenchPrimaryColumnWidth
     )
+    @State private var showRealtimeVoicePanel = false
 
     var body: some View {
         OS1HSplitView {
@@ -162,7 +163,7 @@ struct RootView: View {
 
     private var voiceModeButton: some View {
         Button {
-            appState.toggleRealtimeVoiceMode()
+            showRealtimeVoicePanel = true
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: appState.isRealtimeVoiceEnabled ? "mic.fill" : "mic.slash")
@@ -193,6 +194,18 @@ struct RootView: View {
             }
         }
         .buttonStyle(.plain)
+        .help(voiceDiagnosticText)
+        .popover(isPresented: $showRealtimeVoicePanel, arrowEdge: .trailing) {
+            RealtimeVoicePanelView(
+                orgoAPIKey: appState.orgoCredentialStore.loadAPIKey(),
+                orgoDefaultComputerID: activeOrgoComputerID,
+                onClose: { showRealtimeVoicePanel = false },
+                onConfigureProviders: {
+                    showRealtimeVoicePanel = false
+                    appState.requestSectionSelection(.providers)
+                }
+            )
+        }
     }
 
     private var voiceStatusLabel: String {
@@ -225,6 +238,20 @@ struct RootView: View {
             return theme.palette.success
         }
         return theme.palette.warning
+    }
+
+    private var voiceDiagnosticText: String {
+        guard appState.isRealtimeVoiceEnabled else {
+            return L10n.string("Voice mode is off.")
+        }
+        let status = appState.realtimeVoiceStatus.trimmingCharacters(in: .whitespacesAndNewlines)
+        if status.isEmpty {
+            return L10n.string("Voice status is not available yet.")
+        }
+        if voiceStatusLabel == "ERR" {
+            return status
+        }
+        return L10n.string("Voice status: %@", status)
     }
 
     private func sectionRow(_ section: AppSection) -> some View {

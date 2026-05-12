@@ -14,7 +14,10 @@ struct CompanySandboxProfile: Hashable {
             worktreePath,
             logPath,
             promptPath,
-            portfolioLessonsPath
+            portfolioLessonsPath,
+            codexHomePath,
+            "/tmp",
+            "/private/tmp"
         ].filter { !$0.isEmpty }.flatMap(Self.pathAliases)
 
         let readOnlyPaths = [
@@ -24,8 +27,7 @@ struct CompanySandboxProfile: Hashable {
             "/System",
             "/Library",
             "/Applications",
-            "/opt/homebrew",
-            codexHomePath
+            "/opt/homebrew"
         ].filter { !$0.isEmpty }.flatMap(Self.pathAliases)
 
         return """
@@ -41,6 +43,9 @@ struct CompanySandboxProfile: Hashable {
         (allow process-info* (target self))
         (allow sysctl-read)
         (allow mach-lookup)
+        (allow mach-register)
+        (allow ipc-posix-shm)
+        (allow ipc-posix-sem)
         (allow network*)
         (allow file-read-metadata)
 

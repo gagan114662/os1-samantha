@@ -40,6 +40,34 @@ struct CompanyLifecycleEngineTests {
     }
 
     @Test
+    func stalemateDetectorPausesAfterThreeSameReasonFailures() throws {
+        let prior = [
+            heartbeatEvent(status: .failed, reason: "validation gate missing evidence", secondsAgo: 120),
+            heartbeatEvent(status: .failed, reason: "validation gate missing evidence", secondsAgo: 60)
+        ]
+        let decision = try #require(CompanyStalemateDetector.detect(
+            companyID: "company",
+            currentStatus: .failed,
+            currentReason: "validation gate missing evidence",
+            previousEvents: prior
+        ))
+        let mixed = CompanyStalemateDetector.detect(
+            companyID: "company",
+            currentStatus: .failed,
+            currentReason: "validation gate missing evidence",
+            previousEvents: [
+                heartbeatEvent(status: .failed, reason: "different blocker", secondsAgo: 120),
+                heartbeatEvent(status: .failed, reason: "validation gate missing evidence", secondsAgo: 60)
+            ]
+        )
+
+        #expect(decision.action == .paused)
+        #expect(decision.lifecycleStage == .paused)
+        #expect(decision.consecutiveCount == 3)
+        #expect(mixed == nil)
+    }
+
+    @Test
     func killedCompaniesKeepArtifactPathsInEvidenceSnapshot() {
         let evidence = snapshot(stage: .validating, validation: .rejected, artifacts: ["JOURNAL.md", "REVENUE.md", "COMPANY_ASSETS.json"])
         let decision = CompanyLifecycleEngine.decide(evidence)
@@ -145,6 +173,23 @@ struct CompanyLifecycleEngineTests {
             complianceRisk: risk,
             overrideReason: nil,
             artifactPaths: artifacts
+        )
+    }
+
+    private func heartbeatEvent(
+        status: CodexSession.Status,
+        reason: String,
+        secondsAgo: TimeInterval
+    ) -> CompanyEvent {
+        CompanyEvent(
+            occurredAt: Date().addingTimeInterval(-secondsAgo),
+            companyID: "company",
+            kind: .heartbeatFinished,
+            summary: "Finished heartbeat with status \(status.rawValue)",
+            metadata: [
+                "status": status.rawValue,
+                "failureKind": reason
+            ]
         )
     }
 

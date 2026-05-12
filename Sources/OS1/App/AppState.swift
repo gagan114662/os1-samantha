@@ -126,6 +126,7 @@ final class AppState: ObservableObject {
     let mailSetupViewModel: MailSetupViewModel
     let mailInboxViewModel: MailInboxViewModel
     let composioCredentialStore: ComposioCredentialStore
+    let paymentCredentialStore: PaymentCredentialStore
     let composioVMInstaller: ComposioVMInstaller
     let composioUserIdentity: ComposioUserIdentity
     let composioToolkitService: ComposioToolkitService
@@ -213,6 +214,7 @@ final class AppState: ObservableObject {
         )
 
         let composioCredentialStore = ComposioCredentialStore()
+        let paymentCredentialStore = PaymentCredentialStore.shared
         let composioVMInstaller = ComposioVMInstaller(
             orgoTransport: orgoTransport,
             multiplexed: transport
@@ -233,11 +235,13 @@ final class AppState: ObservableObject {
         let composioToolkitService = ComposioToolkitService(mcp: composioMCPClient)
         let composioUserIdentity = ComposioUserIdentity()
         self.composioCredentialStore = composioCredentialStore
+        self.paymentCredentialStore = paymentCredentialStore
         self.composioVMInstaller = composioVMInstaller
         self.composioUserIdentity = composioUserIdentity
         self.composioToolkitService = composioToolkitService
         self.connectorsViewModel = ConnectorsViewModel(
             credentialStore: composioCredentialStore,
+            paymentCredentialStore: paymentCredentialStore,
             installer: composioVMInstaller,
             toolkitService: composioToolkitService,
             urlOpener: { url in

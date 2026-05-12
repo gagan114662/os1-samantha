@@ -97,8 +97,14 @@ final class ConnectorsViewModel: ObservableObject {
     /// single active auth at a time per user).
     @Published private(set) var inFlightToolkitSlug: String?
     @Published private(set) var connectError: String?
+    @Published var stripeSecretKeyDraft = ""
+    @Published var stripeWebhookSecretDraft = ""
+    @Published var gumroadApplicationSecretDraft = ""
+    @Published private(set) var paymentCredentialStatus: [PaymentCredentialStore.SecretKind: Bool] = [:]
+    @Published private(set) var paymentCredentialMessage: String?
 
     private let credentialStore: ComposioCredentialStore
+    private let paymentCredentialStore: PaymentCredentialStore
     private let installer: ComposioVMInstaller
     private let toolkitService: ComposioToolkitService?
     private let urlOpener: @Sendable (URL) -> Void
@@ -108,15 +114,18 @@ final class ConnectorsViewModel: ObservableObject {
 
     init(
         credentialStore: ComposioCredentialStore = ComposioCredentialStore(),
+        paymentCredentialStore: PaymentCredentialStore = .shared,
         installer: ComposioVMInstaller,
         toolkitService: ComposioToolkitService? = nil,
         urlOpener: @escaping @Sendable (URL) -> Void = { _ in }
     ) {
         self.credentialStore = credentialStore
+        self.paymentCredentialStore = paymentCredentialStore
         self.installer = installer
         self.toolkitService = toolkitService
         self.urlOpener = urlOpener
         self.refreshFromStorage()
+        self.refreshPaymentCredentials()
     }
 
     /// Pushed by the view layer whenever the active connection changes.
@@ -135,7 +144,9 @@ final class ConnectorsViewModel: ObservableObject {
         discoveredVMKey = nil
         lastScanResult = .notRun
         formError = nil
+        paymentCredentialMessage = nil
         refreshFromStorage()
+        refreshPaymentCredentials()
         if step == .configured {
             refreshToolkits()
         }
@@ -464,5 +475,70 @@ final class ConnectorsViewModel: ObservableObject {
 
     func clearConnectError() {
         connectError = nil
+    }
+
+    // MARK: - Payment credentials
+
+    func refreshPaymentCredentials() {
+        paymentCredentialStatus = Dictionary(
+            uniqueKeysWithValues: PaymentCredentialStore.SecretKind.allCases.map { kind in
+                (kind, paymentCredentialStore.hasSecret(kind, forProfileId: currentProfileId))
+            }
+        )
+    }
+
+    func savePaymentCredential(_ kind: PaymentCredentialStore.SecretKind) {
+        let draft = paymentCredentialDraft(for: kind).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !draft.isEmpty else {
+            paymentCredentialMessage = "Paste \(kind.displayName) first."
+            return
+        }
+        do {
+            if let profileId = currentProfileId {
+                try paymentCredentialStore.saveSecret(draft, kind: kind, forProfileId: profileId)
+            } else {
+                try paymentCredentialStore.saveDefaultSecret(draft, kind: kind)
+            }
+            clearPaymentCredentialDraft(kind)
+            paymentCredentialMessage = "\(kind.displayName) saved in Keychain."
+            refreshPaymentCredentials()
+        } catch {
+            paymentCredentialMessage = error.localizedDescription
+        }
+    }
+
+    func deletePaymentCredential(_ kind: PaymentCredentialStore.SecretKind) {
+        do {
+            if let profileId = currentProfileId,
+               paymentCredentialStore.hasProfileScopedSecret(kind, profileId: profileId) {
+                try paymentCredentialStore.deleteSecret(kind, forProfileId: profileId)
+            } else {
+                try paymentCredentialStore.deleteDefaultSecret(kind)
+            }
+            paymentCredentialMessage = "\(kind.displayName) removed."
+            refreshPaymentCredentials()
+        } catch {
+            paymentCredentialMessage = error.localizedDescription
+        }
+    }
+
+    func hasPaymentCredential(_ kind: PaymentCredentialStore.SecretKind) -> Bool {
+        paymentCredentialStatus[kind] == true
+    }
+
+    private func paymentCredentialDraft(for kind: PaymentCredentialStore.SecretKind) -> String {
+        switch kind {
+        case .stripeSecretKey: stripeSecretKeyDraft
+        case .stripeWebhookSecret: stripeWebhookSecretDraft
+        case .gumroadApplicationSecret: gumroadApplicationSecretDraft
+        }
+    }
+
+    private func clearPaymentCredentialDraft(_ kind: PaymentCredentialStore.SecretKind) {
+        switch kind {
+        case .stripeSecretKey: stripeSecretKeyDraft = ""
+        case .stripeWebhookSecret: stripeWebhookSecretDraft = ""
+        case .gumroadApplicationSecret: gumroadApplicationSecretDraft = ""
+        }
     }
 }
