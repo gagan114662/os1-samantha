@@ -611,6 +611,7 @@ struct CodexTasksView: View {
     @ViewBuilder
     private var approvalConsole: some View {
         let requests = manager.approvalRequests(status: .pending)
+        let plan = manager.approvalQueuePlan()
         if !requests.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
@@ -621,6 +622,26 @@ struct CodexTasksView: View {
                         .font(.system(.caption2, design: .monospaced))
                         .foregroundStyle(theme.palette.onCoralMuted)
                     Spacer()
+                }
+
+                if !plan.batches.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(plan.batches.keys.sorted(), id: \.self) { key in
+                                if let ids = plan.batches[key], !ids.isEmpty {
+                                    Button {
+                                        _ = manager.approveBatch(batchKey: key, hours: 4)
+                                    } label: {
+                                        Label(
+                                            L10n.string("Approve %lld %@", ids.count, approvalBatchTitle(key)),
+                                            systemImage: "checkmark.circle"
+                                        )
+                                    }
+                                    .buttonStyle(.os1Secondary)
+                                }
+                            }
+                        }
+                    }
                 }
 
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -750,6 +771,11 @@ struct CodexTasksView: View {
                 .strokeBorder(approvalColor(request.riskTier).opacity(0.6), lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func approvalBatchTitle(_ key: String) -> String {
+        key.replacingOccurrences(of: "|", with: " ")
+            .replacingOccurrences(of: "_", with: " ")
     }
 
     // MARK: - Event console
