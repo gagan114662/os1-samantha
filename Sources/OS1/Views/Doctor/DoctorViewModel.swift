@@ -184,6 +184,7 @@ final class DoctorViewModel: ObservableObject {
         async let stateBackups = makeStateBackupCheck()
         async let heartbeatSandbox = makeCodexHeartbeatSandboxCheck()
         async let codexFeatures = makeCodexFeatureMatrixCheck()
+        async let browserStealth = makeBrowserStealthCoverageCheck()
         return await [
             codex,
             claude,
@@ -200,7 +201,58 @@ final class DoctorViewModel: ObservableObject {
             stateBackups,
             heartbeatSandbox,
             codexFeatures,
+            browserStealth,
         ]
+    }
+
+    private func makeBrowserStealthCoverageCheck() async -> Check {
+        let configuredDomains = Self.discoveredBrowserStealthProfileDomains()
+        let rows = Self.browserStealthCoverageRows(configuredDomains: configuredDomains)
+        let missingCount = rows.filter { $0.hasSuffix("missing") }.count
+        return Check(
+            id: "browser-stealth-coverage",
+            title: missingCount == 0 ? "Browser stealth coverage" : "Browser stealth coverage incomplete",
+            severity: missingCount == 0 ? .ok : .warn,
+            summary: missingCount == 0
+                ? "Consumer-platform browser automation has stealth profiles for every required domain"
+                : "\(missingCount) consumer-platform domain(s) are missing stealth profiles",
+            detail: rows.joined(separator: "\n"),
+            actions: []
+        )
+    }
+
+    nonisolated static func browserStealthCoverageRows(configuredDomains: Set<String>) -> [String] {
+        CompanyBrowserSafetyPolicy.consumerPlatformDomains
+            .sorted()
+            .map { domain in
+                let normalized = CompanyBrowserSafetyPolicy.normalizeDomain(domain)
+                let status = configuredDomains.contains(normalized) ? "covered" : "missing"
+                return "\(normalized): \(status)"
+            }
+    }
+
+    private nonisolated static func discoveredBrowserStealthProfileDomains() -> Set<String> {
+        // Profile persistence is intentionally file-based; each company writes
+        // browser-stealth/<domain>.json under its codex task directory.
+        let root = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".os1/codex-tasks", isDirectory: true)
+        guard let companies = try? FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+
+        return Set(companies.flatMap { companyURL -> [String] in
+            let stealthRoot = companyURL.appendingPathComponent("browser-stealth", isDirectory: true)
+            guard let profiles = try? FileManager.default.contentsOfDirectory(
+                at: stealthRoot,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            ) else { return [] }
+            return profiles
+                .filter { $0.pathExtension == "json" }
+                .map { CompanyBrowserSafetyPolicy.normalizeDomain($0.deletingPathExtension().lastPathComponent) }
+        })
     }
 
     private func makeCodexFeatureMatrixCheck() async -> Check {

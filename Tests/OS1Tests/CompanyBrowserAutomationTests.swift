@@ -68,6 +68,14 @@ struct CompanyBrowserAutomationTests {
         #expect(plan.status == .preferAPI)
         #expect(plan.preferredIntegration == .api)
         #expect(!plan.canExecuteWithBrowser)
+
+        for domain in ["x.com", "linkedin.com", "youtube.com", "reddit.com"] {
+            #expect(policy.preferredIntegration(for: domain) == .api, "\(domain) should prefer a stable API path.")
+        }
+        for domain in ["instagram.com", "tiktok.com", "pinterest.com"] {
+            #expect(policy.preferredIntegration(for: domain) == .browser, "\(domain) should be explicit browser fallback.")
+            #expect(CompanyBrowserSafetyPolicy.requiresStealth(for: domain))
+        }
     }
 
     @Test
@@ -186,6 +194,16 @@ struct CompanyBrowserAutomationTests {
         #expect(FileManager.default.fileExists(atPath: result.approvalFile.path))
         #expect(result.event.kind == .companyPaused)
         #expect(result.event.approvalState == "captcha-handoff")
+    }
+
+    @Test
+    func doctorReportsPerDomainStealthCoverage() {
+        let rows = DoctorViewModel.browserStealthCoverageRows(configuredDomains: ["x.com", "instagram.com"])
+
+        #expect(rows.contains("x.com: covered"))
+        #expect(rows.contains("instagram.com: covered"))
+        #expect(rows.contains("tiktok.com: missing"))
+        #expect(rows.contains("pinterest.com: missing"))
     }
 
     private func browserAction(

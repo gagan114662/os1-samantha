@@ -31,10 +31,7 @@ struct CompanyBrowserSafetyPolicy: Codable, Hashable {
         if let configured = preferredIntegrations[normalized] {
             return configured
         }
-        if Self.apiFirstDomains.contains(normalized) {
-            return .api
-        }
-        return .browser
+        return Self.defaultIntegrationsByDomain[normalized] ?? .browser
     }
 
     static func requiresStealth(for domain: String) -> Bool {
@@ -54,29 +51,32 @@ struct CompanyBrowserSafetyPolicy: Codable, Hashable {
         action.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
-    private static let apiFirstDomains: Set<String> = [
-        "api.linkedin.com",
-        "api.twitter.com",
-        "api.github.com",
-        "graph.facebook.com",
-        "github.com",
-        "gmail.com",
-        "googleapis.com",
-        "linkedin.com",
-        "oauth.reddit.com",
-        "open.tiktokapis.com",
-        "reddit.com",
-        "slack.com",
-        "stripe.com",
-        "shopify.com",
-        "twitter.com",
-        "x.com",
-        "youtube.com",
-        "youtubei.googleapis.com",
-        "youtube.googleapis.com"
+    static let defaultIntegrationsByDomain: [String: PreferredIntegration] = [
+        "api.github.com": .api,
+        "api.linkedin.com": .api,
+        "api.twitter.com": .api,
+        "github.com": .api,
+        "gmail.com": .api,
+        "googleapis.com": .api,
+        "graph.facebook.com": .api,
+        "instagram.com": .browser,
+        "linkedin.com": .api,
+        "oauth.reddit.com": .api,
+        "open.tiktokapis.com": .api,
+        "pinterest.com": .browser,
+        "reddit.com": .api,
+        "shopify.com": .api,
+        "slack.com": .api,
+        "stripe.com": .api,
+        "tiktok.com": .browser,
+        "twitter.com": .api,
+        "x.com": .api,
+        "youtube.com": .api,
+        "youtubei.googleapis.com": .api,
+        "youtube.googleapis.com": .api
     ]
 
-    private static let consumerPlatformDomains: Set<String> = [
+    static let consumerPlatformDomains: Set<String> = [
         "x.com",
         "twitter.com",
         "instagram.com",
