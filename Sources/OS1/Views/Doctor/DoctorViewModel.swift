@@ -45,13 +45,32 @@ final class DoctorViewModel: ObservableObject {
         let detail: String
     }
 
+    struct ProviderKeyHealthRow: Equatable, Sendable {
+        let providerSlug: String
+        let displayName: String
+        let hasKey: Bool
+        let lastSuccessfulCall: Date?
+
+        var summary: String {
+            let keyStatus = hasKey ? "key present" : "key missing"
+            let last = lastSuccessfulCall
+                .map { ISO8601DateFormatter().string(from: $0) }
+                ?? "never"
+            return "\(displayName): \(keyStatus), last successful call: \(last)"
+        }
+    }
+
     @Published private(set) var checks: [Check] = []
+    @Published private(set) var paymentsSnapshot: PaymentsHealthSnapshot = .empty
+    @Published private(set) var fleetSnapshot: CompanyFleetHealthSnapshot = .empty
     @Published private(set) var isRefreshing = false
     @Published private(set) var actionInFlight: Action?
     @Published var actionError: String?
     @Published private(set) var lastRefreshedAt: Date?
 
     private let credentialStore: TelegramCredentialStore
+    private let providerCredentialStore: ProviderCredentialStore
+    private let providerCallHealthStore: ProviderCallHealthStore
     private let telegramAPI: TelegramAPIClient
     private let telegramInstaller: TelegramVMInstaller
     private let hermesUpdater: HermesUpdater
@@ -67,11 +86,15 @@ final class DoctorViewModel: ObservableObject {
 
     init(
         credentialStore: TelegramCredentialStore,
+        providerCredentialStore: ProviderCredentialStore = ProviderCredentialStore(),
+        providerCallHealthStore: ProviderCallHealthStore = ProviderCallHealthStore(),
         telegramAPI: TelegramAPIClient = TelegramAPIClient(),
         telegramInstaller: TelegramVMInstaller,
         hermesUpdater: HermesUpdater
     ) {
         self.credentialStore = credentialStore
+        self.providerCredentialStore = providerCredentialStore
+        self.providerCallHealthStore = providerCallHealthStore
         self.telegramAPI = telegramAPI
         self.telegramInstaller = telegramInstaller
         self.hermesUpdater = hermesUpdater
@@ -107,7 +130,15 @@ final class DoctorViewModel: ObservableObject {
         // being selected. These cover the moving parts that historically
         // failed silently (codex auth, claude CLI, WUPHF, launchd plists,
         // keychain credentials, voice-port freshness).
-        let localChecks = await makeLocalStackChecks()
+        let now = Date()
+        paymentsSnapshot = Self.paymentsHealthSnapshot()
+        fleetSnapshot = Self.fleetHealthSnapshot(
+            sessions: CodexSessionManager.shared.sessions,
+            events: CodexSessionManager.shared.recentEvents(limit: 10_000),
+            now: now
+        )
+        let recentEvents = CodexSessionManager.shared.recentEvents(limit: 10_000)
+        let localChecks = await makeLocalStackChecks(recentEvents: recentEvents)
 
         guard let connection = currentConnection else {
             checks = localChecks + [Check(
@@ -118,7 +149,7 @@ final class DoctorViewModel: ObservableObject {
                 detail: nil,
                 actions: []
             )]
-            lastRefreshedAt = Date()
+            lastRefreshedAt = now
             return
         }
 
@@ -138,7 +169,7 @@ final class DoctorViewModel: ObservableObject {
                 detail: message,
                 actions: []
             )]
-            lastRefreshedAt = Date()
+            lastRefreshedAt = now
             return
         }
 
@@ -152,14 +183,14 @@ final class DoctorViewModel: ObservableObject {
         // touching the VM), then host-level (gateway, Hermes version,
         // Telegram downstream).
         checks = localChecks + [gatewayCheck, hermesCheck, telegramCheck]
-        lastRefreshedAt = Date()
+        lastRefreshedAt = now
     }
 
     // MARK: - Local stack checks
 
     /// Probe the Mac-side moving parts that the rest of OS1 depends on.
     /// Each runs with a short timeout and returns a Check row; never throws.
-    private func makeLocalStackChecks() async -> [Check] {
+    private func makeLocalStackChecks(recentEvents: [CompanyEvent]) async -> [Check] {
         async let codex = makeBinaryCheck(id: "cli-codex", title: "Codex CLI", binary: "codex", versionArgs: ["--version"])
         async let claude = makeBinaryCheck(id: "cli-claude", title: "Claude Code CLI", binary: "claude", versionArgs: ["--version"])
         async let wuphf = makeWUPHFCheck()
@@ -174,6 +205,9 @@ final class DoctorViewModel: ObservableObject {
         async let dataGovernance = makeDataGovernanceCheck()
         async let stateBackups = makeStateBackupCheck()
         async let heartbeatSandbox = makeCodexHeartbeatSandboxCheck()
+        async let codexFeatures = makeCodexFeatureMatrixCheck()
+        async let browserStealth = makeBrowserStealthCoverageCheck()
+        async let providerKeys = makeProviderKeyHealthCheck(recentEvents: recentEvents)
         return await [
             codex,
             claude,
@@ -189,7 +223,152 @@ final class DoctorViewModel: ObservableObject {
             dataGovernance,
             stateBackups,
             heartbeatSandbox,
+            codexFeatures,
+            browserStealth,
+            providerKeys,
         ]
+    }
+
+    private func makeProviderKeyHealthCheck(recentEvents: [CompanyEvent]) async -> Check {
+        let credentialStatuses = providerCredentialStore.loadConnectionStatuses(forProfileId: currentProfileId)
+        let storedCalls = providerCallHealthStore.loadLastSuccessfulCalls(forProfileId: currentProfileId)
+        let eventCalls = Self.lastSuccessfulProviderCalls(from: recentEvents)
+        let rows = Self.providerKeyHealthRows(
+            credentialStatuses: credentialStatuses,
+            lastSuccessfulCalls: Self.mergeLatestProviderCalls(storedCalls, eventCalls)
+        )
+        let missing = rows.filter { !$0.hasKey }.count
+        return Check(
+            id: "provider-key-health",
+            title: "Provider keys",
+            severity: missing == 0 ? .ok : .warn,
+            summary: missing == 0 ? "All provider keys are present" : "\(missing) provider key(s) missing",
+            detail: rows.map(\.summary).joined(separator: "\n"),
+            actions: []
+        )
+    }
+
+    nonisolated static func providerKeyHealthRows(
+        credentialStatuses: [String: Bool],
+        lastSuccessfulCalls: [String: Date]
+    ) -> [ProviderKeyHealthRow] {
+        ProviderCatalog.entries.map { entry in
+            ProviderKeyHealthRow(
+                providerSlug: entry.slug,
+                displayName: entry.displayName,
+                hasKey: credentialStatuses[entry.slug] ?? false,
+                lastSuccessfulCall: lastSuccessfulCalls[entry.slug]
+            )
+        }
+    }
+
+    nonisolated static func lastSuccessfulProviderCalls(from events: [CompanyEvent]) -> [String: Date] {
+        let providerSlugs = Set(ProviderCatalog.entries.map(\.slug))
+        return events.reduce(into: [:]) { result, event in
+            guard event.kind == .externalSideEffect,
+                  let providerSlug = event.tool,
+                  providerSlugs.contains(providerSlug),
+                  event.approvalState != "blocked"
+            else { return }
+            let occurredAt = event.occurredAt
+            if let previous = result[providerSlug], previous >= occurredAt { return }
+            result[providerSlug] = occurredAt
+        }
+    }
+
+    nonisolated static func mergeLatestProviderCalls(
+        _ first: [String: Date],
+        _ second: [String: Date]
+    ) -> [String: Date] {
+        var result = first
+        for (slug, date) in second {
+            if let previous = result[slug], previous >= date { continue }
+            result[slug] = date
+        }
+        return result
+    }
+
+    private func makeBrowserStealthCoverageCheck() async -> Check {
+        let configuredDomains = Self.discoveredBrowserStealthProfileDomains()
+        let rows = Self.browserStealthCoverageRows(configuredDomains: configuredDomains)
+        let missingCount = rows.filter { $0.hasSuffix("missing") }.count
+        return Check(
+            id: "browser-stealth-coverage",
+            title: missingCount == 0 ? "Browser stealth coverage" : "Browser stealth coverage incomplete",
+            severity: missingCount == 0 ? .ok : .warn,
+            summary: missingCount == 0
+                ? "Consumer-platform browser automation has stealth profiles for every required domain"
+                : "\(missingCount) consumer-platform domain(s) are missing stealth profiles",
+            detail: rows.joined(separator: "\n"),
+            actions: []
+        )
+    }
+
+    nonisolated static func browserStealthCoverageRows(configuredDomains: Set<String>) -> [String] {
+        CompanyBrowserSafetyPolicy.consumerPlatformDomains
+            .sorted()
+            .map { domain in
+                let normalized = CompanyBrowserSafetyPolicy.normalizeDomain(domain)
+                let status = configuredDomains.contains(normalized) ? "covered" : "missing"
+                return "\(normalized): \(status)"
+            }
+    }
+
+    private nonisolated static func discoveredBrowserStealthProfileDomains() -> Set<String> {
+        // Profile persistence is intentionally file-based; each company writes
+        // browser-stealth/<domain>.json under its codex task directory.
+        let root = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".os1/codex-tasks", isDirectory: true)
+        guard let companies = try? FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+
+        return Set(companies.flatMap { companyURL -> [String] in
+            let stealthRoot = companyURL.appendingPathComponent("browser-stealth", isDirectory: true)
+            guard let profiles = try? FileManager.default.contentsOfDirectory(
+                at: stealthRoot,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            ) else { return [] }
+            return profiles
+                .filter { $0.pathExtension == "json" }
+                .map { CompanyBrowserSafetyPolicy.normalizeDomain($0.deletingPathExtension().lastPathComponent) }
+        })
+    }
+
+    private func makeCodexFeatureMatrixCheck() async -> Check {
+        let profile = CompanyCodexProfile.productionDefault(companyID: "doctor")
+        let required: [CompanyCodexProfile.Feature] = [
+            .imagegen,
+            .web,
+            .vision,
+            .mcp,
+            .customToolRegistration,
+            .sandboxMode,
+            .approvalModes,
+            .resume,
+            .streaming,
+            .auditTimeline,
+            .argsHashing,
+            .latencyTracking,
+            .costTracking
+        ]
+        let missing = required.filter { !profile.supports($0) }
+        let enabled = required.map(\.rawValue).joined(separator: ", ")
+        return Check(
+            id: "codex-feature-matrix",
+            title: missing.isEmpty ? "Codex feature matrix: ON" : "Codex feature matrix: incomplete",
+            severity: missing.isEmpty ? .ok : .error,
+            summary: missing.isEmpty
+                ? "Production company profile enables required Codex runtime features"
+                : "Production company profile is missing \(missing.count) required Codex features",
+            detail: missing.isEmpty
+                ? "Enabled features: \(enabled)."
+                : "Missing features: \(missing.map(\.rawValue).joined(separator: ", ")).",
+            actions: []
+        )
     }
 
     private func makeCodexHeartbeatSandboxCheck() async -> Check {
@@ -235,6 +414,43 @@ final class DoctorViewModel: ObservableObject {
             detail: runtime.detail,
             actions: []
         )
+    }
+
+    static func paymentsHealthSnapshot(replayStoreSize: Int = 0) -> PaymentsHealthSnapshot {
+        PaymentsHealthSnapshot(rows: [
+            .init(provider: "Stripe", endpoint: "/webhooks/stripe", lastEvent: "fixture-ready", reconciliation: "ledger-ready", replayStoreSize: replayStoreSize),
+            .init(provider: "Gumroad", endpoint: "/webhooks/gumroad", lastEvent: "fixture-ready", reconciliation: "ledger-ready", replayStoreSize: replayStoreSize),
+            .init(provider: "Etsy", endpoint: "sales.csv", lastEvent: "csv-ready", reconciliation: "ledger-ready", replayStoreSize: replayStoreSize),
+            .init(provider: "KDP", endpoint: "royalties.csv", lastEvent: "csv-ready", reconciliation: "ledger-ready", replayStoreSize: replayStoreSize),
+            .init(provider: "App Store", endpoint: "sales.csv", lastEvent: "csv-ready", reconciliation: "ledger-ready", replayStoreSize: replayStoreSize),
+            .init(provider: "Google Play", endpoint: "earnings.csv", lastEvent: "csv-ready", reconciliation: "ledger-ready", replayStoreSize: replayStoreSize)
+        ])
+    }
+
+    static func fleetHealthSnapshot(
+        sessions: [CodexSession],
+        events: [CompanyEvent] = [],
+        runners: [CompanyRunner] = [.local],
+        now: Date = Date()
+    ) -> CompanyFleetHealthSnapshot {
+        CompanyFleetHealthSnapshot.make(
+            sessions: sessions,
+            runners: runners,
+            driftFlaggedCompanyIDs: CompanyFleetHealthSnapshot.driftFlaggedCompanyIDs(from: events),
+            now: now
+        )
+    }
+
+    static func fleetDoctorRows(snapshot: CompanyFleetHealthSnapshot) -> [String] {
+        [
+            L10n.string(
+                "Fleet capacity: %lld workers × cap %lld = %lld concurrent",
+                snapshot.activeWorkers,
+                snapshot.perWorkerCap,
+                snapshot.totalConcurrentCapacity
+            ),
+            L10n.string("Companies flagged as drifting: %lld", snapshot.driftingCompanyCount)
+        ]
     }
 
     private func makeStateBackupCheck() async -> Check {

@@ -77,6 +77,7 @@ final class ProvidersViewModel: ObservableObject {
     // MARK: - Dependencies
 
     private let credentialStore: ProviderCredentialStore
+    private let healthStore: ProviderCallHealthStore
     private let validationClient: ProviderValidationClient
     private let installer: ProviderVMInstaller
     private let oauthService: OpenRouterOAuthService
@@ -87,12 +88,14 @@ final class ProvidersViewModel: ObservableObject {
 
     init(
         credentialStore: ProviderCredentialStore = ProviderCredentialStore(),
+        healthStore: ProviderCallHealthStore = ProviderCallHealthStore(),
         validationClient: ProviderValidationClient = ProviderValidationClient(),
         installer: ProviderVMInstaller,
         oauthService: OpenRouterOAuthService,
         urlOpener: @escaping @Sendable (URL) -> Void = { _ in }
     ) {
         self.credentialStore = credentialStore
+        self.healthStore = healthStore
         self.validationClient = validationClient
         self.installer = installer
         self.oauthService = oauthService
@@ -155,6 +158,9 @@ final class ProvidersViewModel: ObservableObject {
 
         do {
             let validation = try await validationClient.validate(apiKey: trimmed, against: entry)
+            if !validation.wasSkipped {
+                healthStore.recordSuccessfulCall(slug: entry.slug, forProfileId: currentProfileId)
+            }
             connectFlowState = .saving
             try saveToKeychain(slug: entry.slug, apiKey: trimmed)
             modelsBySlug[entry.slug] = validation.models
@@ -189,6 +195,9 @@ final class ProvidersViewModel: ObservableObject {
             // hasn't paid the round-trip cost manually.
             if let validation = try? await validationClient.validate(apiKey: result.apiKey, against: entry) {
                 modelsBySlug[entry.slug] = validation.models
+                if !validation.wasSkipped {
+                    healthStore.recordSuccessfulCall(slug: entry.slug, forProfileId: currentProfileId)
+                }
             }
             connectFlowState = .validated
             selectedProvider = nil
@@ -315,6 +324,9 @@ final class ProvidersViewModel: ObservableObject {
         do {
             let validation = try await validationClient.validate(apiKey: apiKey, against: entry)
             modelsBySlug[slug] = validation.models
+            if !validation.wasSkipped {
+                healthStore.recordSuccessfulCall(slug: slug, forProfileId: currentProfileId)
+            }
             setModelListState(slug: slug, .loaded)
         } catch {
             let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription

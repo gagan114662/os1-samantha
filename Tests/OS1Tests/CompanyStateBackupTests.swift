@@ -138,6 +138,39 @@ struct CompanyStateBackupTests {
     }
 
     @Test
+    func os1BackupAndRestoreCommandFacadeRunsEncryptedDrill() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("os1-backup-command-\(UUID().uuidString)", isDirectory: true)
+        let restoreRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("os1-restore-command-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: restoreRoot)
+        }
+
+        let ledger = root.appendingPathComponent("sessions/co/LEDGER.json")
+        try FileManager.default.createDirectory(at: ledger.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try #"[{"kind":"revenue","amountUSD":99}]"#.write(to: ledger, atomically: true, encoding: .utf8)
+        let key = SymmetricKey(size: .bits256)
+        let backup = try OS1BackupCommand.backup(
+            sourceRoot: root,
+            candidates: [.init(sourceURL: ledger, relativePath: "sessions/co/LEDGER.json", kind: .ledger)],
+            key: key,
+            backupID: "cli-backup"
+        )
+        let report = try OS1BackupCommand.restore(
+            backup: backup,
+            key: key,
+            destinationRoot: restoreRoot
+        )
+
+        #expect(backup.manifest.backupID == "cli-backup")
+        #expect(report.status == .passed)
+        #expect(FileManager.default.fileExists(atPath: restoreRoot.appendingPathComponent("sessions/co/LEDGER.json").path))
+    }
+
+    @Test
     func doctorFlagsStaleFailingAndMissingBackupState() throws {
         let now = Date(timeIntervalSince1970: 1_700_100_000)
         let fresh = CompanyStateBackupManifest(

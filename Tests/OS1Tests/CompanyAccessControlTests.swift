@@ -130,4 +130,49 @@ struct CompanyAccessControlTests {
             #expect(CompanyPermissionGate.authorize(actor: actor, action: action).isAllowed == shouldAllow)
         }
     }
+
+    @Test
+    func mediaProviderAllowlistBlocksUnapprovedModalities() {
+        let locked = CompanyAccessControl.lockedDown(companyID: "co-1")
+        #expect(!locked.allowsMediaProvider("elevenlabs-tts", modality: .tts))
+
+        let allowed = CompanyAccessControl(
+            companyID: "co-1",
+            mediaProviderAllowlist: ["elevenlabs-tts"],
+            seoProviderAllowlist: [],
+            embeddingProviderAllowlist: [],
+            experimentationEnabled: false
+        )
+
+        #expect(allowed.allowsMediaProvider("elevenlabs-tts", modality: .tts))
+        #expect(!allowed.allowsMediaProvider("elevenlabs-tts", modality: .video))
+    }
+
+    @Test
+    func mediaProviderFirstCallRequiresApprovalAndForecastsCost() {
+        var access = CompanyAccessControl.lockedDown(companyID: "co-1")
+        access.mediaProviderAllowlist = ["elevenlabs-tts"]
+        let first = access.mediaProviderAccess(
+            providerSlug: "elevenlabs-tts",
+            modality: .tts,
+            estimatedDailyCostUSD: 9,
+            priorApprovedCallCount: 0,
+            now: Date(timeIntervalSince1970: 1_800_000_000)
+        )
+        let approved = access.mediaProviderAccess(
+            providerSlug: "elevenlabs-tts",
+            modality: .tts,
+            estimatedDailyCostUSD: 9,
+            priorApprovedCallCount: 1,
+            now: Date(timeIntervalSince1970: 1_800_000_000)
+        )
+
+        #expect(first.status == .approvalRequired)
+        #expect(first.approvalEvent?.approvalState == "approval-required")
+        #expect(first.forecastLedgerEntry?.kind == .cost)
+        #expect(first.forecastLedgerEntry?.confidence == .estimated)
+        #expect(first.forecastLedgerEntry?.amountUSD == 3)
+        #expect(approved.status == .allowed)
+        #expect(approved.forecastLedgerEntry?.amountUSD == 3)
+    }
 }

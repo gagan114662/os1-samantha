@@ -201,6 +201,7 @@ struct LocalizationCoverageTests {
         keys.formUnion(CronIntervalUnit.allCases.map(\.title))
         keys.formUnion(CronDeliveryPreset.allCases.map(\.title))
         keys.formUnion(CronScheduleFormatter.weekdayPickerLabels)
+        keys.formUnion(CompanyGrowthCampaign.Channel.allCases.map(\.localizationKey))
 
         return keys
     }

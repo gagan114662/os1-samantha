@@ -113,6 +113,36 @@ struct CompanyDistributionEngineTests {
         #expect(!decoded.canExecute)
     }
 
+    @Test
+    func platformChannelsHaveComplianceAndRateLimitDefaults() {
+        for channel in CompanyGrowthCampaign.Channel.allCases {
+            #expect(!CompanyDistributionEngine.complianceChecks(channel: channel).isEmpty, "\(channel.rawValue) needs compliance checks.")
+            #expect(CompanyDistributionEngine.defaultRateLimit(for: channel) > 0, "\(channel.rawValue) needs a rate limit.")
+        }
+
+        #expect(CompanyDistributionEngine.defaultRateLimit(for: .xPost) == 50)
+        #expect(CompanyDistributionEngine.defaultRateLimit(for: .youtubeShort) == 2)
+        #expect(CompanyDistributionEngine.defaultRateLimit(for: .pinterestPin) == 20)
+    }
+
+    @Test
+    func proposedCampaignsCanBeRestrictedToEnabledChannels() {
+        let campaigns = CompanyDistributionEngine.proposedCampaigns(
+            companyID: "company",
+            manifest: manifest(),
+            enabledChannels: [.seoPages, .emailDrafts]
+        )
+
+        #expect(campaigns.map(\.channel) == [.seoPages, .emailDrafts])
+    }
+
+    @Test
+    func newPlatformPublishesRequireApprovalDuringFirstWeek() {
+        #expect(CompanyDistributionEngine.requiresApproval(channel: .xPost, spend: 0, companyHistoryDays: 0))
+        #expect(!CompanyDistributionEngine.requiresApproval(channel: .xPost, spend: 0, companyHistoryDays: 7))
+        #expect(CompanyDistributionEngine.complianceChannel(for: .linkedinPost) == .socialPlatform)
+    }
+
     private func manifest() -> CompanyFactoryManifest {
         CompanyFactory.manifest(companyID: "company", template: nil, worktreePath: "/tmp/company")
     }

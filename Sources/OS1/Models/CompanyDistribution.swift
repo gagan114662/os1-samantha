@@ -10,6 +10,25 @@ struct CompanyGrowthCampaign: Codable, Hashable, Identifiable {
         case warmIntros
         case paidExperiment
         case emailDrafts
+        case xPost
+        case xThread
+        case xReply
+        case youtubeUpload
+        case youtubeShort
+        case youtubeCommunityPost
+        case instagramReel
+        case instagramPost
+        case instagramStory
+        case instagramDM
+        case tiktokVideo
+        case tiktokComment
+        case linkedinPost
+        case linkedinDM
+        case linkedinNewsletter
+        case pinterestPin
+        case redditPost
+        case redditComment
+        case affiliateLink
     }
 
     enum ApprovalState: String, Codable, CaseIterable, Hashable {
@@ -32,6 +51,7 @@ struct CompanyGrowthCampaign: Codable, Hashable, Identifiable {
     var rateLimitPerDay: Int
     var suppressionList: [String]
     var nextAction: String
+    var parentExperimentID: String? = nil
 
     var canExecute: Bool {
         approvalState == .approved && complianceChecks.isEmpty == false && complianceDecision.canRun
@@ -39,11 +59,21 @@ struct CompanyGrowthCampaign: Codable, Hashable, Identifiable {
 
     var isOutbound: Bool {
         switch channel {
-        case .partnerOutreach, .warmIntros, .emailDrafts:
+        case .partnerOutreach, .warmIntros, .emailDrafts, .xReply, .instagramDM, .tiktokComment, .linkedinDM, .redditComment:
             return true
-        case .seoPages, .contentPosts, .marketplace, .directories, .paidExperiment:
+        case .seoPages, .contentPosts, .marketplace, .directories, .paidExperiment, .xPost, .xThread, .youtubeUpload, .youtubeShort, .youtubeCommunityPost, .instagramReel, .instagramPost, .instagramStory, .tiktokVideo, .linkedinPost, .linkedinNewsletter, .pinterestPin, .redditPost, .affiliateLink:
             return false
         }
+    }
+}
+
+extension CompanyGrowthCampaign.Channel {
+    var displayTitle: String {
+        L10n.string(localizationKey)
+    }
+
+    var localizationKey: String {
+        "CompanyGrowthCampaign.Channel.\(rawValue)"
     }
 }
 
@@ -86,6 +116,7 @@ extension CompanyGrowthCampaign {
         case rateLimitPerDay
         case suppressionList
         case nextAction
+        case parentExperimentID
     }
 
     init(from decoder: Decoder) throws {
@@ -116,6 +147,7 @@ extension CompanyGrowthCampaign {
         rateLimitPerDay = try container.decode(Int.self, forKey: .rateLimitPerDay)
         suppressionList = try container.decode([String].self, forKey: .suppressionList)
         nextAction = try container.decode(String.self, forKey: .nextAction)
+        parentExperimentID = try container.decodeIfPresent(String.self, forKey: .parentExperimentID)
     }
 }
 
@@ -123,16 +155,19 @@ enum CompanyDistributionEngine {
     static func proposedCampaigns(
         companyID: String,
         manifest: CompanyFactoryManifest,
-        suppressionList: [String] = []
+        suppressionList: [String] = [],
+        enabledChannels: Set<CompanyGrowthCampaign.Channel>? = nil
     ) -> [CompanyGrowthCampaign] {
         let audience = manifest.icp
-        return [
+        let proposals = [
             campaign(companyID: companyID, channel: .seoPages, audience: audience, creative: "Publish 3 validation-backed SEO pages for \(manifest.offer).", spend: 0, suppressionList: suppressionList),
             campaign(companyID: companyID, channel: .marketplace, audience: audience, creative: "Draft marketplace listing assets and compliance-safe claims.", spend: 0, suppressionList: suppressionList),
             campaign(companyID: companyID, channel: .partnerOutreach, audience: audience, creative: "Draft partner outreach sequence for warm review.", spend: 0, suppressionList: suppressionList),
             campaign(companyID: companyID, channel: .emailDrafts, audience: audience, creative: "Draft first 25 customer emails without sending.", spend: 0, suppressionList: suppressionList),
             campaign(companyID: companyID, channel: .paidExperiment, audience: audience, creative: "Draft a capped paid test with sandbox budget approval.", spend: 25, suppressionList: suppressionList)
         ]
+        guard let enabledChannels else { return proposals }
+        return proposals.filter { enabledChannels.contains($0.channel) }
     }
 
     static func summarize(campaigns: [CompanyGrowthCampaign], results: [CompanyGrowthResult]) -> CompanyDistributionSummary {
@@ -147,6 +182,36 @@ enum CompanyDistributionEngine {
         var approved = campaign
         approved.approvalState = .approved
         return approved
+    }
+
+    static func approve(
+        _ campaign: CompanyGrowthCampaign,
+        qualityDecision: CompanyContentQualityDecision,
+        operatorOverrideBy actor: String? = nil
+    ) -> (campaign: CompanyGrowthCampaign, auditEvent: CompanyEvent?) {
+        guard qualityDecision.canApprove else {
+            guard let actor else {
+                var blocked = campaign
+                blocked.approvalState = .blocked
+                return (blocked, nil)
+            }
+            var approved = campaign
+            approved.approvalState = .approved
+            let event = CompanyEvent(
+                companyID: campaign.companyID,
+                actor: actor,
+                kind: .approvalApproved,
+                summary: "Operator override approved campaign \(campaign.id) despite content quality flags.",
+                riskTier: "medium",
+                approvalState: "quality-override",
+                metadata: [
+                    "campaignID": campaign.id,
+                    "flags": qualityDecision.flags.joined(separator: ",")
+                ]
+            )
+            return (approved, event)
+        }
+        return (approve(campaign), nil)
     }
 
     static func attachCompliance(
@@ -197,23 +262,25 @@ enum CompanyDistributionEngine {
             complianceChecks: complianceChecks(channel: channel),
             complianceMetadata: nil,
             complianceDecision: complianceDecision(campaignChannel: channel, companyID: companyID, audience: audience, creative: creative),
-            rateLimitPerDay: channel == .emailDrafts || channel == .partnerOutreach ? 25 : 5,
+            rateLimitPerDay: defaultRateLimit(for: channel),
             suppressionList: suppressionList.map { $0.lowercased() },
-            nextAction: approval == .approvalRequired ? "Request approval before \(channel.rawValue)" : "Prepare \(channel.rawValue) draft"
+            nextAction: approval == .approvalRequired ? "Request approval before \(channel.rawValue)" : "Prepare \(channel.rawValue) draft",
+            parentExperimentID: nil
         )
     }
 
-    private static func requiresApproval(channel: CompanyGrowthCampaign.Channel, spend: Double) -> Bool {
+    static func requiresApproval(channel: CompanyGrowthCampaign.Channel, spend: Double, companyHistoryDays: Int = 0) -> Bool {
         if spend > 0 { return true }
+        if platformSpecificChannels.contains(channel), companyHistoryDays < 7 { return true }
         switch channel {
         case .partnerOutreach, .warmIntros, .paidExperiment, .emailDrafts, .contentPosts, .marketplace:
             return true
-        case .seoPages, .directories:
+        case .seoPages, .directories, .xPost, .xThread, .xReply, .youtubeUpload, .youtubeShort, .youtubeCommunityPost, .instagramReel, .instagramPost, .instagramStory, .instagramDM, .tiktokVideo, .tiktokComment, .linkedinPost, .linkedinDM, .linkedinNewsletter, .pinterestPin, .redditPost, .redditComment, .affiliateLink:
             return false
         }
     }
 
-    private static func complianceChecks(channel: CompanyGrowthCampaign.Channel) -> [String] {
+    static func complianceChecks(channel: CompanyGrowthCampaign.Channel) -> [String] {
         switch channel {
         case .emailDrafts:
             return ["CAN-SPAM footer", "consent/source recorded", "suppression list checked", "user approval before send"]
@@ -225,6 +292,47 @@ enum CompanyDistributionEngine {
             return ["budget approval", "ad policy review", "tracking disclosure"]
         case .seoPages, .directories:
             return ["privacy-safe analytics", "claims review", "no fake reviews"]
+        case .xPost, .xThread, .xReply:
+            return ["paid promotion disclosure", "affiliate disclosure if applicable", "platform rate limit checked", "user approval before first publish"]
+        case .youtubeUpload, .youtubeShort, .youtubeCommunityPost:
+            return ["affiliate disclosure in description", "media rights cleared", "no unsafe regulated claims", "user approval before first publish"]
+        case .instagramReel, .instagramPost, .instagramStory, .instagramDM:
+            return ["branded-content tag if applicable", "affiliate disclosure if applicable", "no fake engagement", "user approval before first publish"]
+        case .tiktokVideo, .tiktokComment:
+            return ["branded-content disclosure", "music/media rights cleared", "platform rate limit checked", "user approval before first publish"]
+        case .linkedinPost, .linkedinDM, .linkedinNewsletter:
+            return ["truthful professional identity", "unsubscribe path for outreach", "no scraped contact list", "user approval before first publish"]
+        case .pinterestPin:
+            return ["affiliate disclosure on destination", "image rights cleared", "no misleading pin destination", "user approval before first publish"]
+        case .redditPost, .redditComment:
+            return ["subreddit rules checked", "no astroturfing", "affiliate disclosure if applicable", "user approval before first publish"]
+        case .affiliateLink:
+            return ["affiliate disclosure", "UTM privacy review", "destination claim review"]
+        }
+    }
+
+    static func defaultRateLimit(for channel: CompanyGrowthCampaign.Channel) -> Int {
+        switch channel {
+        case .emailDrafts, .partnerOutreach, .warmIntros:
+            return 25
+        case .xPost, .xThread, .xReply:
+            return 50
+        case .youtubeUpload, .youtubeShort, .youtubeCommunityPost:
+            return 2
+        case .instagramReel, .instagramPost, .instagramStory, .instagramDM:
+            return 5
+        case .tiktokVideo, .tiktokComment:
+            return 5
+        case .linkedinPost, .linkedinDM, .linkedinNewsletter:
+            return 5
+        case .pinterestPin:
+            return 20
+        case .redditPost, .redditComment:
+            return 5
+        case .affiliateLink:
+            return 100
+        case .seoPages, .contentPosts, .marketplace, .directories, .paidExperiment:
+            return 5
         }
     }
 
@@ -272,12 +380,27 @@ enum CompanyDistributionEngine {
             return .email
         case .marketplace:
             return .marketplace
-        case .contentPosts, .seoPages, .directories:
+        case .xPost, .xThread, .xReply, .instagramReel, .instagramPost, .instagramStory, .instagramDM, .tiktokVideo, .tiktokComment, .linkedinPost, .linkedinDM, .linkedinNewsletter, .pinterestPin, .redditPost, .redditComment:
+            return .socialPlatform
+        case .youtubeUpload, .youtubeShort, .youtubeCommunityPost:
+            return .publicContent
+        case .contentPosts, .seoPages, .directories, .affiliateLink:
             return .publicContent
         case .paidExperiment:
             return .payments
         }
     }
+
+    private static let platformSpecificChannels: Set<CompanyGrowthCampaign.Channel> = [
+        .xPost, .xThread, .xReply,
+        .youtubeUpload, .youtubeShort, .youtubeCommunityPost,
+        .instagramReel, .instagramPost, .instagramStory, .instagramDM,
+        .tiktokVideo, .tiktokComment,
+        .linkedinPost, .linkedinDM, .linkedinNewsletter,
+        .pinterestPin,
+        .redditPost, .redditComment,
+        .affiliateLink
+    ]
 
     private static func ledgerEntries(for result: CompanyGrowthResult) -> [CompanyLedgerEntry] {
         var entries: [CompanyLedgerEntry] = []

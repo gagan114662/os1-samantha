@@ -1103,3 +1103,61 @@
 "No non-live eval report found" = "No non-live eval report found";
 "Eval suite %@: %lld/%lld passed, score %.1f" = "Eval suite %@: %lld/%lld passed, score %.1f";
 "Run `python3 scripts/run-evals.py` to create artifacts/evals/non-live-report.json. CI runs this on every PR and uploads the report artifact." = "Run `python3 scripts/run-evals.py` to create artifacts/evals/non-live-report.json. CI runs this on every PR and uploads the report artifact.";
+
+// MARK: - Payments doctor card
+"Payments" = "Payments";
+"Endpoint" = "Endpoint";
+"Last event" = "Last event";
+"Reconciliation" = "Reconciliation";
+"Replay store size" = "Replay store size";
+
+// MARK: - Fleet scheduler surface
+"Fleet" = "Fleet";
+"Queue depth %lld" = "Queue depth %lld";
+"Drifting %lld" = "Drifting %lld";
+"Kind" = "Kind";
+"Active companies" = "Active companies";
+"No active companies" = "No active companies";
+"Last heartbeat" = "Last heartbeat";
+"local" = "local";
+"orgo" = "orgo";
+"%lld/%lld" = "%lld/%lld";
+"n/a" = "n/a";
+"%llds" = "%llds";
+"%lldm" = "%lldm";
+"%lldh" = "%lldh";
+"Fleet capacity: %lld workers × cap %lld = %lld concurrent" = "Fleet capacity: %lld workers × cap %lld = %lld concurrent";
+"Companies flagged as drifting: %lld" = "Companies flagged as drifting: %lld";
+
+// MARK: - Provider modalities
+"Each provider's API key is stored in macOS Keychain on this Mac, scoped per host. Installing pushes it onto that host's ~/.hermes/.env so Samantha can use the provider on the next heartbeat — no daemon restart needed." = "Each provider's API key is stored in macOS Keychain on this Mac, scoped per host. Installing pushes it onto that host's ~/.hermes/.env so Samantha can use the provider on the next heartbeat — no daemon restart needed.";
+"%@ · Quota: %@ · Cost-to-date: ledger tracked" = "%@ · Quota: %@ · Cost-to-date: ledger tracked";
+
+// MARK: - Company growth campaign channels
+"CompanyGrowthCampaign.Channel.seoPages" = "SEO pages";
+"CompanyGrowthCampaign.Channel.contentPosts" = "Content posts";
+"CompanyGrowthCampaign.Channel.marketplace" = "Marketplace";
+"CompanyGrowthCampaign.Channel.directories" = "Directories";
+"CompanyGrowthCampaign.Channel.partnerOutreach" = "Partner outreach";
+"CompanyGrowthCampaign.Channel.warmIntros" = "Warm intros";
+"CompanyGrowthCampaign.Channel.paidExperiment" = "Paid experiment";
+"CompanyGrowthCampaign.Channel.emailDrafts" = "Email drafts";
+"CompanyGrowthCampaign.Channel.xPost" = "X post";
+"CompanyGrowthCampaign.Channel.xThread" = "X thread";
+"CompanyGrowthCampaign.Channel.xReply" = "X reply";
+"CompanyGrowthCampaign.Channel.youtubeUpload" = "YouTube upload";
+"CompanyGrowthCampaign.Channel.youtubeShort" = "YouTube Short";
+"CompanyGrowthCampaign.Channel.youtubeCommunityPost" = "YouTube community post";
+"CompanyGrowthCampaign.Channel.instagramReel" = "Instagram Reel";
+"CompanyGrowthCampaign.Channel.instagramPost" = "Instagram post";
+"CompanyGrowthCampaign.Channel.instagramStory" = "Instagram Story";
+"CompanyGrowthCampaign.Channel.instagramDM" = "Instagram DM";
+"CompanyGrowthCampaign.Channel.tiktokVideo" = "TikTok video";
+"CompanyGrowthCampaign.Channel.tiktokComment" = "TikTok comment";
+"CompanyGrowthCampaign.Channel.linkedinPost" = "LinkedIn post";
+"CompanyGrowthCampaign.Channel.linkedinDM" = "LinkedIn DM";
+"CompanyGrowthCampaign.Channel.linkedinNewsletter" = "LinkedIn newsletter";
+"CompanyGrowthCampaign.Channel.pinterestPin" = "Pinterest Pin";
+"CompanyGrowthCampaign.Channel.redditPost" = "Reddit post";
+"CompanyGrowthCampaign.Channel.redditComment" = "Reddit comment";
+"CompanyGrowthCampaign.Channel.affiliateLink" = "Affiliate link";

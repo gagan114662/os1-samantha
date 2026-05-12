@@ -1,6 +1,14 @@
 import Foundation
 
 struct CompanyTemplate: Identifiable, Codable, Hashable {
+    enum Platform: String, Codable, CaseIterable, Hashable {
+        case x = "X"
+        case instagram = "Instagram"
+        case tiktok = "TikTok"
+        case linkedin = "LinkedIn"
+        case pinterest = "Pinterest"
+    }
+
     enum Category: String, Codable, CaseIterable, Hashable {
         case digitalProducts = "Digital products"
         case kdp = "Amazon KDP"
@@ -23,9 +31,34 @@ struct CompanyTemplate: Identifiable, Codable, Hashable {
     let launchAssets: [String]
     let riskNotes: [String]
     let suggestedCadenceMinutes: Int
+    let platform: Platform?
+
+    init(
+        id: String,
+        title: String,
+        category: Category,
+        channel: String,
+        mission: String,
+        validationSignals: [String],
+        launchAssets: [String],
+        riskNotes: [String],
+        suggestedCadenceMinutes: Int,
+        platform: Platform? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.category = category
+        self.channel = channel
+        self.mission = mission
+        self.validationSignals = validationSignals
+        self.launchAssets = launchAssets
+        self.riskNotes = riskNotes
+        self.suggestedCadenceMinutes = suggestedCadenceMinutes
+        self.platform = platform
+    }
 
     var searchText: String {
-        ([title, category.rawValue, channel, mission] + validationSignals + launchAssets + riskNotes)
+        ([title, category.rawValue, channel, platform?.rawValue ?? "", mission] + validationSignals + launchAssets + riskNotes)
             .joined(separator: " ")
             .lowercased()
     }
@@ -172,7 +205,44 @@ enum CompanyTemplateCatalog {
         service("course-ai-automations-local-business", "Digital course: AI automations for local businesses", "Gumroad/own site", "Teach local businesses practical AI automation workflows.", ["Owner pain validation", "Preorder interest", "Affiliate fit"], ["Course", "Templates", "Sales page"], ["Do not overpromise"]),
         service("course-etsy-digital-product-kit", "Digital course: Etsy digital product launch kit", "Gumroad/own site", "Teach a focused Etsy digital product workflow with templates.", ["Seller demand", "Preorder/waitlist", "Content validation"], ["Course", "Workbook", "Sales page"], ["No income guarantees"]),
         service("service-local-seo-pages", "Productized service: 30 SEO pages for local businesses", "B2B outreach", "Sell done-for-you local SEO page packs to service businesses.", ["Business owner replies", "Sample approval", "Price test"], ["Landing page", "Sample pages", "Delivery workflow"], ["Avoid duplicate/thin content"]),
-        service("service-digital-product-shop-setup", "Productized service: done-for-you digital product shop setup", "B2B/creator outreach", "Set up Etsy/Gumroad digital product shops for creators and operators.", ["Creator replies", "Portfolio sample", "Price test"], ["Landing page", "Setup checklist", "Sample shop"], ["No guaranteed sales"])
+        service("service-digital-product-shop-setup", "Productized service: done-for-you digital product shop setup", "B2B/creator outreach", "Set up Etsy/Gumroad digital product shops for creators and operators.", ["Creator replies", "Portfolio sample", "Price test"], ["Landing page", "Setup checklist", "Sample shop"], ["No guaranteed sales"]),
+
+        platform("x-niche-news-thread-engine", "X niche news thread engine", .x, "X", "Publish fast, sourced threads for one profitable niche and route readers to a newsletter or offer.", ["Impressions per thread", "Profile-click rate", "Newsletter signup conversion"], ["Thread draft", "Source ledger", "Lead magnet link"], ["Disclose affiliate links", "No unsourced breaking-news claims", "Respect platform rate limits"], 30),
+        platform("x-build-in-public-saas", "X build-in-public SaaS growth loop", .x, "X", "Share product progress, lessons, and customer proof to grow a micro-SaaS waitlist.", ["Waitlist clicks", "Replies from target users", "Demo-booking rate"], ["Daily post queue", "Customer-proof snippets", "Waitlist CTA"], ["No fabricated metrics", "No private customer details", "Avoid engagement bait"], 30),
+        platform("x-affiliate-deal-alerts", "X affiliate deal alert feed", .x, "X", "Post timely deal alerts for one buyer segment with compliant tracking links.", ["Outbound CTR", "EPC", "Follower growth from deal posts"], ["Deal post template", "UTM link set", "Disclosure footer"], ["Affiliate disclosure required", "Verify deal availability", "No fake urgency"], 30),
+        platform("x-founder-reply-radar", "X founder reply radar", .x, "X", "Find high-intent conversations and draft useful replies that point to proof artifacts.", ["Reply engagement", "Profile visits", "Booked-call rate"], ["Reply queue", "Proof artifact library", "Follow-up notes"], ["No spam replies", "Respect user blocks", "Do not impersonate"], 30),
+        platform("x-local-service-leads", "X local service lead finder", .x, "X", "Monitor local buying-intent posts and draft transparent service introductions.", ["Qualified lead count", "Reply acceptance", "Partner referral revenue"], ["Search query set", "Reply templates", "Lead handoff sheet"], ["No harvested contact lists", "Disclosure of relationship", "Manual approval before outreach"], 30),
+
+        platform("instagram-reel-local-business", "Instagram Reel engine for local businesses", .instagram, "Instagram", "Create short local-service reels from FAQs, before-care tips, and customer questions.", ["Reel completion rate", "Profile action rate", "DM inquiry count"], ["Reel script", "Caption", "Shot list"], ["No misleading before/after", "Use licensed media", "Branded-content tag when needed"], 60),
+        platform("instagram-carousel-education", "Instagram carousel education funnel", .instagram, "Instagram", "Publish educational carousels for one niche and route saves to a lead magnet.", ["Save rate", "Profile clicks", "Lead magnet conversion"], ["Carousel outline", "Caption", "Lead magnet CTA"], ["No medical/financial guarantees", "Cite claims", "Avoid stolen visuals"], 60),
+        platform("instagram-story-deal-drops", "Instagram Story deal drops", .instagram, "Instagram", "Run compliant limited-time story offers for a digital product or affiliate category.", ["Story tap-through", "Link sticker CTR", "Revenue per story"], ["Story sequence", "Link sticker URL", "Disclosure copy"], ["Affiliate disclosure", "No false scarcity", "Respect creator terms"], 60),
+        platform("instagram-ugc-testimonial-library", "Instagram UGC testimonial library", .instagram, "Instagram", "Turn approved customer proof into reusable posts and reels for one offer.", ["Engagement-to-reach", "Profile action rate", "Conversion lift"], ["Proof consent log", "Post captions", "Media rights record"], ["Written consent required", "No edited deceptive claims", "Protect customer privacy"], 60),
+        platform("instagram-dm-lead-magnet", "Instagram DM lead magnet responder", .instagram, "Instagram", "Draft approved DM responses for comments requesting a niche lead magnet.", ["Comment-to-DM delivery", "Signup conversion", "Complaint rate"], ["Comment trigger set", "DM script", "Lead magnet"], ["Approval before DM automation", "Unsubscribe path", "No bulk DM spam"], 60),
+
+        platform("tiktok-faceless-product-hooks", "TikTok faceless product hook tester", .tiktok, "TikTok", "Publish hook variants for one product category and measure viewer retention.", ["Three-second hold", "Completion rate", "Outbound click rate"], ["Hook matrix", "Voiceover script", "Video brief"], ["Use licensed media/music", "Disclose affiliate links", "No deceptive demos"], 60),
+        platform("tiktok-local-faq-shorts", "TikTok local FAQ shorts", .tiktok, "TikTok", "Answer local-service FAQs in short videos that route viewers to a booking page.", ["Completion rate", "Profile clicks", "Booking inquiries"], ["FAQ script", "Caption", "Booking CTA"], ["No regulated advice without review", "Use sourced facts", "Respect platform terms"], 60),
+        platform("tiktok-course-mini-lessons", "TikTok mini-lessons for a digital course", .tiktok, "TikTok", "Turn one course module into short lessons that validate demand before launch.", ["Save rate", "Comment questions", "Waitlist signup"], ["Lesson script", "Caption", "Waitlist CTA"], ["No income guarantees", "Original teaching content", "Clear paid-offer disclosure"], 60),
+        platform("tiktok-trend-to-offer", "TikTok trend-to-offer mapper", .tiktok, "TikTok", "Map safe trends to a niche offer and draft trend-aware video briefs.", ["Trend view velocity", "Profile action rate", "Offer clicks"], ["Trend shortlist", "Video brief", "Caption variants"], ["Avoid unsafe challenges", "No IP misuse", "Disclosure for sponsored content"], 60),
+        platform("tiktok-comment-intent-miner", "TikTok comment intent miner", .tiktok, "TikTok", "Read comments on niche videos to extract pains and draft approved response content.", ["Pain-signal count", "Reply engagement", "Content idea conversion"], ["Comment research log", "Response drafts", "Content backlog"], ["No unsolicited spam", "Respect privacy", "Do not scrape private data"], 60),
+
+        platform("linkedin-job-family-thought-leadership", "LinkedIn job-family thought leadership", .linkedin, "LinkedIn", "Publish practical posts for one job family to grow B2B trust and inbound demand.", ["Engagement-to-impressions", "Profile views", "DM inbound"], ["Post queue", "Proof snippets", "Offer CTA"], ["No fake credentials", "No confidential employer data", "Cite claims"], 60),
+        platform("linkedin-sales-nav-proof-outreach", "LinkedIn Sales Nav proof outreach", .linkedin, "LinkedIn", "Draft warm outreach tied to a proof artifact for one buyer persona.", ["Connection accept rate", "Reply rate", "Booked-call rate"], ["Prospect criteria", "Proof artifact", "Message sequence"], ["Unsubscribe path", "No scraped spam", "Manual approval before send"], 60),
+        platform("linkedin-newsletter-b2b-niche", "LinkedIn newsletter for a B2B niche", .linkedin, "LinkedIn", "Publish a LinkedIn newsletter that converts niche insights into subscriber growth.", ["Subscriber growth", "Click rate", "Sponsor inquiries"], ["Issue outline", "Header image", "CTA block"], ["Fact-check sources", "No investment/legal claims without review", "Disclose sponsorships"], 60),
+        platform("linkedin-comment-lead-magnet", "LinkedIn lead magnet on comment runner", .linkedin, "LinkedIn", "Draft posts where commenters can request a useful asset and receive an approved follow-up.", ["Comment-to-delivery rate", "Signup rate", "Complaint rate"], ["Post copy", "Lead magnet", "Follow-up script"], ["Consent before follow-up", "No bulk spam", "Clear sender identity"], 60),
+        platform("linkedin-engagement-to-task", "LinkedIn engagement-to-task outreach", .linkedin, "LinkedIn", "Convert post engagement into reviewed CRM tasks and warm follow-up drafts.", ["Warm-DM reply rate", "Task completion rate", "Pipeline created"], ["Engagement export", "CRM task rules", "DM drafts"], ["Manual review before outreach", "Respect opt-outs", "No sensitive data misuse"], 60),
+
+        platform("pinterest-niche-affiliate-pin-loop", "Pinterest niche affiliate pin loop", .pinterest, "Pinterest", "Publish pins for one affiliate niche and measure outbound buyer intent.", ["Outbound CTR", "EPC", "Save rate"], ["Pin creative", "Destination page", "Disclosure copy"], ["Affiliate disclosure", "No misleading destinations", "Image rights cleared"], 120),
+        platform("pinterest-digital-product-funnel", "Pinterest digital product funnel", .pinterest, "Pinterest", "Drive pin traffic to a newsletter funnel for one digital product category.", ["Signup rate", "Pin saves", "Revenue per subscriber"], ["Pin set", "Landing page CTA", "Email opt-in"], ["CAN-SPAM compliant capture", "No fake scarcity", "Use original visuals"], 120),
+        platform("pinterest-local-service-seo-board", "Pinterest SEO board for local service", .pinterest, "Pinterest", "Create local-service boards and pins that support search discovery and lead capture.", ["Pin clicks", "Saves", "Lead form submissions"], ["Board plan", "Pin descriptions", "Lead page"], ["No fake local identity", "Disclose service area", "Avoid misleading images"], 120),
+        platform("pinterest-seasonal-sprint", "Pinterest seasonal Pin sprint", .pinterest, "Pinterest", "Plan and publish seasonal pins before demand peaks for one niche.", ["Peak traffic captured", "Repin velocity", "Conversion rate"], ["Seasonal calendar", "Pin batch", "Destination pages"], ["Verify dates", "No trademark misuse", "Use licensed media"], 120),
+        platform("pinterest-wall-art-shop", "Pinterest AI wall-art shop pin engine", .pinterest, "Pinterest", "Promote original wall-art listings with visual pins and compliant product links.", ["Outbound clicks", "Listing conversion", "Save rate"], ["Pin creatives", "Listing URLs", "Disclosure text"], ["Original artwork only", "No copyrighted styles", "Accurate product preview"], 120),
+
+        watcher("watcher-domain-flipper", "Watcher: expired-domain flipper", "Domain watcher", "Scan expiring domains, score resale potential, and draft acquisition tasks when spread clears threshold.", ["New domain opportunities", "Comparable resale value", "Acquisition spread"], ["SignalWatcher spec", "Digest template", "Acquisition checklist"], ["No trademark squatting", "Approval before purchase"]),
+        watcher("watcher-local-liquidation", "Watcher: local liquidation arbitrage", "Marketplace watcher", "Scan local liquidation and surplus listings, diff fresh deals, and score resale margin.", ["Fresh listing count", "Estimated resale margin", "Travel/time cost"], ["Source list", "Deal scorecard", "Morning digest"], ["No unsafe meetups", "Manual approval before buying"]),
+        watcher("watcher-hiring-signal", "Watcher: hiring-signal lead generator", "Job-board watcher", "Monitor job posts that imply urgent operational pain and draft enriched B2B leads.", ["Relevant job postings", "Enriched contact rate", "Reply intent"], ["Signal queries", "Lead enrichment handoff", "Outreach draft"], ["Respect opt-outs", "Verify company fit before outreach"]),
+        watcher("watcher-sunset-saas", "Watcher: sunset SaaS migration offers", "Changelog watcher", "Track SaaS shutdowns and deprecations, then draft migration offers for affected users.", ["Shutdown notices", "Migration keyword demand", "Competitor gap"], ["Policy/changelog feeds", "Migration offer page", "CRM task rules"], ["Do not exploit outages deceptively", "Source every claim"]),
+        watcher("watcher-dying-app-store", "Watcher: dying app-store opportunity", "App-store watcher", "Find abandoned apps with persistent demand and propose replacement products or acquisition outreach.", ["Review velocity", "Last update age", "Search rank gap"], ["App-store watchlist", "Replacement brief", "Outreach draft"], ["No review scraping beyond allowed APIs", "Avoid trademark confusion"]),
+        watcher("watcher-competitive-intel", "Watcher: competitive-intel digest", "Competitor watcher", "Track competitor pricing, changelogs, launches, and policy changes for portfolio companies.", ["Price/page change count", "Launch signal severity", "Actionable experiment ideas"], ["Competitor feed list", "Weekly digest", "Experiment queue"], ["Respect robots and terms", "No credentialed access"])
     ]
 
     static func template(id: String) -> CompanyTemplate? {
@@ -217,5 +287,13 @@ enum CompanyTemplateCatalog {
 
     private static func service(_ id: String, _ title: String, _ channel: String, _ mission: String, _ validation: [String], _ assets: [String], _ risks: [String]) -> CompanyTemplate {
         CompanyTemplate(id: id, title: title, category: .productizedService, channel: channel, mission: mission, validationSignals: validation, launchAssets: assets, riskNotes: risks, suggestedCadenceMinutes: 60)
+    }
+
+    private static func platform(_ id: String, _ title: String, _ platform: CompanyTemplate.Platform, _ channel: String, _ mission: String, _ validation: [String], _ assets: [String], _ risks: [String], _ cadence: Int) -> CompanyTemplate {
+        CompanyTemplate(id: id, title: title, category: .creatorMedia, channel: channel, mission: mission, validationSignals: validation, launchAssets: assets, riskNotes: risks, suggestedCadenceMinutes: cadence, platform: platform)
+    }
+
+    private static func watcher(_ id: String, _ title: String, _ channel: String, _ mission: String, _ validation: [String], _ assets: [String], _ risks: [String]) -> CompanyTemplate {
+        CompanyTemplate(id: id, title: title, category: .leadGeneration, channel: channel, mission: mission, validationSignals: validation, launchAssets: assets, riskNotes: risks, suggestedCadenceMinutes: 360)
     }
 }

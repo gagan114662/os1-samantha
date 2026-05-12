@@ -68,6 +68,14 @@ struct CompanyBrowserAutomationTests {
         #expect(plan.status == .preferAPI)
         #expect(plan.preferredIntegration == .api)
         #expect(!plan.canExecuteWithBrowser)
+
+        for domain in ["x.com", "linkedin.com", "youtube.com", "reddit.com"] {
+            #expect(policy.preferredIntegration(for: domain) == .api, "\(domain) should prefer a stable API path.")
+        }
+        for domain in ["instagram.com", "tiktok.com", "pinterest.com"] {
+            #expect(policy.preferredIntegration(for: domain) == .browser, "\(domain) should be explicit browser fallback.")
+            #expect(CompanyBrowserSafetyPolicy.requiresStealth(for: domain))
+        }
     }
 
     @Test
@@ -122,6 +130,80 @@ struct CompanyBrowserAutomationTests {
 
         #expect(plan.status == .blocked)
         #expect(plan.blockers.contains { $0.contains("selector or semantic") })
+    }
+
+    @Test
+    func consumerPlatformBrowserActionsRequireStealthProfile() {
+        let policy = CompanyBrowserSafetyPolicy(
+            companyID: "company",
+            approvedDomains: ["instagram.com"],
+            allowedActions: ["publish-draft"],
+            preferredIntegrations: ["instagram.com": .browser]
+        )
+        let action = browserAction(domain: "instagram.com", actionName: "publish-draft")
+
+        let blocked = CompanyBrowserAutomationEngine.plan(action: action, policy: policy)
+        #expect(blocked.status == .blocked)
+        #expect(blocked.blockers.contains("stealth profile required"))
+
+        let profile = CompanyBrowserStealthProfile(
+            companyID: "company",
+            userAgentPool: ["ua-1", "ua-2", "ua-3"],
+            proxyEndpoint: nil,
+            humanPaceProfile: .normal,
+            cookieJarPath: URL(fileURLWithPath: "/tmp/company/instagram.cookies"),
+            captchaHandoff: .abortAndAskOperator
+        )
+        let ready = CompanyBrowserAutomationEngine.plan(action: action, policy: policy, stealthProfile: profile, sessionOrdinal: 4)
+        #expect(ready.status == .ready)
+        #expect(ready.selectedUserAgent == "ua-2")
+    }
+
+    @Test
+    func userAgentRotationUsesMultipleProfiles() {
+        let profile = CompanyBrowserStealthProfile(
+            companyID: "company",
+            userAgentPool: ["ua-1", "ua-2", "ua-3", "ua-4"],
+            proxyEndpoint: nil,
+            humanPaceProfile: .normal,
+            cookieJarPath: URL(fileURLWithPath: "/tmp/company/x.cookies"),
+            captchaHandoff: .manualAnnotate
+        )
+
+        let agents = Set((0..<10).map { profile.userAgent(forSessionOrdinal: $0) })
+        #expect(agents.count >= 3)
+    }
+
+    @Test
+    func captchaHandoffWritesApprovalFileAndPausesCompany() throws {
+        let action = browserAction(domain: "tiktok.com", actionName: "publish-draft")
+        let trace = CompanyBrowserAutomationEngine.trace(
+            action: action,
+            sessionID: "session-1",
+            outcome: .failed,
+            screenshotPath: "captcha.png",
+            domSnapshotPath: "captcha.html",
+            failureKind: .captcha
+        )
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("captcha-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let result = try CompanyBrowserAutomationEngine.captchaHandoff(trace: trace, approvalsDirectory: directory)
+
+        #expect(FileManager.default.fileExists(atPath: result.approvalFile.path))
+        #expect(result.event.kind == .companyPaused)
+        #expect(result.event.approvalState == "captcha-handoff")
+    }
+
+    @Test
+    func doctorReportsPerDomainStealthCoverage() {
+        let rows = DoctorViewModel.browserStealthCoverageRows(configuredDomains: ["x.com", "instagram.com"])
+
+        #expect(rows.contains("x.com: covered"))
+        #expect(rows.contains("instagram.com: covered"))
+        #expect(rows.contains("tiktok.com: missing"))
+        #expect(rows.contains("pinterest.com: missing"))
     }
 
     private func browserAction(

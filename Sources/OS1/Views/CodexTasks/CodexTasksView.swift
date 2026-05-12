@@ -10,6 +10,7 @@ struct CodexTasksView: View {
     @State private var newCompanyName: String = ""
     @State private var newCadenceMinutes: Int = 15
     @State private var templateSearchText: String = ""
+    @State private var selectedTemplatePlatform: String = "all"
     @State private var selectedTemplateID: String = CompanyTemplateCatalog.all.first?.id ?? ""
     @State private var bulkLaunchLimit: Int = 10
     @State private var bulkLaunchStartPaused: Bool = true
@@ -31,6 +32,7 @@ struct CodexTasksView: View {
             templateBar
             ideaBacklog
             portfolioDashboard
+            fleetSection
             reputationConsole
             approvalConsole
             eventConsole
@@ -202,6 +204,14 @@ struct CodexTasksView: View {
                     )
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
+                Picker("Platform", selection: $selectedTemplatePlatform) {
+                    Text("All").tag("all")
+                    ForEach(CompanyTemplate.Platform.allCases, id: \.self) { platform in
+                        Text(platform.rawValue).tag(platform.rawValue)
+                    }
+                }
+                .frame(width: 130)
+
                 Picker(L10n.string("Template"), selection: $selectedTemplateID) {
                     ForEach(filteredTemplates) { template in
                         Text(template.title).tag(template.id)
@@ -288,8 +298,11 @@ struct CodexTasksView: View {
 
     private var filteredTemplates: [CompanyTemplate] {
         let query = templateSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else { return CompanyTemplateCatalog.all }
-        return CompanyTemplateCatalog.all.filter { $0.searchText.contains(query) }
+        return CompanyTemplateCatalog.all.filter { template in
+            let platformMatches = selectedTemplatePlatform == "all" || template.platform?.rawValue == selectedTemplatePlatform
+            let queryMatches = query.isEmpty || template.searchText.contains(query)
+            return platformMatches && queryMatches
+        }
     }
 
     private var selectedTemplate: CompanyTemplate? {
@@ -310,6 +323,16 @@ struct CodexTasksView: View {
 
     private var rankedIdeaPlans: [(idea: CompanyIdea, plan: CompanyValidationPlan)] {
         rankedIdeas.map { ($0, CompanyValidationEngine.plan(for: $0)) }
+    }
+
+    private var fleetSnapshot: CompanyFleetHealthSnapshot {
+        CompanyFleetHealthSnapshot.make(
+            sessions: manager.sessions,
+            driftFlaggedCompanyIDs: CompanyFleetHealthSnapshot.driftFlaggedCompanyIDs(
+                from: manager.recentEvents(limit: 10_000)
+            ),
+            now: nowTick
+        )
     }
 
     private var ideaBacklog: some View {
@@ -493,6 +516,17 @@ struct CodexTasksView: View {
                 .strokeBorder(Color.orange.opacity(0.55), lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    // MARK: - Fleet scheduler
+
+    @ViewBuilder
+    private var fleetSection: some View {
+        if !manager.sessions.isEmpty {
+            FleetSection(snapshot: fleetSnapshot)
+                .padding(.horizontal, 18)
+                .padding(.bottom, 10)
+        }
     }
 
     // MARK: - Reputation console
@@ -1592,6 +1626,8 @@ struct CodexTasksView: View {
         case .stateBackupCreated: return "externaldrive.badge.checkmark"
         case .ledgerEntryRecorded: return "dollarsign.circle"
         case .untrustedContentInfluencedDecision: return "exclamationmark.shield"
+        case .driftDetected: return "point.3.connected.trianglepath.dotted"
+        case .experimentDecided: return "chart.line.uptrend.xyaxis"
         }
     }
 
@@ -1602,13 +1638,15 @@ struct CodexTasksView: View {
         case .heartbeatQueued, .externalSideEffect, .permissionChanged, .governanceDecisionRecorded:
             return .purple
         case .companyPaused, .fleetPaused, .approvalRequested, .approvalChangesRequested,
-             .untrustedContentInfluencedDecision, .permissionEscalated:
+             .untrustedContentInfluencedDecision, .permissionEscalated, .driftDetected:
             return .orange
         case .heartbeatStarted:
             return .yellow
         case .heartbeatFinished, .lifecycleChanged, .companyResumed, .fleetResumed, .approvalApproved,
              .stateBackupCreated, .ledgerEntryRecorded, .complianceChecked:
             return .green
+        case .experimentDecided:
+            return .blue
         case .companyCreated, .userInstruction, .secretAccessed:
             return theme.palette.onCoralMuted
         }
@@ -1621,5 +1659,134 @@ struct CodexTasksView: View {
         case .high: return .orange
         case .critical: return theme.palette.danger
         }
+    }
+}
+
+struct FleetSection: View {
+    @Environment(\.os1Theme) private var theme
+    let snapshot: CompanyFleetHealthSnapshot
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Label(L10n.string("Fleet"), systemImage: "cpu")
+                    .os1Style(theme.typography.label)
+                    .foregroundStyle(theme.palette.onCoralPrimary)
+                Text(L10n.string("Queue depth %lld", snapshot.queueDepth))
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(theme.palette.onCoralMuted)
+                Text(L10n.string("Drifting %lld", snapshot.driftingCompanyCount))
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(snapshot.driftingCompanyCount > 0 ? .orange : theme.palette.onCoralMuted)
+                Spacer()
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 8) {
+                    ForEach(snapshot.workers) { worker in
+                        workerCard(worker)
+                    }
+                }
+            }
+        }
+    }
+
+    static func renderedRows(snapshot: CompanyFleetHealthSnapshot) -> [String] {
+        var rows = [
+            "queueDepth=\(snapshot.queueDepth)",
+            "drifting=\(snapshot.driftingCompanyCount)"
+        ]
+        rows.append(contentsOf: snapshot.workers.map { worker in
+            let active = worker.activeCompanies
+                .map { "\($0.companyID):\($0.lastHeartbeatLatencySeconds.map(String.init) ?? "n/a")" }
+                .joined(separator: ",")
+            return "\(worker.workerID)|\(worker.kind)|\(worker.runningCount)/\(worker.cap)|\(active)"
+        })
+        return rows
+    }
+
+    private func workerCard(_ worker: CompanyFleetHealthSnapshot.Worker) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: worker.kind == "local" ? "desktopcomputer" : "server.rack")
+                    .foregroundStyle(theme.palette.onCoralPrimary)
+                Text(worker.workerID)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(theme.palette.onCoralPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer()
+            }
+
+            Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 5) {
+                GridRow {
+                    header("Kind")
+                    cell(L10n.string(worker.kind))
+                }
+                GridRow {
+                    header("Running")
+                    cell(L10n.string("%lld/%lld", worker.runningCount, worker.cap))
+                }
+            }
+
+            HStack {
+                Text(L10n.string("Active companies"))
+                Spacer()
+                Text(L10n.string("Last heartbeat"))
+            }
+            .os1Style(theme.typography.smallCaps)
+            .foregroundStyle(theme.palette.onCoralMuted)
+
+            if worker.activeCompanies.isEmpty {
+                Text(L10n.string("No active companies"))
+                    .font(.caption2)
+                    .foregroundStyle(theme.palette.onCoralMuted)
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(worker.activeCompanies) { company in
+                        HStack(spacing: 6) {
+                            Text(company.title)
+                                .font(.caption2)
+                                .foregroundStyle(theme.palette.onCoralSecondary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                            Spacer(minLength: 8)
+                            Text(latencyLabel(company.lastHeartbeatLatencySeconds))
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundStyle(theme.palette.onCoralMuted)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(10)
+        .frame(width: 260, alignment: .leading)
+        .background(theme.palette.glassFill.opacity(0.78))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(theme.palette.glassBorder, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func header(_ key: String) -> some View {
+        Text(L10n.string(key))
+            .os1Style(theme.typography.smallCaps)
+            .foregroundStyle(theme.palette.onCoralMuted)
+    }
+
+    private func cell(_ value: String) -> some View {
+        Text(value)
+            .os1Style(theme.typography.label)
+            .foregroundStyle(theme.palette.onCoralSecondary)
+            .lineLimit(1)
+    }
+
+    private func latencyLabel(_ seconds: Int?) -> String {
+        guard let seconds else { return L10n.string("n/a") }
+        if seconds < 60 { return L10n.string("%llds", seconds) }
+        if seconds < 3_600 { return L10n.string("%lldm", seconds / 60) }
+        return L10n.string("%lldh", seconds / 3_600)
     }
 }

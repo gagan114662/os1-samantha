@@ -1,8 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// Providers tab — picks which LLM provider the Hermes agent should
-/// run against on each remote host. Mirrors the Connectors tab's
+/// Providers tab — picks which model and media providers Samantha can
+/// use on each remote host. Mirrors the Connectors tab's
 /// "tab → list of cards → modal connect sheet" structure so users
 /// see a consistent shape between "tools the agent can use" and
 /// "models the agent runs as."
@@ -16,7 +16,7 @@ struct ProvidersView: View {
             VStack(alignment: .leading, spacing: 18) {
                 HermesPageHeader(
                     title: "Providers",
-                    subtitle: "Pick the LLM provider Hermes runs on. Paste an API key (or sign in for one-click), then install it on the active host. Composio still provides the agent's tools — Providers just decide which model is doing the thinking."
+                    subtitle: "Connect text, image, video, voice, music, avatar, and render providers. Paste an API key or sign in where supported, then install it on the active host."
                 )
 
                 if let error = viewModel.topLevelError {
@@ -70,7 +70,7 @@ struct ProvidersView: View {
                 Text(L10n.string("How providers work"))
                     .os1Style(theme.typography.bodyEmphasis)
                     .foregroundStyle(theme.palette.onCoralPrimary)
-                Text(L10n.string("Each provider's API key is stored in macOS Keychain on this Mac, scoped per host. Installing pushes it onto that host's ~/.hermes/.env so Hermes picks it up on the next chat turn — no daemon restart needed."))
+                Text(L10n.string("Each provider's API key is stored in macOS Keychain on this Mac, scoped per host. Installing pushes it onto that host's ~/.hermes/.env so Samantha can use the provider on the next heartbeat — no daemon restart needed."))
                     .os1Style(theme.typography.body)
                     .foregroundStyle(theme.palette.onCoralSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -93,13 +93,31 @@ struct ProvidersView: View {
     private var providerListPanel: some View {
         HermesSurfacePanel(
             title: "Available providers",
-            subtitle: "Connect any combination — Hermes only uses one at a time, but having keys on file lets you switch with the /model slash command in chat."
+            subtitle: "Grouped by modality so text, media generation, voice, and render capacity are visible before companies request them."
         ) {
-            VStack(spacing: 8) {
-                ForEach(viewModel.providers) { display in
-                    providerRow(display)
+            VStack(alignment: .leading, spacing: 14) {
+                ForEach(providerGroups, id: \.modality) { group in
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(L10n.string(group.modality.displayName))
+                            .os1Style(theme.typography.smallCaps)
+                            .foregroundStyle(theme.palette.onCoralMuted)
+
+                        VStack(spacing: 8) {
+                            ForEach(group.providers) { display in
+                                providerRow(display)
+                            }
+                        }
+                    }
                 }
             }
+        }
+    }
+
+    private var providerGroups: [(modality: ProviderCatalogEntry.Modality, providers: [ProvidersViewModel.ProviderDisplay])] {
+        ProviderCatalogEntry.Modality.allCases.compactMap { modality in
+            let providers = viewModel.providers.filter { $0.entry.modality == modality }
+            guard !providers.isEmpty else { return nil }
+            return (modality, providers)
         }
     }
 
@@ -127,6 +145,10 @@ struct ProvidersView: View {
                         .foregroundStyle(theme.palette.onCoralMuted)
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
+                    Text(providerCapacityLine(for: display.entry))
+                        .os1Style(theme.typography.smallCaps)
+                        .foregroundStyle(theme.palette.onCoralMuted)
+                        .lineLimit(1)
                 }
 
                 Spacer(minLength: 8)
@@ -150,6 +172,11 @@ struct ProvidersView: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(theme.palette.glassBorder.opacity(0.6), lineWidth: 1)
         }
+    }
+
+    private func providerCapacityLine(for entry: ProviderCatalogEntry) -> String {
+        let quota = entry.freeTierQuota.map { "\($0.amount) \($0.unit)" } ?? "account plan"
+        return L10n.string("%@ · Quota: %@ · Cost-to-date: ledger tracked", entry.modality.displayName, quota)
     }
 
     private func statusPill(for display: ProvidersViewModel.ProviderDisplay) -> some View {

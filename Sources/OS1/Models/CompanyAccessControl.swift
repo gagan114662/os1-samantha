@@ -329,3 +329,204 @@ enum CompanyPermissionGate {
         )
     }
 }
+
+struct CompanyAccessControl: Codable, Hashable {
+    enum Capability: String, Codable, CaseIterable, Hashable {
+        case payments
+    }
+
+    struct ToolkitAccessDecision: Codable, Hashable {
+        enum Status: String, Codable, Hashable {
+            case denied
+            case approvalRequired = "approval_required"
+            case allowed
+        }
+
+        var status: Status
+        var reason: String
+        var riskTier: ComposioToolkitMeta.RiskTier
+
+        var requiresApproval: Bool { status == .approvalRequired }
+    }
+
+    struct MediaProviderAccessDecision: Codable, Hashable {
+        enum Status: String, Codable, Hashable {
+            case denied
+            case approvalRequired = "approval_required"
+            case allowed
+        }
+
+        var status: Status
+        var reason: String
+        var providerSlug: String
+        var forecastLedgerEntry: CompanyLedgerEntry?
+        var approvalEvent: CompanyEvent?
+
+        var requiresApproval: Bool { status == .approvalRequired }
+    }
+
+    var companyID: String
+    var mediaProviderAllowlist: Set<String>
+    var seoProviderAllowlist: Set<String>
+    var composioToolkitAllowlist: Set<String> = []
+    var embeddingProviderAllowlist: Set<String>
+    var analyticsSourceAllowlist: Set<String> = []
+    var paymentProviderAllowlist: Set<String> = []
+    var espProviderAllowlist: Set<String> = []
+    var marketplaceAllowlist: Set<String> = []
+    var hostingProviderAllowlist: Set<String> = []
+    var registrarAllowlist: Set<String> = []
+    var crmProviderAllowlist: Set<String> = []
+    var supportProviderAllowlist: Set<String> = []
+    var storageProviderAllowlist: Set<String> = []
+    var adProviderAllowlist: Set<String> = []
+    var enrichmentProviderAllowlist: Set<String> = []
+    var bookingProviderAllowlist: Set<String> = []
+    var voiceProviderAllowlist: Set<String> = []
+    var courseCommunityProviderAllowlist: Set<String> = []
+    var reviewProviderAllowlist: Set<String> = []
+    var referralPayoutProviderAllowlist: Set<String> = []
+    var entityProviderAllowlist: Set<String> = []
+    var bankingProviderAllowlist: Set<String> = []
+    var clientDataAccessAllowlist: Set<String> = []
+    var experimentationEnabled: Bool
+
+    static func lockedDown(companyID: String) -> CompanyAccessControl {
+        CompanyAccessControl(
+            companyID: companyID,
+            mediaProviderAllowlist: [],
+            seoProviderAllowlist: [],
+            embeddingProviderAllowlist: [],
+            experimentationEnabled: false
+        )
+    }
+
+    func allowsMediaProvider(_ slug: String, modality: ProviderCatalogEntry.Modality? = nil) -> Bool {
+        guard mediaProviderAllowlist.contains(slug) else { return false }
+        if let modality, let entry = ProviderCatalog.entry(for: slug) {
+            return entry.modality == modality
+        }
+        return true
+    }
+
+    func mediaProviderAccess(
+        providerSlug: String,
+        modality: ProviderCatalogEntry.Modality,
+        estimatedDailyCostUSD: Double,
+        priorApprovedCallCount: Int,
+        now: Date = Date()
+    ) -> MediaProviderAccessDecision {
+        guard allowsMediaProvider(providerSlug, modality: modality),
+              let provider = ProviderCatalog.entry(for: providerSlug) else {
+            return MediaProviderAccessDecision(
+                status: .denied,
+                reason: "media provider not allowlisted",
+                providerSlug: providerSlug,
+                forecastLedgerEntry: nil,
+                approvalEvent: nil
+            )
+        }
+
+        let forecastAmount = min(max(estimatedDailyCostUSD, 0), provider.dailyCostCapUSD ?? estimatedDailyCostUSD)
+        let forecast = CompanyLedgerEntry(
+            id: "\(companyID)-\(providerSlug)-daily-cost-forecast",
+            companyID: companyID,
+            occurredAt: now,
+            kind: .cost,
+            category: .tools,
+            amountUSD: forecastAmount,
+            source: "media-provider-forecast",
+            sourceReference: providerSlug,
+            confidence: .estimated,
+            note: "forecast daily media provider cap for \(provider.displayName)"
+        )
+
+        guard priorApprovedCallCount > 0 else {
+            let event = CompanyEvent(
+                occurredAt: now,
+                companyID: companyID,
+                kind: .approvalRequested,
+                summary: "Approval required before first media provider call to \(provider.displayName)",
+                tool: providerSlug,
+                costUSD: forecastAmount,
+                riskTier: "medium",
+                approvalState: "approval-required",
+                metadata: [
+                    "providerSlug": providerSlug,
+                    "modality": modality.rawValue,
+                    "dailyCostCapUSD": String(format: "%.2f", forecastAmount)
+                ]
+            )
+            return MediaProviderAccessDecision(
+                status: .approvalRequired,
+                reason: "first media provider call requires approval",
+                providerSlug: providerSlug,
+                forecastLedgerEntry: forecast,
+                approvalEvent: event
+            )
+        }
+
+        return MediaProviderAccessDecision(
+            status: .allowed,
+            reason: "media provider allowlisted",
+            providerSlug: providerSlug,
+            forecastLedgerEntry: forecast,
+            approvalEvent: nil
+        )
+    }
+
+    func composioToolkitAccess(
+        for toolkit: ComposioToolkitMeta,
+        cleanHistoryDays: Int
+    ) -> ToolkitAccessDecision {
+        guard composioToolkitAllowlist.contains(toolkit.slug) else {
+            return ToolkitAccessDecision(
+                status: .denied,
+                reason: "toolkit not granted to company",
+                riskTier: toolkit.riskTier
+            )
+        }
+
+        if toolkit.requiresEarlyApproval(cleanHistoryDays: cleanHistoryDays) {
+            return ToolkitAccessDecision(
+                status: .approvalRequired,
+                reason: "social/community toolkit requires approval until 7 clean-history days",
+                riskTier: toolkit.riskTier
+            )
+        }
+
+        return ToolkitAccessDecision(
+            status: .allowed,
+            reason: "toolkit granted",
+            riskTier: toolkit.riskTier
+        )
+    }
+
+    static func grantCapabilities(_ capabilities: Set<Capability>, companyID: String) {
+        CompanyAccessControlCapabilityRegistry.shared.set(capabilities: capabilities, companyID: companyID)
+    }
+
+    static func canUse(companyID: String, capability: Capability) -> Bool {
+        CompanyAccessControlCapabilityRegistry.shared.canUse(companyID: companyID, capability: capability)
+    }
+}
+
+private final class CompanyAccessControlCapabilityRegistry: @unchecked Sendable {
+    static let shared = CompanyAccessControlCapabilityRegistry()
+
+    private let lock = NSLock()
+    private var grants: [String: Set<CompanyAccessControl.Capability>] = [:]
+
+    func set(capabilities: Set<CompanyAccessControl.Capability>, companyID: String) {
+        lock.lock()
+        grants[companyID] = capabilities
+        lock.unlock()
+    }
+
+    func canUse(companyID: String, capability: CompanyAccessControl.Capability) -> Bool {
+        lock.lock()
+        let allowed = grants[companyID]?.contains(capability) ?? false
+        lock.unlock()
+        return allowed
+    }
+}

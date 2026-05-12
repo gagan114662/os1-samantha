@@ -78,6 +78,23 @@ struct ProviderCredentialStoreTests {
         #expect(map.count == ProviderCatalog.entries.count)
     }
 
+    @Test
+    func providerCallHealthUsesProfileSpecificTimestampBeforeDefault() throws {
+        let suiteName = "ai.os1.tests.provider-health.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = ProviderCallHealthStore(userDefaults: defaults, keyPrefix: suiteName)
+        let defaultDate = Date(timeIntervalSince1970: 1_800_000_000)
+        let hostDate = Date(timeIntervalSince1970: 1_800_003_600)
+
+        store.recordSuccessfulCall(slug: "elevenlabs-tts", at: defaultDate)
+        store.recordSuccessfulCall(slug: "elevenlabs-tts", forProfileId: "host-A", at: hostDate)
+
+        #expect(store.lastSuccessfulCall(slug: "elevenlabs-tts", forProfileId: "host-A") == hostDate)
+        #expect(store.lastSuccessfulCall(slug: "elevenlabs-tts", forProfileId: "host-B") == defaultDate)
+        #expect(store.loadLastSuccessfulCalls(forProfileId: "host-A")["elevenlabs-tts"] == hostDate)
+    }
+
     // MARK: - helpers
 
     /// Each test gets its own service id so concurrent runs don't

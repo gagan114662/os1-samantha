@@ -167,3 +167,56 @@ final class ProviderCredentialStore: @unchecked Sendable {
         }
     }
 }
+
+/// Non-secret health metadata for provider calls. API keys stay in
+/// Keychain; this only records timestamps that Doctor can safely surface.
+final class ProviderCallHealthStore: @unchecked Sendable {
+    private let userDefaults: UserDefaults
+    private let keyPrefix: String
+
+    init(
+        userDefaults: UserDefaults = .standard,
+        keyPrefix: String = "ai.os1.provider-call-health"
+    ) {
+        self.userDefaults = userDefaults
+        self.keyPrefix = keyPrefix
+    }
+
+    func recordSuccessfulCall(
+        slug: String,
+        forProfileId profileId: String? = nil,
+        at date: Date = Date()
+    ) {
+        userDefaults.set(date.timeIntervalSince1970, forKey: key(profileToken: profileToken(profileId), slug: slug))
+    }
+
+    func lastSuccessfulCall(slug: String, forProfileId profileId: String? = nil) -> Date? {
+        if let profileId,
+           let profileScoped = readDate(key: key(profileToken: profileId, slug: slug)) {
+            return profileScoped
+        }
+        return readDate(key: key(profileToken: ProviderCredentialStore.defaultProfileToken, slug: slug))
+    }
+
+    func loadLastSuccessfulCalls(forProfileId profileId: String?) -> [String: Date] {
+        var result: [String: Date] = [:]
+        for entry in ProviderCatalog.entries {
+            result[entry.slug] = lastSuccessfulCall(slug: entry.slug, forProfileId: profileId)
+        }
+        return result
+    }
+
+    private func profileToken(_ profileId: String?) -> String {
+        profileId ?? ProviderCredentialStore.defaultProfileToken
+    }
+
+    private func key(profileToken: String, slug: String) -> String {
+        "\(keyPrefix).\(profileToken).\(slug)"
+    }
+
+    private func readDate(key: String) -> Date? {
+        let timestamp = userDefaults.double(forKey: key)
+        guard timestamp > 0 else { return nil }
+        return Date(timeIntervalSince1970: timestamp)
+    }
+}

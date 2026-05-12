@@ -1102,3 +1102,61 @@
 "No non-live eval report found" = "No non-live eval report found";
 "Eval suite %@: %lld/%lld passed, score %.1f" = "Eval suite %@: %lld/%lld passed, score %.1f";
 "Run `python3 scripts/run-evals.py` to create artifacts/evals/non-live-report.json. CI runs this on every PR and uploads the report artifact." = "Run `python3 scripts/run-evals.py` to create artifacts/evals/non-live-report.json. CI runs this on every PR and uploads the report artifact.";
+
+// MARK: - Payments doctor card
+"Payments" = "Payments";
+"Endpoint" = "Endpoint";
+"Last event" = "Last event";
+"Reconciliation" = "Reconciliation";
+"Replay store size" = "Replay store size";
+
+// MARK: - Fleet scheduler surface
+"Fleet" = "Флот";
+"Queue depth %lld" = "Очередь %lld";
+"Drifting %lld" = "Дрейф %lld";
+"Kind" = "Тип";
+"Active companies" = "Активные компании";
+"No active companies" = "Нет активных компаний";
+"Last heartbeat" = "Последний heartbeat";
+"local" = "локальный";
+"orgo" = "orgo";
+"%lld/%lld" = "%lld/%lld";
+"n/a" = "н/д";
+"%llds" = "%lldс";
+"%lldm" = "%lldм";
+"%lldh" = "%lldч";
+"Fleet capacity: %lld workers × cap %lld = %lld concurrent" = "Емкость флота: %lld воркеров × лимит %lld = %lld одновременно";
+"Companies flagged as drifting: %lld" = "Компаний с отмеченным дрейфом: %lld";
+
+// MARK: - Provider modalities
+"Each provider's API key is stored in macOS Keychain on this Mac, scoped per host. Installing pushes it onto that host's ~/.hermes/.env so Samantha can use the provider on the next heartbeat — no daemon restart needed." = "API-ключ каждого провайдера хранится в Keychain на этом Mac и привязан к хосту. Установка записывает его в ~/.hermes/.env на этом хосте, чтобы Samantha могла использовать провайдера на следующем heartbeat — перезапуск демона не нужен.";
+"%@ · Quota: %@ · Cost-to-date: ledger tracked" = "%@ · квота: %@ · затраты: в ledger";
+
+// MARK: - Company growth campaign channels
+"CompanyGrowthCampaign.Channel.seoPages" = "SEO-страницы";
+"CompanyGrowthCampaign.Channel.contentPosts" = "Контент-посты";
+"CompanyGrowthCampaign.Channel.marketplace" = "Маркетплейс";
+"CompanyGrowthCampaign.Channel.directories" = "Каталоги";
+"CompanyGrowthCampaign.Channel.partnerOutreach" = "Партнерский outreach";
+"CompanyGrowthCampaign.Channel.warmIntros" = "Теплые интро";
+"CompanyGrowthCampaign.Channel.paidExperiment" = "Платный эксперимент";
+"CompanyGrowthCampaign.Channel.emailDrafts" = "Черновики email";
+"CompanyGrowthCampaign.Channel.xPost" = "Пост в X";
+"CompanyGrowthCampaign.Channel.xThread" = "Тред в X";
+"CompanyGrowthCampaign.Channel.xReply" = "Ответ в X";
+"CompanyGrowthCampaign.Channel.youtubeUpload" = "Загрузка YouTube";
+"CompanyGrowthCampaign.Channel.youtubeShort" = "YouTube Short";
+"CompanyGrowthCampaign.Channel.youtubeCommunityPost" = "Пост сообщества YouTube";
+"CompanyGrowthCampaign.Channel.instagramReel" = "Instagram Reel";
+"CompanyGrowthCampaign.Channel.instagramPost" = "Пост Instagram";
+"CompanyGrowthCampaign.Channel.instagramStory" = "Instagram Story";
+"CompanyGrowthCampaign.Channel.instagramDM" = "DM Instagram";
+"CompanyGrowthCampaign.Channel.tiktokVideo" = "Видео TikTok";
+"CompanyGrowthCampaign.Channel.tiktokComment" = "Комментарий TikTok";
+"CompanyGrowthCampaign.Channel.linkedinPost" = "Пост LinkedIn";
+"CompanyGrowthCampaign.Channel.linkedinDM" = "DM LinkedIn";
+"CompanyGrowthCampaign.Channel.linkedinNewsletter" = "Рассылка LinkedIn";
+"CompanyGrowthCampaign.Channel.pinterestPin" = "Pinterest Pin";
+"CompanyGrowthCampaign.Channel.redditPost" = "Пост Reddit";
+"CompanyGrowthCampaign.Channel.redditComment" = "Комментарий Reddit";
+"CompanyGrowthCampaign.Channel.affiliateLink" = "Партнерская ссылка";

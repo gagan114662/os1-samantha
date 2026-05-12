@@ -293,3 +293,52 @@ enum CompanyStateBackupBuilder {
         )
     }
 }
+
+enum OS1BackupCommand {
+    static func backup(
+        sourceRoot: URL,
+        candidates: [CompanyStateBackupBuilder.Candidate],
+        key: SymmetricKey,
+        backupID: String = UUID().uuidString,
+        createdAt: Date = Date()
+    ) throws -> CompanyEncryptedStateBackup {
+        try CompanyStateBackupBuilder.makeEncryptedBackup(
+            backupID: backupID,
+            sourceRoot: sourceRoot,
+            candidates: candidates,
+            key: key,
+            createdAt: createdAt
+        )
+    }
+
+    static func restore(
+        backup: CompanyEncryptedStateBackup,
+        key: SymmetricKey,
+        destinationRoot: URL,
+        registry: CompanySchemaMigrationRegistry = .current,
+        drilledAt: Date = Date()
+    ) throws -> CompanyRestoreDrillReport {
+        let report = try CompanyStateBackupBuilder.restoreEncryptedBackup(
+            backup,
+            key: key,
+            destinationRoot: destinationRoot,
+            drilledAt: drilledAt
+        )
+        guard report.status == .passed else { return report }
+        let quarantineMessages = backup.manifest.entries.compactMap { entry -> String? in
+            registry.quarantineMessage(schema: entry.kind.rawValue, version: backup.manifest.schemaVersion)
+        }
+        if quarantineMessages.isEmpty { return report }
+        return CompanyRestoreDrillReport(
+            status: .failed,
+            drilledAt: drilledAt,
+            backupID: report.backupID,
+            restoredEntryCount: report.restoredEntryCount,
+            recoveryPointObjectiveHours: report.recoveryPointObjectiveHours,
+            recoveryTimeObjectiveHours: report.recoveryTimeObjectiveHours,
+            integrity: report.integrity,
+            restoreRoot: report.restoreRoot,
+            notes: quarantineMessages
+        )
+    }
+}

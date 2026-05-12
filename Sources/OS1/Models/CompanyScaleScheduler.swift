@@ -9,7 +9,7 @@ struct CompanyRunner: Codable, Hashable, Identifiable {
     static let local = CompanyRunner(
         id: CompanyScaleScheduler.localRunnerID,
         label: "This Mac",
-        maxConcurrentHeartbeats: 3,
+        maxConcurrentHeartbeats: CompanyFleetHealthSnapshot.defaultPerWorkerCap,
         isAvailable: true
     )
 }
@@ -20,7 +20,7 @@ struct CompanySchedulerLimits: Codable, Hashable {
     var maxFailedCompaniesBeforeBackpressure: Int
 
     static let productionDefault = CompanySchedulerLimits(
-        maxGlobalConcurrentHeartbeats: 3,
+        maxGlobalConcurrentHeartbeats: CompanyFleetHealthSnapshot.defaultPerWorkerCap,
         maxQueuedCompaniesBeforeBackpressure: 250,
         maxFailedCompaniesBeforeBackpressure: 50
     )

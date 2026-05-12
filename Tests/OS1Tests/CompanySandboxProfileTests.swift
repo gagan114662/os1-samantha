@@ -57,6 +57,9 @@ struct CompanySandboxProfileTests {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: sandboxExec)
         process.arguments = ["-f", profile, "/bin/cat", path]
+        var environment = ProcessInfo.processInfo.environment
+        environment.removeValue(forKey: "LLVM_PROFILE_FILE")
+        process.environment = environment
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = pipe

@@ -95,6 +95,9 @@ extension ProviderVMInstaller {
         case .customProvider(let configName):
             kindLiteral = "\"custom\""
             configNameB64 = b64(configName)
+        case .mediaProvider:
+            kindLiteral = "\"media\""
+            configNameB64 = b64(provider.slug)
         }
 
         let actionLiteral: String

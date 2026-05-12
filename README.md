@@ -69,6 +69,11 @@ A runner is not just a chat thread. It is a durable company record with
 a scoped worktree, a heartbeat lease, a log, a journal, a ledger,
 approval state, and a run timeline.
 
+OS1 dispatches heartbeats through `CompanyFleetScheduler` with a default
+per-VM cap of 5. Total concurrent companies = configured workers × cap. On
+a single-Orgo-VM setup that's 5; with N Orgo workers it's 5N. Tune via
+`~/.os1/portfolio/fleet.json`.
+
 Current foundations:
 
 - **Sandbox-first execution**: new companies default to sandbox mode.
@@ -93,6 +98,15 @@ Current foundations:
   files prevent duplicate heartbeats across duplicate app/launchd starts.
   Restart recovery queues active leases instead of replaying work
   immediately, and stale locks can be recovered after crashes.
+- **Provider failover matrix**: Codex/OpenAI remains the default company
+  runtime, but request classes have explicit fallback posture: chat/tool
+  work can route through alternate model providers, embeddings can queue
+  or downshift when org headroom is low, image generation uses Codex
+  imagegen first and an operator-permitted alternate only during quota or
+  outage events, and voice work queues cleanly when no approved provider
+  is healthy. Every provider attempt records provider, model, request
+  class, and attempt number so Doctor can show green/yellow/red health by
+  provider and request class.
 - **Portfolio controls**: fleet pause/resume, per-company pause/resume,
   kill heartbeat, remove company, local state backups, revenue/cost
   ledger summaries, and Doctor production checks.
@@ -183,7 +197,7 @@ The bundle lands at `dist/OS1.app`.
 swift test
 ```
 
-At the time this README was updated, the local suite passed with 174
+At the time this README was updated, the local suite passed with 441
 tests, including focused coverage for company sandbox isolation,
 credential redaction, Doctor production checks, event metrics, heartbeat
 locks, stale-lock recovery, restart recovery, validation policy,
