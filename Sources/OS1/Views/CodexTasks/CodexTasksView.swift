@@ -4,6 +4,7 @@ import SwiftUI
 /// in its own git worktree under ~/.os1/codex-tasks/sessions/<id>.
 struct CodexTasksView: View {
     @Environment(\.os1Theme) private var theme
+    @EnvironmentObject private var appState: AppState
     @StateObject private var manager = CodexSessionManager.shared
 
     @State private var newTaskText: String = ""
@@ -22,6 +23,10 @@ struct CodexTasksView: View {
     @State private var approvalChangeTexts: [String: String] = [:]
     @State private var ledgerAmounts: [String: String] = [:]
     @State private var ledgerNotes: [String: String] = [:]
+    @State private var checkoutAmounts: [String: String] = [:]
+    @State private var checkoutProducts: [String: String] = [:]
+    @State private var checkoutMessages: [String: String] = [:]
+    @State private var generatingCheckoutIDs: Set<String> = []
     @State private var validationInputs: [String: [String: String]] = [:]
     @State private var complianceInputs: [String: [String: String]] = [:]
     @State private var nowTick: Date = Date()  // drives countdown labels
@@ -1544,6 +1549,60 @@ struct CodexTasksView: View {
                     Button("Refund") { recordLedger(session.id, kind: .refund) }
                         .buttonStyle(.os1Secondary)
                 }
+                Divider().overlay(theme.palette.glassBorder)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Stripe sandbox checkout")
+                            .os1Style(theme.typography.label)
+                            .foregroundStyle(theme.palette.onCoralMuted)
+                        Spacer()
+                        Label(
+                            hasStripeCheckoutCredential ? "test key stored" : "test key missing",
+                            systemImage: hasStripeCheckoutCredential ? "checkmark.seal" : "exclamationmark.triangle"
+                        )
+                        .foregroundStyle(hasStripeCheckoutCredential ? .green : .orange)
+                    }
+                    HStack(spacing: 8) {
+                        TextField("Product", text: Binding(
+                            get: { checkoutProducts[session.id] ?? "" },
+                            set: { checkoutProducts[session.id] = $0 }
+                        ))
+                        .textFieldStyle(.plain)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 8)
+                        .background(theme.palette.glassFill)
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+
+                        TextField("Amount", text: Binding(
+                            get: { checkoutAmounts[session.id] ?? "" },
+                            set: { checkoutAmounts[session.id] = $0 }
+                        ))
+                        .textFieldStyle(.plain)
+                        .frame(width: 82)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 8)
+                        .background(theme.palette.glassFill)
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+
+                        Button {
+                            generateCheckout(session.id)
+                        } label: {
+                            if generatingCheckoutIDs.contains(session.id) {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Text("Generate")
+                            }
+                        }
+                        .buttonStyle(.os1Secondary)
+                        .disabled(!canGenerateCheckout(session.id))
+                    }
+                    if let message = checkoutMessages[session.id] {
+                        Text(message)
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(theme.palette.onCoralSecondary)
+                            .textSelection(.enabled)
+                    }
+                }
             }
             .font(.caption)
             .foregroundStyle(theme.palette.onCoralMuted)
@@ -1945,6 +2004,69 @@ struct CodexTasksView: View {
         )
         ledgerAmounts[id] = ""
         ledgerNotes[id] = ""
+    }
+
+    private var activePaymentProfileID: String? {
+        appState.activeConnection?.id.uuidString
+    }
+
+    private var hasStripeCheckoutCredential: Bool {
+        appState.paymentCredentialStore.hasSecret(.stripeSecretKey, forProfileId: activePaymentProfileID)
+    }
+
+    private func canGenerateCheckout(_ id: String) -> Bool {
+        let product = (checkoutProducts[id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawAmount = (checkoutAmounts[id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return !generatingCheckoutIDs.contains(id)
+            && !product.isEmpty
+            && Double(rawAmount.replacingOccurrences(of: "$", with: "")) ?? 0 > 0
+            && hasStripeCheckoutCredential
+    }
+
+    private func generateCheckout(_ id: String) {
+        let product = (checkoutProducts[id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawAmount = (checkoutAmounts[id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let amount = Double(rawAmount.replacingOccurrences(of: "$", with: "")),
+              amount > 0,
+              !product.isEmpty
+        else { return }
+
+        let profileID = activePaymentProfileID
+        let credentialStore = appState.paymentCredentialStore
+        let client = StripeCheckoutSessionClient(
+            apiKeyProvider: {
+                credentialStore.loadSecret(.stripeSecretKey, forProfileId: profileID)
+            }
+        )
+        generatingCheckoutIDs.insert(id)
+        checkoutMessages[id] = nil
+        Task {
+            do {
+                let link = try await manager.generateStripeSandboxCheckoutLink(
+                    id: id,
+                    productName: product,
+                    amountUSD: amount,
+                    client: client
+                )
+                await MainActor.run {
+                    if let url = link.checkoutURL {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(url.absoluteString, forType: .string)
+                        checkoutMessages[id] = "Copied Stripe sandbox checkout link: \(url.absoluteString)"
+                    } else {
+                        checkoutMessages[id] = "Stripe created checkout \(link.id)."
+                    }
+                    checkoutAmounts[id] = ""
+                    checkoutProducts[id] = ""
+                    generatingCheckoutIDs.remove(id)
+                }
+            } catch {
+                await MainActor.run {
+                    checkoutMessages[id] = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    generatingCheckoutIDs.remove(id)
+                }
+            }
+        }
     }
 
     private func validationInput(_ id: String, _ key: String, fallback: String) -> Binding<String> {
