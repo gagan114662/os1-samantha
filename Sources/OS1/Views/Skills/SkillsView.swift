@@ -4,6 +4,7 @@ struct SkillsView: View {
     @EnvironmentObject private var appState: AppState
     @Binding var splitLayout: HermesSplitLayout
     @State private var searchText = ""
+    @State private var selectedTag: String?
     @State private var editorMode: SkillEditorMode?
     @State private var editorDraft = SkillDraft()
     @State private var rawMarkdownContent = ""
@@ -21,11 +22,7 @@ struct SkillsView: View {
                         }
                         .disabled(appState.isLoadingSkills || appState.isSavingSkillDraft)
 
-                        HermesExpandableSearchField(
-                            text: $searchText,
-                            prompt: L10n.string("Search skills"),
-                            expandedWidth: 220
-                        )
+                        skillsSearchField
                     }
                     .fixedSize(horizontal: true, vertical: false)
                 }
@@ -85,29 +82,33 @@ struct SkillsView: View {
                 title: panelTitle,
                 subtitle: "Select a skill to inspect its metadata, related assets and full SKILL.md content."
             ) {
-                if filteredSkills.isEmpty {
-                    ContentUnavailableView(
-                        L10n.string("No matching skills"),
-                        systemImage: "magnifyingglass",
-                        description: Text(L10n.string("Try searching by skill name or category."))
-                    )
-                    .frame(maxWidth: .infinity, minHeight: 300)
-                } else {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 10) {
-                            ForEach(filteredSkills) { skill in
-                                SkillCardRow(
-                                    skill: skill,
-                                    isSelected: skill.id == appState.selectedSkillID
-                                ) {
-                                    Task {
-                                        await appState.loadSkillDetail(summary: skill)
+                VStack(alignment: .leading, spacing: 14) {
+                    tagFilterChips
+
+                    if filteredSkills.isEmpty {
+                        ContentUnavailableView(
+                            L10n.string("No matching skills"),
+                            systemImage: "magnifyingglass",
+                            description: Text(L10n.string("Try searching by skill name or category."))
+                        )
+                        .frame(maxWidth: .infinity, minHeight: 300)
+                    } else {
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 10) {
+                                ForEach(filteredSkills) { skill in
+                                    SkillCardRow(
+                                        skill: skill,
+                                        isSelected: skill.id == appState.selectedSkillID
+                                    ) {
+                                        Task {
+                                            await appState.loadSkillDetail(summary: skill)
+                                        }
                                     }
                                 }
                             }
                         }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
             }
             .overlay(alignment: .topTrailing) {
@@ -130,11 +131,72 @@ struct SkillsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private var skillsSearchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.os1OnCoralMuted)
+                .frame(width: 14, height: 14)
+
+            TextField(L10n.string("Search skills"), text: $searchText)
+                .textFieldStyle(.plain)
+                .font(.os1Body)
+                .foregroundStyle(.os1OnCoralPrimary)
+                .submitLabel(.search)
+                .frame(width: 220, alignment: .leading)
+
+            Button {
+                if !searchText.isEmpty {
+                    searchText = ""
+                }
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.os1OnCoralMuted)
+                    .opacity(searchText.isEmpty ? 0 : 1)
+            }
+            .buttonStyle(.plain)
+            .disabled(searchText.isEmpty)
+            .accessibilityLabel(L10n.string("Close search"))
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 30, alignment: .leading)
+        .background(Color.os1GlassFill)
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color.os1GlassBorder, lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private var tagFilterChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                SkillTagFilterChip(
+                    title: L10n.string("All"),
+                    isSelected: selectedTag == nil
+                ) {
+                    selectedTag = nil
+                }
+
+                ForEach(availableTags, id: \.self) { tag in
+                    SkillTagFilterChip(
+                        title: tag,
+                        isSelected: SkillSummary.normalizedTag(selectedTag ?? "") == SkillSummary.normalizedTag(tag)
+                    ) {
+                        selectedTag = tag
+                    }
+                }
+            }
+            .padding(.bottom, 2)
+        }
+    }
+
     private var panelTitle: String {
         let total = appState.skills.count
         let filtered = filteredSkills.count
 
-        if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && selectedTag == nil {
             return L10n.string("Discovered Skills (%@)", "\(total)")
         }
 
@@ -142,7 +204,26 @@ struct SkillsView: View {
     }
 
     private var filteredSkills: [SkillSummary] {
-        appState.skills.filter { $0.matchesSearch(searchText) }
+        appState.skills.filter { skill in
+            skill.matchesSearch(searchText) && skill.matchesTag(selectedTag)
+        }
+    }
+
+    private var availableTags: [String] {
+        let tagsByNormalizedValue = Dictionary(
+            appState.skills.flatMap(\.tags).compactMap { tag -> (String, String)? in
+                let trimmed = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { return nil }
+                return (SkillSummary.normalizedTag(trimmed), trimmed)
+            },
+            uniquingKeysWith: { current, candidate in
+                current.localizedStandardCompare(candidate) == .orderedAscending ? current : candidate
+            }
+        )
+
+        return tagsByNormalizedValue.values.sorted {
+            $0.localizedStandardCompare($1) == .orderedAscending
+        }
     }
 
     private var selectedSkill: SkillSummary? {
@@ -219,6 +300,32 @@ struct SkillsView: View {
         case nil:
             break
         }
+    }
+}
+
+private struct SkillTagFilterChip: View {
+    let title: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.os1SmallCaps)
+                .lineLimit(1)
+                .foregroundStyle(isSelected ? .os1Coral : .os1OnCoralSecondary)
+                .padding(.horizontal, 10)
+                .frame(height: 28)
+                .background(
+                    Capsule()
+                        .fill(isSelected ? Color.os1OnCoralPrimary : Color.os1OnCoralSecondary.opacity(0.08))
+                )
+                .overlay {
+                    Capsule()
+                        .strokeBorder(Color.os1OnCoralPrimary.opacity(isSelected ? 0 : 0.10), lineWidth: 1)
+                }
+        }
+        .buttonStyle(.plain)
     }
 }
 

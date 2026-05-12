@@ -82,13 +82,28 @@ struct SkillSummary: Codable, Identifiable, Hashable, SkillCatalogItem {
         let haystacks = [
             resolvedName,
             resolvedCategory,
-            sourceLabel
-        ]
+            sourceLabel,
+            slug,
+            relativePath,
+            description ?? ""
+        ] + tags + relatedSkills
 
         return haystacks.contains { value in
             value.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
                 .localizedStandardContains(normalizedQuery)
         }
+    }
+
+    func matchesTag(_ selectedTag: String?) -> Bool {
+        guard let selectedTag else { return true }
+        let normalizedSelectedTag = Self.normalizedTag(selectedTag)
+        guard !normalizedSelectedTag.isEmpty else { return true }
+        return tags.contains { Self.normalizedTag($0) == normalizedSelectedTag }
+    }
+
+    static func normalizedTag(_ tag: String) -> String {
+        tag.trimmingCharacters(in: .whitespacesAndNewlines)
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
     }
 }
 
