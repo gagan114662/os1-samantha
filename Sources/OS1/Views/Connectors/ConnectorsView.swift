@@ -415,6 +415,11 @@ struct ConnectorsView: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
+                Text(toolkitConsentSummary(kit))
+                    .os1Style(theme.typography.smallCaps)
+                    .foregroundStyle(theme.palette.onCoralMuted)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
             }
 
             Spacer(minLength: 8)
@@ -434,6 +439,11 @@ struct ConnectorsView: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .strokeBorder(theme.palette.glassBorder, lineWidth: 1)
         }
+    }
+
+    private func toolkitConsentSummary(_ kit: ConnectorsViewModel.ToolkitDisplay) -> String {
+        let scopes = kit.requiredScopes.isEmpty ? "none declared" : kit.requiredScopes.joined(separator: ", ")
+        return "Tag: \(kit.tag.rawValue) · Risk: \(kit.riskTier.rawValue) · Scopes: \(scopes)"
     }
 
     @ViewBuilder

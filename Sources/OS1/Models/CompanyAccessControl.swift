@@ -335,9 +335,24 @@ struct CompanyAccessControl: Codable, Hashable {
         case payments
     }
 
+    struct ToolkitAccessDecision: Codable, Hashable {
+        enum Status: String, Codable, Hashable {
+            case denied
+            case approvalRequired = "approval_required"
+            case allowed
+        }
+
+        var status: Status
+        var reason: String
+        var riskTier: ComposioToolkitMeta.RiskTier
+
+        var requiresApproval: Bool { status == .approvalRequired }
+    }
+
     var companyID: String
     var mediaProviderAllowlist: Set<String>
     var seoProviderAllowlist: Set<String>
+    var composioToolkitAllowlist: Set<String> = []
     var embeddingProviderAllowlist: Set<String>
     var analyticsSourceAllowlist: Set<String> = []
     var paymentProviderAllowlist: Set<String> = []
@@ -376,6 +391,33 @@ struct CompanyAccessControl: Codable, Hashable {
             return entry.modality == modality
         }
         return true
+    }
+
+    func composioToolkitAccess(
+        for toolkit: ComposioToolkitMeta,
+        cleanHistoryDays: Int
+    ) -> ToolkitAccessDecision {
+        guard composioToolkitAllowlist.contains(toolkit.slug) else {
+            return ToolkitAccessDecision(
+                status: .denied,
+                reason: "toolkit not granted to company",
+                riskTier: toolkit.riskTier
+            )
+        }
+
+        if toolkit.requiresEarlyApproval(cleanHistoryDays: cleanHistoryDays) {
+            return ToolkitAccessDecision(
+                status: .approvalRequired,
+                reason: "social/community toolkit requires approval until 7 clean-history days",
+                riskTier: toolkit.riskTier
+            )
+        }
+
+        return ToolkitAccessDecision(
+            status: .allowed,
+            reason: "toolkit granted",
+            riskTier: toolkit.riskTier
+        )
     }
 
     static func grantCapabilities(_ capabilities: Set<Capability>, companyID: String) {
