@@ -71,6 +71,9 @@ struct CodexTasksView: View {
             set: { _ in selectedID = nil }
         )) { session in
             sessionDetail(session: session)
+                .onExitCommand {
+                    closeSessionDetail()
+                }
         }
         .confirmationDialog(
             L10n.string("Remove company?"),
@@ -1323,14 +1326,35 @@ struct CodexTasksView: View {
 
     // MARK: - Detail sheet
 
+    private func closeSessionDetail() {
+        selectedID = nil
+    }
+
     private func sessionDetail(session: CodexSession) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Circle().fill(statusColor(session.status)).frame(width: 10, height: 10)
                 Text(session.title).os1Style(theme.typography.titlePanel)
                 Spacer()
-                Button(L10n.string("Close")) { selectedID = nil }
+                Button {
+                    closeSessionDetail()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                }
                     .buttonStyle(.os1Icon)
+                    .keyboardShortcut(.cancelAction)
+                    .help(L10n.string("Close"))
+                    .accessibilityLabel(L10n.string("Close"))
+                Button {
+                    closeSessionDetail()
+                } label: {
+                    EmptyView()
+                }
+                .keyboardShortcut("w", modifiers: [.command])
+                .frame(width: 0, height: 0)
+                .opacity(0)
+                .accessibilityHidden(true)
             }
             HStack(spacing: 8) {
                 Label(L10n.string("Company controls"), systemImage: "slider.horizontal.3")
