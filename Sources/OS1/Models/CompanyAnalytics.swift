@@ -330,6 +330,7 @@ struct PaymentWebhookSeenEvent: Codable, Hashable, Identifiable, Sendable {
 struct PaymentWebhookSeenEventStore: Sendable {
     var url: URL
     var ttlSeconds: TimeInterval
+    private static let databaseQueue = DispatchQueue(label: "OS1.PaymentWebhookSeenEventStore.database")
 
     init(url: URL, ttlSeconds: TimeInterval = 72 * 3_600) {
         self.url = url
@@ -340,6 +341,16 @@ struct PaymentWebhookSeenEventStore: Sendable {
         eventID: String,
         provider: CompanyPaymentConversionEvent.Provider,
         now: Date = Date()
+    ) throws -> Bool {
+        try Self.databaseQueue.sync {
+            try recordIfNewUnlocked(eventID: eventID, provider: provider, now: now)
+        }
+    }
+
+    private func recordIfNewUnlocked(
+        eventID: String,
+        provider: CompanyPaymentConversionEvent.Provider,
+        now: Date
     ) throws -> Bool {
         let database = try openDatabase()
         defer { sqlite3_close(database) }
@@ -361,10 +372,12 @@ struct PaymentWebhookSeenEventStore: Sendable {
     }
 
     func activeEntries(now: Date = Date()) throws -> [PaymentWebhookSeenEvent] {
-        let database = try openDatabase()
-        defer { sqlite3_close(database) }
-        try pruneExpired(database: database, now: now)
-        return try queryActiveEntries(database: database, now: now)
+        try Self.databaseQueue.sync {
+            let database = try openDatabase()
+            defer { sqlite3_close(database) }
+            try pruneExpired(database: database, now: now)
+            return try queryActiveEntries(database: database, now: now)
+        }
     }
 
     func count(now: Date = Date()) throws -> Int {

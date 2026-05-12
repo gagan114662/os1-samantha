@@ -1131,3 +1131,32 @@
 // MARK: - Provider modalities
 "Each provider's API key is stored in macOS Keychain on this Mac, scoped per host. Installing pushes it onto that host's ~/.hermes/.env so Samantha can use the provider on the next heartbeat — no daemon restart needed." = "每个提供商的 API 密钥都会按主机范围存储在这台 Mac 的 Keychain 中。安装会把它写入该主机的 ~/.hermes/.env，让 Samantha 在下一次心跳中使用该提供商，无需重启守护进程。";
 "%@ · Quota: %@ · Cost-to-date: ledger tracked" = "%@ · 配额：%@ · 累计成本：ledger 跟踪";
+
+// MARK: - Company growth campaign channels
+"CompanyGrowthCampaign.Channel.seoPages" = "SEO 页面";
+"CompanyGrowthCampaign.Channel.contentPosts" = "内容帖子";
+"CompanyGrowthCampaign.Channel.marketplace" = "市场平台";
+"CompanyGrowthCampaign.Channel.directories" = "目录";
+"CompanyGrowthCampaign.Channel.partnerOutreach" = "合作伙伴外联";
+"CompanyGrowthCampaign.Channel.warmIntros" = "暖介绍";
+"CompanyGrowthCampaign.Channel.paidExperiment" = "付费实验";
+"CompanyGrowthCampaign.Channel.emailDrafts" = "邮件草稿";
+"CompanyGrowthCampaign.Channel.xPost" = "X 帖子";
+"CompanyGrowthCampaign.Channel.xThread" = "X 长帖";
+"CompanyGrowthCampaign.Channel.xReply" = "X 回复";
+"CompanyGrowthCampaign.Channel.youtubeUpload" = "YouTube 上传";
+"CompanyGrowthCampaign.Channel.youtubeShort" = "YouTube Short";
+"CompanyGrowthCampaign.Channel.youtubeCommunityPost" = "YouTube 社区帖子";
+"CompanyGrowthCampaign.Channel.instagramReel" = "Instagram Reel";
+"CompanyGrowthCampaign.Channel.instagramPost" = "Instagram 帖子";
+"CompanyGrowthCampaign.Channel.instagramStory" = "Instagram Story";
+"CompanyGrowthCampaign.Channel.instagramDM" = "Instagram 私信";
+"CompanyGrowthCampaign.Channel.tiktokVideo" = "TikTok 视频";
+"CompanyGrowthCampaign.Channel.tiktokComment" = "TikTok 评论";
+"CompanyGrowthCampaign.Channel.linkedinPost" = "LinkedIn 帖子";
+"CompanyGrowthCampaign.Channel.linkedinDM" = "LinkedIn 私信";
+"CompanyGrowthCampaign.Channel.linkedinNewsletter" = "LinkedIn Newsletter";
+"CompanyGrowthCampaign.Channel.pinterestPin" = "Pinterest Pin";
+"CompanyGrowthCampaign.Channel.redditPost" = "Reddit 帖子";
+"CompanyGrowthCampaign.Channel.redditComment" = "Reddit 评论";
+"CompanyGrowthCampaign.Channel.affiliateLink" = "联盟链接";

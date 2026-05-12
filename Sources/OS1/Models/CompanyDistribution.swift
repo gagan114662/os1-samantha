@@ -67,6 +67,16 @@ struct CompanyGrowthCampaign: Codable, Hashable, Identifiable {
     }
 }
 
+extension CompanyGrowthCampaign.Channel {
+    var displayTitle: String {
+        L10n.string(localizationKey)
+    }
+
+    var localizationKey: String {
+        "CompanyGrowthCampaign.Channel.\(rawValue)"
+    }
+}
+
 struct CompanyGrowthResult: Codable, Hashable {
     var companyID: String
     var campaignID: String

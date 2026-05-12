@@ -1131,3 +1131,32 @@
 // MARK: - Provider modalities
 "Each provider's API key is stored in macOS Keychain on this Mac, scoped per host. Installing pushes it onto that host's ~/.hermes/.env so Samantha can use the provider on the next heartbeat — no daemon restart needed." = "API-ключ каждого провайдера хранится в Keychain на этом Mac и привязан к хосту. Установка записывает его в ~/.hermes/.env на этом хосте, чтобы Samantha могла использовать провайдера на следующем heartbeat — перезапуск демона не нужен.";
 "%@ · Quota: %@ · Cost-to-date: ledger tracked" = "%@ · квота: %@ · затраты: в ledger";
+
+// MARK: - Company growth campaign channels
+"CompanyGrowthCampaign.Channel.seoPages" = "SEO-страницы";
+"CompanyGrowthCampaign.Channel.contentPosts" = "Контент-посты";
+"CompanyGrowthCampaign.Channel.marketplace" = "Маркетплейс";
+"CompanyGrowthCampaign.Channel.directories" = "Каталоги";
+"CompanyGrowthCampaign.Channel.partnerOutreach" = "Партнерский outreach";
+"CompanyGrowthCampaign.Channel.warmIntros" = "Теплые интро";
+"CompanyGrowthCampaign.Channel.paidExperiment" = "Платный эксперимент";
+"CompanyGrowthCampaign.Channel.emailDrafts" = "Черновики email";
+"CompanyGrowthCampaign.Channel.xPost" = "Пост в X";
+"CompanyGrowthCampaign.Channel.xThread" = "Тред в X";
+"CompanyGrowthCampaign.Channel.xReply" = "Ответ в X";
+"CompanyGrowthCampaign.Channel.youtubeUpload" = "Загрузка YouTube";
+"CompanyGrowthCampaign.Channel.youtubeShort" = "YouTube Short";
+"CompanyGrowthCampaign.Channel.youtubeCommunityPost" = "Пост сообщества YouTube";
+"CompanyGrowthCampaign.Channel.instagramReel" = "Instagram Reel";
+"CompanyGrowthCampaign.Channel.instagramPost" = "Пост Instagram";
+"CompanyGrowthCampaign.Channel.instagramStory" = "Instagram Story";
+"CompanyGrowthCampaign.Channel.instagramDM" = "DM Instagram";
+"CompanyGrowthCampaign.Channel.tiktokVideo" = "Видео TikTok";
+"CompanyGrowthCampaign.Channel.tiktokComment" = "Комментарий TikTok";
+"CompanyGrowthCampaign.Channel.linkedinPost" = "Пост LinkedIn";
+"CompanyGrowthCampaign.Channel.linkedinDM" = "DM LinkedIn";
+"CompanyGrowthCampaign.Channel.linkedinNewsletter" = "Рассылка LinkedIn";
+"CompanyGrowthCampaign.Channel.pinterestPin" = "Pinterest Pin";
+"CompanyGrowthCampaign.Channel.redditPost" = "Пост Reddit";
+"CompanyGrowthCampaign.Channel.redditComment" = "Комментарий Reddit";
+"CompanyGrowthCampaign.Channel.affiliateLink" = "Партнерская ссылка";

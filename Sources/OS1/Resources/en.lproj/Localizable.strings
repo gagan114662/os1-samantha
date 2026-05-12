@@ -1132,3 +1132,32 @@
 // MARK: - Provider modalities
 "Each provider's API key is stored in macOS Keychain on this Mac, scoped per host. Installing pushes it onto that host's ~/.hermes/.env so Samantha can use the provider on the next heartbeat — no daemon restart needed." = "Each provider's API key is stored in macOS Keychain on this Mac, scoped per host. Installing pushes it onto that host's ~/.hermes/.env so Samantha can use the provider on the next heartbeat — no daemon restart needed.";
 "%@ · Quota: %@ · Cost-to-date: ledger tracked" = "%@ · Quota: %@ · Cost-to-date: ledger tracked";
+
+// MARK: - Company growth campaign channels
+"CompanyGrowthCampaign.Channel.seoPages" = "SEO pages";
+"CompanyGrowthCampaign.Channel.contentPosts" = "Content posts";
+"CompanyGrowthCampaign.Channel.marketplace" = "Marketplace";
+"CompanyGrowthCampaign.Channel.directories" = "Directories";
+"CompanyGrowthCampaign.Channel.partnerOutreach" = "Partner outreach";
+"CompanyGrowthCampaign.Channel.warmIntros" = "Warm intros";
+"CompanyGrowthCampaign.Channel.paidExperiment" = "Paid experiment";
+"CompanyGrowthCampaign.Channel.emailDrafts" = "Email drafts";
+"CompanyGrowthCampaign.Channel.xPost" = "X post";
+"CompanyGrowthCampaign.Channel.xThread" = "X thread";
+"CompanyGrowthCampaign.Channel.xReply" = "X reply";
+"CompanyGrowthCampaign.Channel.youtubeUpload" = "YouTube upload";
+"CompanyGrowthCampaign.Channel.youtubeShort" = "YouTube Short";
+"CompanyGrowthCampaign.Channel.youtubeCommunityPost" = "YouTube community post";
+"CompanyGrowthCampaign.Channel.instagramReel" = "Instagram Reel";
+"CompanyGrowthCampaign.Channel.instagramPost" = "Instagram post";
+"CompanyGrowthCampaign.Channel.instagramStory" = "Instagram Story";
+"CompanyGrowthCampaign.Channel.instagramDM" = "Instagram DM";
+"CompanyGrowthCampaign.Channel.tiktokVideo" = "TikTok video";
+"CompanyGrowthCampaign.Channel.tiktokComment" = "TikTok comment";
+"CompanyGrowthCampaign.Channel.linkedinPost" = "LinkedIn post";
+"CompanyGrowthCampaign.Channel.linkedinDM" = "LinkedIn DM";
+"CompanyGrowthCampaign.Channel.linkedinNewsletter" = "LinkedIn newsletter";
+"CompanyGrowthCampaign.Channel.pinterestPin" = "Pinterest Pin";
+"CompanyGrowthCampaign.Channel.redditPost" = "Reddit post";
+"CompanyGrowthCampaign.Channel.redditComment" = "Reddit comment";
+"CompanyGrowthCampaign.Channel.affiliateLink" = "Affiliate link";
