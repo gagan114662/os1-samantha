@@ -46,6 +46,7 @@ final class DoctorViewModel: ObservableObject {
     }
 
     @Published private(set) var checks: [Check] = []
+    @Published private(set) var paymentsSnapshot: PaymentsHealthSnapshot = .empty
     @Published private(set) var isRefreshing = false
     @Published private(set) var actionInFlight: Action?
     @Published var actionError: String?
@@ -107,6 +108,7 @@ final class DoctorViewModel: ObservableObject {
         // being selected. These cover the moving parts that historically
         // failed silently (codex auth, claude CLI, WUPHF, launchd plists,
         // keychain credentials, voice-port freshness).
+        paymentsSnapshot = Self.paymentsHealthSnapshot()
         let localChecks = await makeLocalStackChecks()
 
         guard let connection = currentConnection else {
@@ -235,6 +237,17 @@ final class DoctorViewModel: ObservableObject {
             detail: runtime.detail,
             actions: []
         )
+    }
+
+    static func paymentsHealthSnapshot(replayStoreSize: Int = 0) -> PaymentsHealthSnapshot {
+        PaymentsHealthSnapshot(rows: [
+            .init(provider: "Stripe", endpoint: "/webhooks/stripe", lastEvent: "fixture-ready", reconciliation: "ledger-ready", replayStoreSize: replayStoreSize),
+            .init(provider: "Gumroad", endpoint: "/webhooks/gumroad", lastEvent: "fixture-ready", reconciliation: "ledger-ready", replayStoreSize: replayStoreSize),
+            .init(provider: "Etsy", endpoint: "sales.csv", lastEvent: "csv-ready", reconciliation: "ledger-ready", replayStoreSize: replayStoreSize),
+            .init(provider: "KDP", endpoint: "royalties.csv", lastEvent: "csv-ready", reconciliation: "ledger-ready", replayStoreSize: replayStoreSize),
+            .init(provider: "App Store", endpoint: "sales.csv", lastEvent: "csv-ready", reconciliation: "ledger-ready", replayStoreSize: replayStoreSize),
+            .init(provider: "Google Play", endpoint: "earnings.csv", lastEvent: "csv-ready", reconciliation: "ledger-ready", replayStoreSize: replayStoreSize)
+        ])
     }
 
     private func makeStateBackupCheck() async -> Check {

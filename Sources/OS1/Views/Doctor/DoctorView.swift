@@ -12,6 +12,9 @@ struct DoctorView: View {
                 if let err = viewModel.actionError {
                     errorBanner(err)
                 }
+                if !viewModel.paymentsSnapshot.rows.isEmpty {
+                    PaymentsHealthCard(snapshot: viewModel.paymentsSnapshot)
+                }
                 if viewModel.checks.isEmpty {
                     placeholder
                 } else {

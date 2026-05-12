@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import SQLite3
 
 struct CompanyMeasurement: Codable, Hashable, Identifiable {
     enum Source: String, Codable, CaseIterable, Hashable {
@@ -256,6 +257,12 @@ struct CompanyPaymentConversionEvent: Codable, Hashable, Identifiable {
     enum Provider: String, Codable, CaseIterable, Hashable {
         case stripe
         case paypal
+        case gumroad
+        case etsy
+        case amazonKDP
+        case bandcamp
+        case appStore
+        case googlePlay
     }
 
     enum Kind: String, Codable, CaseIterable, Hashable {
@@ -274,6 +281,7 @@ struct CompanyPaymentConversionEvent: Codable, Hashable, Identifiable {
     var utmContent: String?
     var providerReference: String
     var occurredAt: Date
+    var metadata: [String: String]? = nil
 }
 
 struct CompanyCheckoutLink: Codable, Hashable, Identifiable {
@@ -312,14 +320,14 @@ enum CompanyPaymentCheckout {
     }
 }
 
-struct PaymentWebhookSeenEvent: Codable, Hashable, Identifiable {
+struct PaymentWebhookSeenEvent: Codable, Hashable, Identifiable, Sendable {
     var id: String
     var provider: CompanyPaymentConversionEvent.Provider
     var seenAt: Date
     var expiresAt: Date
 }
 
-struct PaymentWebhookSeenEventStore {
+struct PaymentWebhookSeenEventStore: Sendable {
     var url: URL
     var ttlSeconds: TimeInterval
 
@@ -333,19 +341,15 @@ struct PaymentWebhookSeenEventStore {
         provider: CompanyPaymentConversionEvent.Provider,
         now: Date = Date()
     ) throws -> Bool {
-        var entries = try activeEntries(now: now)
-        guard !entries.contains(where: { $0.id == eventID && $0.provider == provider }) else {
-            try save(entries)
-            return false
-        }
-        entries.append(PaymentWebhookSeenEvent(
-            id: eventID,
-            provider: provider,
-            seenAt: now,
-            expiresAt: now.addingTimeInterval(ttlSeconds)
-        ))
-        try save(entries)
-        return true
+        let database = try openDatabase()
+        defer { sqlite3_close(database) }
+        try pruneExpired(database: database, now: now)
+        try execute(
+            database: database,
+            sql: "INSERT OR IGNORE INTO seen_events (provider, id, expires_at) VALUES (?, ?, ?)",
+            bindings: [.text(provider.rawValue), .text(eventID), .double(now.addingTimeInterval(ttlSeconds).timeIntervalSince1970)]
+        )
+        return sqlite3_changes(database) > 0
     }
 
     func contains(
@@ -357,24 +361,163 @@ struct PaymentWebhookSeenEventStore {
     }
 
     func activeEntries(now: Date = Date()) throws -> [PaymentWebhookSeenEvent] {
-        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let entries = try decoder.decode([PaymentWebhookSeenEvent].self, from: Data(contentsOf: url))
-        return entries.filter { $0.expiresAt > now }
+        let database = try openDatabase()
+        defer { sqlite3_close(database) }
+        try pruneExpired(database: database, now: now)
+        return try queryActiveEntries(database: database, now: now)
     }
 
-    private func save(_ entries: [PaymentWebhookSeenEvent]) throws {
+    func count(now: Date = Date()) throws -> Int {
+        try activeEntries(now: now).count
+    }
+
+    private func openDatabase() throws -> OpaquePointer? {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(entries).write(to: url, options: [.atomic])
+        let jsonEntries = try migrateableJSONEntries()
+        if jsonEntries != nil, FileManager.default.fileExists(atPath: url.path) {
+            try FileManager.default.removeItem(at: url)
+        }
+
+        var database: OpaquePointer?
+        guard sqlite3_open_v2(url.path, &database, SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK else {
+            let message = database.flatMap { sqlite3_errmsg($0) }.map { String(cString: $0) } ?? "unknown sqlite open error"
+            if let database { sqlite3_close(database) }
+            throw SQLitePaymentWebhookStoreError.open(message)
+        }
+        sqlite3_busy_timeout(database, 5_000)
+        do {
+            try execute(database: database, sql: "PRAGMA journal_mode=WAL")
+            try execute(database: database, sql: "PRAGMA synchronous=NORMAL")
+            try execute(
+                database: database,
+                sql: """
+                CREATE TABLE IF NOT EXISTS seen_events (
+                  id         TEXT NOT NULL,
+                  provider   TEXT NOT NULL,
+                  expires_at REAL NOT NULL,
+                  PRIMARY KEY (provider, id)
+                ) WITHOUT ROWID
+                """
+            )
+            try execute(database: database, sql: "CREATE INDEX IF NOT EXISTS idx_expires ON seen_events(expires_at)")
+            if let jsonEntries {
+                try insertMigrated(entries: jsonEntries, database: database)
+            }
+            return database
+        } catch {
+            sqlite3_close(database)
+            throw error
+        }
+    }
+
+    private func migrateableJSONEntries() throws -> [PaymentWebhookSeenEvent]? {
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let data = try Data(contentsOf: url)
+        guard let first = data.first(where: { !$0.isASCIIWhitespace }), first == UInt8(ascii: "[") else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode([PaymentWebhookSeenEvent].self, from: data)
+    }
+
+    private func insertMigrated(entries: [PaymentWebhookSeenEvent], database: OpaquePointer?) throws {
+        for entry in entries {
+            try execute(
+                database: database,
+                sql: "INSERT OR IGNORE INTO seen_events (provider, id, expires_at) VALUES (?, ?, ?)",
+                bindings: [.text(entry.provider.rawValue), .text(entry.id), .double(entry.expiresAt.timeIntervalSince1970)]
+            )
+        }
+    }
+
+    private func pruneExpired(database: OpaquePointer?, now: Date) throws {
+        try execute(
+            database: database,
+            sql: "DELETE FROM seen_events WHERE expires_at < ?",
+            bindings: [.double(now.timeIntervalSince1970)]
+        )
+    }
+
+    private func queryActiveEntries(database: OpaquePointer?, now: Date) throws -> [PaymentWebhookSeenEvent] {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            database,
+            "SELECT provider, id, expires_at FROM seen_events WHERE expires_at > ? ORDER BY provider, id",
+            -1,
+            &statement,
+            nil
+        ) == SQLITE_OK else {
+            throw SQLitePaymentWebhookStoreError.prepare(errorMessage(database))
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_double(statement, 1, now.timeIntervalSince1970)
+
+        var entries: [PaymentWebhookSeenEvent] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            let providerRaw = String(cString: sqlite3_column_text(statement, 0))
+            let id = String(cString: sqlite3_column_text(statement, 1))
+            let expiresAt = Date(timeIntervalSince1970: sqlite3_column_double(statement, 2))
+            guard let provider = CompanyPaymentConversionEvent.Provider(rawValue: providerRaw) else { continue }
+            entries.append(PaymentWebhookSeenEvent(
+                id: id,
+                provider: provider,
+                seenAt: expiresAt.addingTimeInterval(-ttlSeconds),
+                expiresAt: expiresAt
+            ))
+        }
+        return entries
+    }
+
+    private func execute(database: OpaquePointer?, sql: String, bindings: [SQLiteBinding] = []) throws {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw SQLitePaymentWebhookStoreError.prepare(errorMessage(database))
+        }
+        defer { sqlite3_finalize(statement) }
+        for (offset, binding) in bindings.enumerated() {
+            let index = Int32(offset + 1)
+            switch binding {
+            case .text(let value):
+                sqlite3_bind_text(statement, index, value, -1, sqliteTransient)
+            case .double(let value):
+                sqlite3_bind_double(statement, index, value)
+            }
+        }
+        let result = sqlite3_step(statement)
+        guard result == SQLITE_DONE || result == SQLITE_ROW else {
+            throw SQLitePaymentWebhookStoreError.execute(errorMessage(database))
+        }
+    }
+
+    private func errorMessage(_ database: OpaquePointer?) -> String {
+        database.flatMap { sqlite3_errmsg($0) }.map { String(cString: $0) } ?? "unknown sqlite error"
+    }
+}
+
+private enum SQLitePaymentWebhookStoreError: Error, Equatable {
+    case open(String)
+    case prepare(String)
+    case execute(String)
+}
+
+private enum SQLiteBinding {
+    case text(String)
+    case double(Double)
+}
+
+private let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
+private extension UInt8 {
+    var isASCIIWhitespace: Bool {
+        self == UInt8(ascii: " ") ||
+        self == UInt8(ascii: "\n") ||
+        self == UInt8(ascii: "\r") ||
+        self == UInt8(ascii: "\t")
     }
 }
 
 enum PaymentWebhookReceiver {
     enum Error: Swift.Error, Equatable {
+        case paymentsCapabilityNotGranted(String)
         case missingSignatureHeader
         case invalidSignatureHeader
         case timestampOutsideTolerance
@@ -420,11 +563,16 @@ enum PaymentWebhookReceiver {
             utmCampaign: fixture.metadata["utm_campaign"],
             utmContent: fixture.metadata["utm_content"],
             providerReference: fixture.payment_intent ?? fixture.id,
-            occurredAt: receivedAt
+            occurredAt: receivedAt,
+            metadata: fixture.metadata.merging([
+                "payment_intent": fixture.payment_intent ?? fixture.id,
+                "amount_total": "\(Int(amount))"
+            ]) { current, _ in current }
         )
     }
 
     static func verifiedStripe(
+        companyID: String,
         payload: Data,
         signatureHeader: String?,
         endpointSecret: String,
@@ -432,6 +580,7 @@ enum PaymentWebhookReceiver {
         now: Date = Date(),
         toleranceSeconds: TimeInterval = 300
     ) throws -> CompanyPaymentConversionEvent {
+        try requirePaymentsCapability(companyID: companyID)
         try verifyStripeSignature(
             payload: payload,
             signatureHeader: signatureHeader,
@@ -447,6 +596,7 @@ enum PaymentWebhookReceiver {
     }
 
     static func verifiedStripe(
+        companyID: String,
         payload: Data,
         signatureHeader: String?,
         endpointSecret: String,
@@ -454,6 +604,7 @@ enum PaymentWebhookReceiver {
         now: Date = Date(),
         toleranceSeconds: TimeInterval = 300
     ) throws -> CompanyPaymentConversionEvent {
+        try requirePaymentsCapability(companyID: companyID)
         try verifyStripeSignature(
             payload: payload,
             signatureHeader: signatureHeader,
@@ -462,6 +613,27 @@ enum PaymentWebhookReceiver {
             toleranceSeconds: toleranceSeconds
         )
         let event = try stripe(payload: payload, receivedAt: now)
+        guard try seenEventStore.recordIfNew(eventID: event.id, provider: event.provider, now: now) else {
+            throw Error.replayedEvent(event.id)
+        }
+        return event
+    }
+
+    static func verifiedGumroad(
+        companyID: String,
+        payload: Data,
+        signatureHeader: String?,
+        applicationSecret: String,
+        seenEventStore: PaymentWebhookSeenEventStore,
+        now: Date = Date()
+    ) throws -> CompanyPaymentConversionEvent {
+        try requirePaymentsCapability(companyID: companyID)
+        try verifyGumroadSignature(
+            payload: payload,
+            signatureHeader: signatureHeader,
+            applicationSecret: applicationSecret
+        )
+        let event = try gumroad(payload: payload, companyID: companyID, receivedAt: now)
         guard try seenEventStore.recordIfNew(eventID: event.id, provider: event.provider, now: now) else {
             throw Error.replayedEvent(event.id)
         }
@@ -493,6 +665,24 @@ enum PaymentWebhookReceiver {
         "t=\(timestamp),v1=\(stripeSignature(payload: payload, timestamp: timestamp, endpointSecret: endpointSecret))"
     }
 
+    static func verifyGumroadSignature(
+        payload: Data,
+        signatureHeader: String?,
+        applicationSecret: String
+    ) throws {
+        guard let signatureHeader, !signatureHeader.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw Error.missingSignatureHeader
+        }
+        let expected = hmacHex(payload: payload, secret: applicationSecret)
+        guard constantTimeEqualHex(signatureHeader.trimmingCharacters(in: .whitespacesAndNewlines), expected) else {
+            throw Error.signatureMismatch
+        }
+    }
+
+    static func gumroadSignatureHeader(payload: Data, applicationSecret: String) -> String {
+        hmacHex(payload: payload, secret: applicationSecret)
+    }
+
     static func ledgerEntry(for event: CompanyPaymentConversionEvent) -> CompanyLedgerEntry {
         let kind: CompanyLedgerEntry.Kind = event.kind == .refundCreated || event.kind == .chargebackOpened ? .refund : .revenue
         return CompanyLedgerEntry(
@@ -506,6 +696,42 @@ enum PaymentWebhookReceiver {
             sourceReference: event.providerReference,
             confidence: .verified,
             note: "payment_webhook=\(event.id) kind=\(event.kind.rawValue)"
+        )
+    }
+
+    private static func requirePaymentsCapability(companyID: String) throws {
+        guard CompanyAccessControl.canUse(companyID: companyID, capability: .payments) else {
+            throw Error.paymentsCapabilityNotGranted(companyID)
+        }
+    }
+
+    private static func gumroad(payload: Data, companyID: String, receivedAt: Date) throws -> CompanyPaymentConversionEvent {
+        struct GumroadJSON: Decodable {
+            let id: String?
+            let sale_id: String?
+            let price: Double?
+            let price_cents: Double?
+            let amount_cents: Double?
+            let currency: String?
+            let product_id: String?
+            let product_name: String?
+        }
+        let fixture = try JSONDecoder().decode(GumroadJSON.self, from: payload)
+        let id = fixture.id ?? fixture.sale_id ?? fixture.product_id ?? "gumroad-\(CompanyEvent.inputHash(for: String(data: payload, encoding: .utf8) ?? ""))"
+        let currency = (fixture.currency ?? "USD").uppercased()
+        let amount = fixture.price_cents.map { $0 / 100 } ?? fixture.amount_cents.map { $0 / 100 } ?? fixture.price ?? 0
+        return CompanyPaymentConversionEvent(
+            id: id,
+            companyID: companyID,
+            provider: .gumroad,
+            kind: .checkoutCompleted,
+            amountUSD: amount,
+            currency: currency,
+            utmCampaign: companyID,
+            utmContent: fixture.product_id ?? fixture.product_name,
+            providerReference: id,
+            occurredAt: receivedAt,
+            metadata: ["company_id": companyID, "payment_intent": id, "amount_total": "\(Int((amount * 100).rounded()))"]
         )
     }
 
@@ -532,8 +758,12 @@ enum PaymentWebhookReceiver {
     private static func stripeSignature(payload: Data, timestamp: Int, endpointSecret: String) -> String {
         var signedPayload = Data("\(timestamp).".utf8)
         signedPayload.append(payload)
-        let key = SymmetricKey(data: Data(endpointSecret.utf8))
-        let digest = HMAC<SHA256>.authenticationCode(for: signedPayload, using: key)
+        return hmacHex(payload: signedPayload, secret: endpointSecret)
+    }
+
+    private static func hmacHex(payload: Data, secret: String) -> String {
+        let key = SymmetricKey(data: Data(secret.utf8))
+        let digest = HMAC<SHA256>.authenticationCode(for: payload, using: key)
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 

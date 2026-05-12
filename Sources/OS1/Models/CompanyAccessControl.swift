@@ -331,6 +331,10 @@ enum CompanyPermissionGate {
 }
 
 struct CompanyAccessControl: Codable, Hashable {
+    enum Capability: String, Codable, CaseIterable, Hashable {
+        case payments
+    }
+
     var companyID: String
     var mediaProviderAllowlist: Set<String>
     var seoProviderAllowlist: Set<String>
@@ -372,5 +376,33 @@ struct CompanyAccessControl: Codable, Hashable {
             return entry.modality == modality
         }
         return true
+    }
+
+    static func grantCapabilities(_ capabilities: Set<Capability>, companyID: String) {
+        CompanyAccessControlCapabilityRegistry.shared.set(capabilities: capabilities, companyID: companyID)
+    }
+
+    static func canUse(companyID: String, capability: Capability) -> Bool {
+        CompanyAccessControlCapabilityRegistry.shared.canUse(companyID: companyID, capability: capability)
+    }
+}
+
+private final class CompanyAccessControlCapabilityRegistry: @unchecked Sendable {
+    static let shared = CompanyAccessControlCapabilityRegistry()
+
+    private let lock = NSLock()
+    private var grants: [String: Set<CompanyAccessControl.Capability>] = [:]
+
+    func set(capabilities: Set<CompanyAccessControl.Capability>, companyID: String) {
+        lock.lock()
+        grants[companyID] = capabilities
+        lock.unlock()
+    }
+
+    func canUse(companyID: String, capability: CompanyAccessControl.Capability) -> Bool {
+        lock.lock()
+        let allowed = grants[companyID]?.contains(capability) ?? false
+        lock.unlock()
+        return allowed
     }
 }

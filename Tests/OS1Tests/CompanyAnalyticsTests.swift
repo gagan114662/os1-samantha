@@ -102,7 +102,9 @@ struct CompanyAnalyticsTests {
 
     @Test
     func signedStripeWebhookVerifiesAndBlocksReplay() throws {
-        let payload = Data(#"{"id":"evt_signed","type":"checkout.session.completed","amount_total":2900,"currency":"usd","payment_intent":"pi_signed","metadata":{"company_id":"co","utm_campaign":"co","utm_content":"post-1"}}"#.utf8)
+        let companyID = "stripe-signed-\(UUID().uuidString)"
+        Self.grantPayments(companyID)
+        let payload = Data(#"{"id":"evt_signed","type":"checkout.session.completed","amount_total":2900,"currency":"usd","payment_intent":"pi_signed","metadata":{"company_id":"\#(companyID)","utm_campaign":"\#(companyID)","utm_content":"post-1"}}"#.utf8)
         let timestamp = 1_800_000_000
         let header = PaymentWebhookReceiver.stripeSignatureHeader(
             payload: payload,
@@ -111,6 +113,7 @@ struct CompanyAnalyticsTests {
         )
 
         let event = try PaymentWebhookReceiver.verifiedStripe(
+            companyID: companyID,
             payload: payload,
             signatureHeader: header,
             endpointSecret: "whsec_test",
@@ -124,6 +127,7 @@ struct CompanyAnalyticsTests {
         #expect(event.providerReference == "pi_signed")
         #expect(throws: PaymentWebhookReceiver.Error.replayedEvent("evt_signed")) {
             _ = try PaymentWebhookReceiver.verifiedStripe(
+                companyID: companyID,
                 payload: payload,
                 signatureHeader: header,
                 endpointSecret: "whsec_test",
@@ -137,9 +141,11 @@ struct CompanyAnalyticsTests {
     @Test
     func signedStripeWebhookReplayStorePersistsAcrossInstances() throws {
         let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("stripe-seen-events-\(UUID().uuidString).json")
+            .appendingPathComponent("stripe-seen-events-\(UUID().uuidString).sqlite")
         defer { try? FileManager.default.removeItem(at: url) }
-        let payload = Data(#"{"id":"evt_persisted","type":"checkout.session.completed","amount_total":2900,"currency":"usd","payment_intent":"pi_persisted","metadata":{"company_id":"co","utm_campaign":"co","utm_content":"post-1"}}"#.utf8)
+        let companyID = "stripe-store-\(UUID().uuidString)"
+        Self.grantPayments(companyID)
+        let payload = Data(#"{"id":"evt_persisted","type":"checkout.session.completed","amount_total":2900,"currency":"usd","payment_intent":"pi_persisted","metadata":{"company_id":"\#(companyID)","utm_campaign":"\#(companyID)","utm_content":"post-1"}}"#.utf8)
         let timestamp = 1_800_000_000
         let header = PaymentWebhookReceiver.stripeSignatureHeader(
             payload: payload,
@@ -150,6 +156,7 @@ struct CompanyAnalyticsTests {
         let secondStore = PaymentWebhookSeenEventStore(url: url, ttlSeconds: 86_400)
 
         let event = try PaymentWebhookReceiver.verifiedStripe(
+            companyID: companyID,
             payload: payload,
             signatureHeader: header,
             endpointSecret: "whsec_test",
@@ -162,6 +169,7 @@ struct CompanyAnalyticsTests {
         #expect(try secondStore.contains(eventID: "evt_persisted", provider: .stripe, now: Date(timeIntervalSince1970: TimeInterval(timestamp + 20))))
         #expect(throws: PaymentWebhookReceiver.Error.replayedEvent("evt_persisted")) {
             _ = try PaymentWebhookReceiver.verifiedStripe(
+                companyID: companyID,
                 payload: payload,
                 signatureHeader: header,
                 endpointSecret: "whsec_test",
@@ -175,7 +183,7 @@ struct CompanyAnalyticsTests {
     @Test
     func paymentWebhookReplayStoreExpiresOldEventsAndPrunesOnWrite() throws {
         let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("stripe-seen-events-\(UUID().uuidString).json")
+            .appendingPathComponent("stripe-seen-events-\(UUID().uuidString).sqlite")
         defer { try? FileManager.default.removeItem(at: url) }
         let store = PaymentWebhookSeenEventStore(url: url, ttlSeconds: 60)
         let first = Date(timeIntervalSince1970: 1_800_000_000)
@@ -187,6 +195,140 @@ struct CompanyAnalyticsTests {
 
         let active = try store.activeEntries(now: first.addingTimeInterval(61))
         #expect(active.map(\.id) == ["evt_new"])
+    }
+
+    @Test
+    func paymentWebhookReplayStoreToleratesConcurrentRecords() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("stripe-seen-events-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = PaymentWebhookSeenEventStore(url: url, ttlSeconds: 60)
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+        let results = try await withThrowingTaskGroup(of: Bool.self) { group in
+            for _ in 0..<8 {
+                group.addTask {
+                    try store.recordIfNew(eventID: "evt_concurrent", provider: .stripe, now: now)
+                }
+            }
+            var values: [Bool] = []
+            for try await value in group {
+                values.append(value)
+            }
+            return values
+        }
+
+        #expect(results.filter { $0 }.count == 1)
+        #expect(try store.activeEntries(now: now).count == 1)
+    }
+
+    @Test
+    func stripeWebhookBlocksCompanyWithoutPaymentsCapability() throws {
+        let blockedCompanyID = "blocked-payments-\(UUID().uuidString)"
+        let payload = Data(#"{"id":"evt_blocked","type":"checkout.session.completed","amount_total":2900,"currency":"usd","payment_intent":"pi_blocked","metadata":{"company_id":"\#(blockedCompanyID)","utm_campaign":"\#(blockedCompanyID)","utm_content":"post-1"}}"#.utf8)
+        let timestamp = 1_800_000_000
+        let header = PaymentWebhookReceiver.stripeSignatureHeader(
+            payload: payload,
+            timestamp: timestamp,
+            endpointSecret: "whsec_test"
+        )
+        let store = PaymentWebhookSeenEventStore(
+            url: FileManager.default.temporaryDirectory.appendingPathComponent("blocked-\(UUID().uuidString).sqlite")
+        )
+
+        #expect(throws: PaymentWebhookReceiver.Error.paymentsCapabilityNotGranted(blockedCompanyID)) {
+            _ = try PaymentWebhookReceiver.verifiedStripe(
+                companyID: blockedCompanyID,
+                payload: payload,
+                signatureHeader: header,
+                endpointSecret: "whsec_test",
+                seenEventIDs: [],
+                now: Date(timeIntervalSince1970: TimeInterval(timestamp + 10)),
+                toleranceSeconds: 300
+            )
+        }
+        #expect(throws: PaymentWebhookReceiver.Error.paymentsCapabilityNotGranted(blockedCompanyID)) {
+            _ = try PaymentWebhookReceiver.verifiedStripe(
+                companyID: blockedCompanyID,
+                payload: payload,
+                signatureHeader: header,
+                endpointSecret: "whsec_test",
+                seenEventStore: store,
+                now: Date(timeIntervalSince1970: TimeInterval(timestamp + 10)),
+                toleranceSeconds: 300
+            )
+        }
+    }
+
+    @Test
+    func gumroadWebhookVerifiesAndBlocksReplay() throws {
+        let companyID = "gumroad-\(UUID().uuidString)"
+        Self.grantPayments(companyID)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("gumroad-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = PaymentWebhookSeenEventStore(url: url)
+        let payload = Data(#"{"id":"sale_1","price_cents":4900,"currency":"usd","product_id":"course-1","product_name":"Course"}"#.utf8)
+        let signature = PaymentWebhookReceiver.gumroadSignatureHeader(payload: payload, applicationSecret: "gumroad_secret")
+
+        let event = try PaymentWebhookReceiver.verifiedGumroad(
+            companyID: companyID,
+            payload: payload,
+            signatureHeader: signature,
+            applicationSecret: "gumroad_secret",
+            seenEventStore: store,
+            now: Date(timeIntervalSince1970: 1_800_000_000)
+        )
+
+        #expect(event.provider == .gumroad)
+        #expect(event.amountUSD == 49)
+        #expect(event.providerReference == "sale_1")
+    }
+
+    @Test
+    func gumroadWebhookRejectsTamperedMissingAndReplayed() throws {
+        let companyID = "gumroad-reject-\(UUID().uuidString)"
+        Self.grantPayments(companyID)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("gumroad-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = PaymentWebhookSeenEventStore(url: url)
+        let payload = Data(#"{"id":"sale_replay","price_cents":4900,"currency":"usd","product_id":"course-1"}"#.utf8)
+        let tampered = Data(#"{"id":"sale_replay","price_cents":9900,"currency":"usd","product_id":"course-1"}"#.utf8)
+        let signature = PaymentWebhookReceiver.gumroadSignatureHeader(payload: payload, applicationSecret: "gumroad_secret")
+
+        #expect(throws: PaymentWebhookReceiver.Error.signatureMismatch) {
+            _ = try PaymentWebhookReceiver.verifiedGumroad(
+                companyID: companyID,
+                payload: tampered,
+                signatureHeader: signature,
+                applicationSecret: "gumroad_secret",
+                seenEventStore: store
+            )
+        }
+        #expect(throws: PaymentWebhookReceiver.Error.missingSignatureHeader) {
+            _ = try PaymentWebhookReceiver.verifiedGumroad(
+                companyID: companyID,
+                payload: payload,
+                signatureHeader: nil,
+                applicationSecret: "gumroad_secret",
+                seenEventStore: store
+            )
+        }
+        _ = try PaymentWebhookReceiver.verifiedGumroad(
+            companyID: companyID,
+            payload: payload,
+            signatureHeader: signature,
+            applicationSecret: "gumroad_secret",
+            seenEventStore: store
+        )
+        #expect(throws: PaymentWebhookReceiver.Error.replayedEvent("sale_replay")) {
+            _ = try PaymentWebhookReceiver.verifiedGumroad(
+                companyID: companyID,
+                payload: payload,
+                signatureHeader: signature,
+                applicationSecret: "gumroad_secret",
+                seenEventStore: store
+            )
+        }
     }
 
     @Test
@@ -293,5 +435,9 @@ struct CompanyAnalyticsTests {
             }
         }
         #expect(measurementBacked.count >= 5)
+    }
+
+    private static func grantPayments(_ companyID: String) {
+        CompanyAccessControl.grantCapabilities([.payments], companyID: companyID)
     }
 }

@@ -228,6 +228,7 @@ struct CompanyCodexProfile: Codable, Hashable, Identifiable {
         case portfolioLessonBus
         case marketplaceAdapters
         case paymentWebhooks
+        case sqlite
     }
 
     let id: String
