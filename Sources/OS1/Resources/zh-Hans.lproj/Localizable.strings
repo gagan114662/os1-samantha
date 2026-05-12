@@ -1127,3 +1127,7 @@
 "%lldh" = "%lld小时";
 "Fleet capacity: %lld workers × cap %lld = %lld concurrent" = "队列容量：%lld 个 worker × 上限 %lld = %lld 并发";
 "Companies flagged as drifting: %lld" = "标记为漂移的公司：%lld";
+
+// MARK: - Provider modalities
+"Each provider's API key is stored in macOS Keychain on this Mac, scoped per host. Installing pushes it onto that host's ~/.hermes/.env so Samantha can use the provider on the next heartbeat — no daemon restart needed." = "每个提供商的 API 密钥都会按主机范围存储在这台 Mac 的 Keychain 中。安装会把它写入该主机的 ~/.hermes/.env，让 Samantha 在下一次心跳中使用该提供商，无需重启守护进程。";
+"%@ · Quota: %@ · Cost-to-date: ledger tracked" = "%@ · 配额：%@ · 累计成本：ledger 跟踪";

@@ -183,6 +183,7 @@ final class DoctorViewModel: ObservableObject {
         async let dataGovernance = makeDataGovernanceCheck()
         async let stateBackups = makeStateBackupCheck()
         async let heartbeatSandbox = makeCodexHeartbeatSandboxCheck()
+        async let codexFeatures = makeCodexFeatureMatrixCheck()
         return await [
             codex,
             claude,
@@ -198,7 +199,41 @@ final class DoctorViewModel: ObservableObject {
             dataGovernance,
             stateBackups,
             heartbeatSandbox,
+            codexFeatures,
         ]
+    }
+
+    private func makeCodexFeatureMatrixCheck() async -> Check {
+        let profile = CompanyCodexProfile.productionDefault(companyID: "doctor")
+        let required: [CompanyCodexProfile.Feature] = [
+            .imagegen,
+            .web,
+            .vision,
+            .mcp,
+            .customToolRegistration,
+            .sandboxMode,
+            .approvalModes,
+            .resume,
+            .streaming,
+            .auditTimeline,
+            .argsHashing,
+            .latencyTracking,
+            .costTracking
+        ]
+        let missing = required.filter { !profile.supports($0) }
+        let enabled = required.map(\.rawValue).joined(separator: ", ")
+        return Check(
+            id: "codex-feature-matrix",
+            title: missing.isEmpty ? "Codex feature matrix: ON" : "Codex feature matrix: incomplete",
+            severity: missing.isEmpty ? .ok : .error,
+            summary: missing.isEmpty
+                ? "Production company profile enables required Codex runtime features"
+                : "Production company profile is missing \(missing.count) required Codex features",
+            detail: missing.isEmpty
+                ? "Enabled features: \(enabled)."
+                : "Missing features: \(missing.map(\.rawValue).joined(separator: ", ")).",
+            actions: []
+        )
     }
 
     private func makeCodexHeartbeatSandboxCheck() async -> Check {

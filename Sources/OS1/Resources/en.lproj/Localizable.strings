@@ -1128,3 +1128,7 @@
 "%lldh" = "%lldh";
 "Fleet capacity: %lld workers × cap %lld = %lld concurrent" = "Fleet capacity: %lld workers × cap %lld = %lld concurrent";
 "Companies flagged as drifting: %lld" = "Companies flagged as drifting: %lld";
+
+// MARK: - Provider modalities
+"Each provider's API key is stored in macOS Keychain on this Mac, scoped per host. Installing pushes it onto that host's ~/.hermes/.env so Samantha can use the provider on the next heartbeat — no daemon restart needed." = "Each provider's API key is stored in macOS Keychain on this Mac, scoped per host. Installing pushes it onto that host's ~/.hermes/.env so Samantha can use the provider on the next heartbeat — no daemon restart needed.";
+"%@ · Quota: %@ · Cost-to-date: ledger tracked" = "%@ · Quota: %@ · Cost-to-date: ledger tracked";

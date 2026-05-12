@@ -42,6 +42,19 @@ struct ProviderCatalogEntry: Identifiable, Equatable, Sendable {
         case music
         case avatar
         case render
+
+        var displayName: String {
+            switch self {
+            case .text: return "Text"
+            case .image: return "Image"
+            case .video: return "Video"
+            case .tts: return "Text to speech"
+            case .voiceClone: return "Voice clone"
+            case .music: return "Music"
+            case .avatar: return "Avatar"
+            case .render: return "Render"
+            }
+        }
     }
 
     struct Quota: Equatable, Sendable {
@@ -260,7 +273,7 @@ enum ProviderCatalog {
             symbolName: "timeline.selection",
             keyPrefixHint: "…",
             dashboardURL: URL(string: "https://json2video.com/dashboard")!,
-            docsURL: URL(string: "https://json2video.com/docs")!,
+            docsURL: URL(string: "https://json2video.com/docs/api/")!,
             envVar: "JSON2VIDEO_API_KEY",
             baseURL: URL(string: "https://api.json2video.com/v2")!,
             kind: .mediaProvider(modality: .render, freeTierQuota: nil),

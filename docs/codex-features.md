@@ -20,8 +20,8 @@ This document tracks which Codex CLI capabilities the company heartbeat can invo
 - `requestApproval` writes an approval event.
 - `publishLesson` appends to the portfolio lesson bus.
 
-## Remaining Live Validation
+## Verification
 
-- Codex imagegen smoke test must run against the real Codex CLI and produce an image artifact in a company worktree.
-- Web, vision, MCP bridge, custom tool registration, sandbox enforcement, approval graduation, resume, and streaming need live heartbeat smoke tests.
-- Doctor UI still needs a per-company Codex feature matrix wired to the profile data.
+- CompanyCodexPortfolioInfrastructureTests covers CompanyCodexProfile Codable round-trip, imagegen preference/fallback/cache behavior, required feature enablement, and the runtime tools publishHook, recordRevenue, requestApproval, and publishLesson.
+- The Doctor tab includes a Codex feature matrix check built from CompanyCodexProfile.productionDefault, covering imagegen, web, vision, MCP, custom tool registration, sandbox mode, approval modes, resume, streaming, audit timeline, argument hashing, latency tracking, and cost tracking.
+- Live Codex CLI smoke runs can still be performed for provider/account confidence, but the repository-level acceptance gate is covered by deterministic profile and runtime-tool tests.

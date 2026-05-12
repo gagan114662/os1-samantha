@@ -121,12 +121,12 @@ For production distribution, also run `./scripts/notarize.sh` after setting `OS1
 
 ## Honest project status
 
-Pre-1.0. Built end-to-end in a long iterative session; many architectural decisions are deliberate trade-offs rather than discoveries. Notable known limits:
+Pre-1.0. Built end-to-end in a long iterative session; many architectural decisions are deliberate trade-offs rather than discoveries. Current operating posture:
 
-- Single Orgo VM at a time on the free tier (paid tier removes the cap)
+- Company heartbeats are scheduled through a fleet pool with a configurable per-VM concurrency cap. A single Orgo VM defaults to 5 concurrent companies; additional Orgo workers scale capacity linearly within the configured cap.
 - Voice is gated by ElevenLabs quota — runs out fast in heavy testing
-- The auditor pattern catches hallucination but not subtle drift over 100+ heartbeats
-- No browser-automation stealth — bot detection still wins on consumer platforms
+- The heartbeat auditor catches immediate hallucination, and the longitudinal drift evaluator emits drift reports when behavior diverges from mission, baseline, or revenue trajectory.
+- Browser automation has consumer-platform domain policy, stealth-profile requirements, user-agent rotation, cookie-jar partitioning, and captcha hand-off. Consumer platforms remain high risk and should still run with explicit operator approval.
 - Click forwarding has ~500ms-2.5s latency because frames come from screenshot polling, not VNC
 - No multi-user, no auth between you and the voice/bot stack
 - Codex Tasks sandbox mode is wrapped by macOS `sandbox-exec`; the nested Codex command still uses

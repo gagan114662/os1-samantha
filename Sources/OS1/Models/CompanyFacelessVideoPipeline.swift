@@ -58,16 +58,19 @@ enum FacelessVideoPipeline {
     static func attachRenderAssets(
         to job: CompanyFacelessVideoJob,
         voiceProvider: String,
+        videoProvider: String = "fal-ai",
         renderProvider: String,
         accessControl: CompanyAccessControl
     ) -> CompanyFacelessVideoJob {
         var copy = job
         guard accessControl.mediaProviderAllowlist.contains(voiceProvider),
+              accessControl.mediaProviderAllowlist.contains(videoProvider),
               accessControl.mediaProviderAllowlist.contains(renderProvider) else {
             copy.state = .blocked
             return copy
         }
         copy.assets.append(.init(id: "voiceover", companyID: job.companyID, kind: .voiceover, path: "video/voiceover.wav", provider: voiceProvider, approved: true))
+        copy.assets.append(.init(id: "broll", companyID: job.companyID, kind: .broll, path: "video/broll.mp4", provider: videoProvider, approved: true))
         copy.assets.append(.init(id: "render", companyID: job.companyID, kind: .render, path: "video/final.mp4", provider: renderProvider, approved: false))
         copy.state = .assetsReady
         return copy

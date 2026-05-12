@@ -188,7 +188,7 @@ The bundle lands at `dist/OS1.app`.
 swift test
 ```
 
-At the time this README was updated, the local suite passed with 174
+At the time this README was updated, the local suite passed with 422
 tests, including focused coverage for company sandbox isolation,
 credential redaction, Doctor production checks, event metrics, heartbeat
 locks, stale-lock recovery, restart recovery, validation policy,
