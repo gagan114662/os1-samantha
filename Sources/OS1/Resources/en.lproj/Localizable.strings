@@ -287,10 +287,12 @@
 "Browse the active host." = "Browse the active host.";
 "Canonical" = "Canonical";
 "Choose a file from the library." = "Choose a file from the library.";
+"Choose a different file from the library, or reload after creating it on the active host." = "Choose a different file from the library, or reload after creating it on the active host.";
 "Content" = "Content";
 "Done" = "Done";
 "Enter a remote path to browse files over SSH." = "Enter a remote path to browse files over SSH.";
 "Folder" = "Folder";
+"File unavailable" = "File unavailable";
 "Go" = "Go";
 "Hermes Home" = "Hermes Home";
 "Home" = "Home";
@@ -310,6 +312,7 @@
 "Reading over SSH." = "Reading over SSH.";
 "Reload the file before saving." = "Reload the file before saving.";
 "Remove Bookmark" = "Remove Bookmark";
+"Resolve the error above before editing this file." = "Resolve the error above before editing this file.";
 "Remove this bookmark?" = "Remove this bookmark?";
 "Showing %@ of %@ items" = "Showing %@ of %@ items";
 "The remote file stays untouched." = "The remote file stays untouched.";
@@ -1002,8 +1005,12 @@
 "Toggle Voice Mode" = "Toggle Voice Mode";
 "Voice" = "Voice";
 "Voice mode is off." = "Voice mode is off.";
+"Voice mode is off. Click to open the Voice panel and turn it back on." = "Voice mode is off. Click to open the Voice panel and turn it back on.";
 "Voice status is not available yet." = "Voice status is not available yet.";
 "Voice status: %@" = "Voice status: %@";
+"Turn it back on here, or configure provider credentials if startup reports an error." = "Turn it back on here, or configure provider credentials if startup reports an error.";
+"Enable Voice" = "Enable Voice";
+"Off" = "Off";
 "Configure in Providers" = "Configure in Providers";
 
 // MARK: - Pass 2 additions: Tasks / Tiles / Doctor (auto-appended)
