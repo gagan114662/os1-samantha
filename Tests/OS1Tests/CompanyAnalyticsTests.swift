@@ -135,6 +135,61 @@ struct CompanyAnalyticsTests {
     }
 
     @Test
+    func signedStripeWebhookReplayStorePersistsAcrossInstances() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("stripe-seen-events-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let payload = Data(#"{"id":"evt_persisted","type":"checkout.session.completed","amount_total":2900,"currency":"usd","payment_intent":"pi_persisted","metadata":{"company_id":"co","utm_campaign":"co","utm_content":"post-1"}}"#.utf8)
+        let timestamp = 1_800_000_000
+        let header = PaymentWebhookReceiver.stripeSignatureHeader(
+            payload: payload,
+            timestamp: timestamp,
+            endpointSecret: "whsec_test"
+        )
+        let firstStore = PaymentWebhookSeenEventStore(url: url, ttlSeconds: 86_400)
+        let secondStore = PaymentWebhookSeenEventStore(url: url, ttlSeconds: 86_400)
+
+        let event = try PaymentWebhookReceiver.verifiedStripe(
+            payload: payload,
+            signatureHeader: header,
+            endpointSecret: "whsec_test",
+            seenEventStore: firstStore,
+            now: Date(timeIntervalSince1970: TimeInterval(timestamp + 10)),
+            toleranceSeconds: 300
+        )
+
+        #expect(event.id == "evt_persisted")
+        #expect(try secondStore.contains(eventID: "evt_persisted", provider: .stripe, now: Date(timeIntervalSince1970: TimeInterval(timestamp + 20))))
+        #expect(throws: PaymentWebhookReceiver.Error.replayedEvent("evt_persisted")) {
+            _ = try PaymentWebhookReceiver.verifiedStripe(
+                payload: payload,
+                signatureHeader: header,
+                endpointSecret: "whsec_test",
+                seenEventStore: secondStore,
+                now: Date(timeIntervalSince1970: TimeInterval(timestamp + 20)),
+                toleranceSeconds: 300
+            )
+        }
+    }
+
+    @Test
+    func paymentWebhookReplayStoreExpiresOldEventsAndPrunesOnWrite() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("stripe-seen-events-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = PaymentWebhookSeenEventStore(url: url, ttlSeconds: 60)
+        let first = Date(timeIntervalSince1970: 1_800_000_000)
+
+        #expect(try store.recordIfNew(eventID: "evt_old", provider: .stripe, now: first))
+        #expect(try !store.recordIfNew(eventID: "evt_old", provider: .stripe, now: first.addingTimeInterval(10)))
+        #expect(try !store.contains(eventID: "evt_old", provider: .stripe, now: first.addingTimeInterval(61)))
+        #expect(try store.recordIfNew(eventID: "evt_new", provider: .stripe, now: first.addingTimeInterval(61)))
+
+        let active = try store.activeEntries(now: first.addingTimeInterval(61))
+        #expect(active.map(\.id) == ["evt_new"])
+    }
+
+    @Test
     func stripeWebhookRejectsTamperedStaleMissingAndMalformedSignatures() throws {
         let payload = Data(#"{"id":"evt_signed","type":"checkout.session.completed","amount_total":2900,"currency":"usd","payment_intent":"pi_signed","metadata":{"company_id":"co","utm_campaign":"co","utm_content":"post-1"}}"#.utf8)
         let tamperedPayload = Data(#"{"id":"evt_signed","type":"checkout.session.completed","amount_total":9900,"currency":"usd","payment_intent":"pi_signed","metadata":{"company_id":"co","utm_campaign":"co","utm_content":"post-1"}}"#.utf8)

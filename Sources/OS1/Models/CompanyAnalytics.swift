@@ -312,6 +312,67 @@ enum CompanyPaymentCheckout {
     }
 }
 
+struct PaymentWebhookSeenEvent: Codable, Hashable, Identifiable {
+    var id: String
+    var provider: CompanyPaymentConversionEvent.Provider
+    var seenAt: Date
+    var expiresAt: Date
+}
+
+struct PaymentWebhookSeenEventStore {
+    var url: URL
+    var ttlSeconds: TimeInterval
+
+    init(url: URL, ttlSeconds: TimeInterval = 72 * 3_600) {
+        self.url = url
+        self.ttlSeconds = ttlSeconds
+    }
+
+    func recordIfNew(
+        eventID: String,
+        provider: CompanyPaymentConversionEvent.Provider,
+        now: Date = Date()
+    ) throws -> Bool {
+        var entries = try activeEntries(now: now)
+        guard !entries.contains(where: { $0.id == eventID && $0.provider == provider }) else {
+            try save(entries)
+            return false
+        }
+        entries.append(PaymentWebhookSeenEvent(
+            id: eventID,
+            provider: provider,
+            seenAt: now,
+            expiresAt: now.addingTimeInterval(ttlSeconds)
+        ))
+        try save(entries)
+        return true
+    }
+
+    func contains(
+        eventID: String,
+        provider: CompanyPaymentConversionEvent.Provider,
+        now: Date = Date()
+    ) throws -> Bool {
+        try activeEntries(now: now).contains { $0.id == eventID && $0.provider == provider }
+    }
+
+    func activeEntries(now: Date = Date()) throws -> [PaymentWebhookSeenEvent] {
+        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let entries = try decoder.decode([PaymentWebhookSeenEvent].self, from: Data(contentsOf: url))
+        return entries.filter { $0.expiresAt > now }
+    }
+
+    private func save(_ entries: [PaymentWebhookSeenEvent]) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(entries).write(to: url, options: [.atomic])
+    }
+}
+
 enum PaymentWebhookReceiver {
     enum Error: Swift.Error, Equatable {
         case missingSignatureHeader
@@ -380,6 +441,28 @@ enum PaymentWebhookReceiver {
         )
         let event = try stripe(payload: payload, receivedAt: now)
         guard !seenEventIDs.contains(event.id) else {
+            throw Error.replayedEvent(event.id)
+        }
+        return event
+    }
+
+    static func verifiedStripe(
+        payload: Data,
+        signatureHeader: String?,
+        endpointSecret: String,
+        seenEventStore: PaymentWebhookSeenEventStore,
+        now: Date = Date(),
+        toleranceSeconds: TimeInterval = 300
+    ) throws -> CompanyPaymentConversionEvent {
+        try verifyStripeSignature(
+            payload: payload,
+            signatureHeader: signatureHeader,
+            endpointSecret: endpointSecret,
+            now: now,
+            toleranceSeconds: toleranceSeconds
+        )
+        let event = try stripe(payload: payload, receivedAt: now)
+        guard try seenEventStore.recordIfNew(eventID: event.id, provider: event.provider, now: now) else {
             throw Error.replayedEvent(event.id)
         }
         return event
