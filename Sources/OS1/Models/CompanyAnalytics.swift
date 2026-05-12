@@ -290,6 +290,7 @@ struct CompanyCheckoutLink: Codable, Hashable, Identifiable {
     var provider: CompanyPaymentConversionEvent.Provider
     var productName: String
     var amountUSD: Double
+    var checkoutURL: URL?
     var successURL: URL
     var metadata: [String: String]
 }
@@ -301,17 +302,22 @@ enum CompanyPaymentCheckout {
         productName: String,
         amountUSD: Double,
         postID: String,
-        accessControl: CompanyAccessControl
+        accessControl: CompanyAccessControl,
+        checkoutID: String? = nil,
+        checkoutURL: URL? = nil
     ) -> CompanyCheckoutLink? {
         guard accessControl.paymentProviderAllowlist.contains(provider.rawValue) else { return nil }
+        let id = checkoutID ?? "\(companyID)-\(provider.rawValue)-\(postID)"
         return CompanyCheckoutLink(
-            id: "\(companyID)-\(provider.rawValue)-\(postID)",
+            id: id,
             companyID: companyID,
             provider: provider,
             productName: productName,
             amountUSD: amountUSD,
+            checkoutURL: checkoutURL,
             successURL: URL(string: "https://example.com/success?utm_campaign=\(companyID)&utm_content=\(postID)")!,
             metadata: [
+                "company_id": companyID,
                 "utm_campaign": companyID,
                 "utm_content": postID,
                 "mode": "test"
@@ -536,6 +542,7 @@ enum PaymentWebhookReceiver {
         case timestampOutsideTolerance
         case signatureMismatch
         case replayedEvent(String)
+        case companyIDMismatch(expected: String, actual: String)
     }
 
     struct StripeSignature: Equatable {
@@ -602,6 +609,9 @@ enum PaymentWebhookReceiver {
             toleranceSeconds: toleranceSeconds
         )
         let event = try stripe(payload: payload, receivedAt: now)
+        guard event.companyID == companyID else {
+            throw Error.companyIDMismatch(expected: companyID, actual: event.companyID)
+        }
         guard !seenEventIDs.contains(event.id) else {
             throw Error.replayedEvent(event.id)
         }
@@ -626,6 +636,9 @@ enum PaymentWebhookReceiver {
             toleranceSeconds: toleranceSeconds
         )
         let event = try stripe(payload: payload, receivedAt: now)
+        guard event.companyID == companyID else {
+            throw Error.companyIDMismatch(expected: companyID, actual: event.companyID)
+        }
         guard try seenEventStore.recordIfNew(eventID: event.id, provider: event.provider, now: now) else {
             throw Error.replayedEvent(event.id)
         }

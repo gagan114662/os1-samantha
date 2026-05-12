@@ -156,6 +156,7 @@ struct CodexSession: Identifiable, Codable, Hashable {
         case paused        // user paused the heartbeat loop
         case completed     // mission marked done by user
         case failed        // last heartbeat returned non-zero too many times
+        case failedCodexStartup = "failed-codex-startup" // Codex CLI could not initialize under the launch profile
         case killed        // user terminated
     }
 
@@ -168,6 +169,7 @@ struct CodexSession: Identifiable, Codable, Hashable {
         case .paused:    "gray"
         case .completed: "green"
         case .failed:    "red"
+        case .failedCodexStartup: "red"
         case .killed:    "gray"
         }
     }
@@ -184,6 +186,8 @@ struct CodexSession: Identifiable, Codable, Hashable {
     var approvalDecisionPath: String { worktreePath + "/APPROVAL_DECISION.json" }
     var approvalGrantPath: String { worktreePath + "/APPROVAL_GRANTED.json" }
     var compliancePolicyPath: String { worktreePath + "/COMPLIANCE_POLICY.json" }
+    var complianceMetadataPath: String { worktreePath + "/COMPLIANCE_METADATA.json" }
+    var validationEvidencePath: String { worktreePath + "/validation-evidence.jsonl" }
 }
 
 extension CodexSession {
@@ -363,6 +367,42 @@ final class CodexSessionManager: ObservableObject {
         loadPersistedSessions()
     }
 
+    #if DEBUG
+    init(testRoot: URL) {
+        self.baseDir = testRoot.appendingPathComponent("base", isDirectory: true)
+        self.sessionsDir = testRoot.appendingPathComponent("sessions", isDirectory: true)
+        self.logDir = testRoot.appendingPathComponent("logs", isDirectory: true)
+        self.lessonsDir = testRoot.appendingPathComponent("lessons", isDirectory: true)
+        self.sandboxDir = testRoot.appendingPathComponent("sandboxes", isDirectory: true)
+        self.heartbeatLockDir = testRoot.appendingPathComponent("heartbeat-locks", isDirectory: true)
+        try? FileManager.default.createDirectory(at: baseDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: sessionsDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: lessonsDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: sandboxDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: heartbeatLockDir, withIntermediateDirectories: true)
+        let portfolioLessons = lessonsDir.appendingPathComponent("portfolio.md").path
+        if !FileManager.default.fileExists(atPath: portfolioLessons) {
+            let seed = """
+            # Portfolio Lessons
+            # Test-only portfolio lessons file.
+
+            """
+            try? seed.write(toFile: portfolioLessons, atomically: true, encoding: .utf8)
+        }
+        loadPersistedSessions()
+    }
+
+    func replaceSessionsForTesting(_ sessions: [CodexSession]) {
+        self.sessions = sessions
+        persistSessions()
+    }
+
+    func flushLogsForTesting() {
+        logQueue.sync {}
+    }
+    #endif
+
     // MARK: - Create company
 
     @discardableResult
@@ -417,10 +457,12 @@ final class CodexSessionManager: ObservableObject {
         try "# Revenue\n\n- \(Self.todayString()) $0 baseline (no revenue API connected yet)\n"
             .write(toFile: worktreePath + "/REVENUE.md", atomically: true, encoding: .utf8)
         try "[]\n".write(toFile: worktreePath + "/LEDGER.json", atomically: true, encoding: .utf8)
+        let factoryTemplate = templateID.flatMap(CompanyTemplateCatalog.template(id:))
         let factoryManifest = CompanyFactory.manifest(
             companyID: id,
-            template: templateID.flatMap(CompanyTemplateCatalog.template(id:)),
-            worktreePath: worktreePath
+            template: factoryTemplate,
+            worktreePath: worktreePath,
+            offer: factoryTemplate == nil ? mission : nil
         )
         let manifestEncoder = JSONEncoder()
         manifestEncoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -1128,10 +1170,7 @@ final class CodexSessionManager: ObservableObject {
                 "sourceReference": sourceReference ?? ""
             ]
         )
-        var entries = CompanyLedgerParser.decodeJSONEntries(
-            (try? String(contentsOfFile: session.ledgerPath, encoding: .utf8)) ?? ""
-        )
-        entries.append(
+        try appendLedgerEntry(
             CompanyLedgerEntry(
                 id: "manual-\(event.id.uuidString)",
                 companyID: id,
@@ -1144,13 +1183,218 @@ final class CodexSessionManager: ObservableObject {
                 sourceReference: sourceReference,
                 confidence: confidence,
                 note: normalizedNote
-            )
+            ),
+            to: session
         )
+    }
+
+    @discardableResult
+    func recordStripeWebhook(
+        companyID: String,
+        payload: Data,
+        signatureHeader: String?,
+        endpointSecret: String? = nil,
+        credentialProfileId: String? = nil,
+        seenEventStore: PaymentWebhookSeenEventStore? = nil,
+        now: Date = Date()
+    ) throws -> CompanyLedgerEntry {
+        guard let session = sessions.first(where: { $0.id == companyID }) else {
+            throw PaymentWebhookReceiver.Error.paymentsCapabilityNotGranted(companyID)
+        }
+        let secret = endpointSecret
+            ?? PaymentCredentialStore.shared.loadSecret(.stripeWebhookSecret, forProfileId: credentialProfileId)
+            ?? ""
+        let event = try PaymentWebhookReceiver.verifiedStripe(
+            companyID: companyID,
+            payload: payload,
+            signatureHeader: signatureHeader,
+            endpointSecret: secret,
+            seenEventStore: seenEventStore ?? paymentWebhookSeenEventStore(),
+            now: now
+        )
+        return try appendVerifiedPaymentLedgerEntry(
+            PaymentWebhookReceiver.ledgerEntry(for: event),
+            to: session,
+            provider: "stripe",
+            eventID: event.id
+        )
+    }
+
+    @discardableResult
+    func recordGumroadWebhook(
+        companyID: String,
+        payload: Data,
+        signatureHeader: String?,
+        applicationSecret: String? = nil,
+        credentialProfileId: String? = nil,
+        seenEventStore: PaymentWebhookSeenEventStore? = nil,
+        now: Date = Date()
+    ) throws -> CompanyLedgerEntry {
+        guard let session = sessions.first(where: { $0.id == companyID }) else {
+            throw PaymentWebhookReceiver.Error.paymentsCapabilityNotGranted(companyID)
+        }
+        let secret = applicationSecret
+            ?? PaymentCredentialStore.shared.loadSecret(.gumroadApplicationSecret, forProfileId: credentialProfileId)
+            ?? ""
+        let event = try PaymentWebhookReceiver.verifiedGumroad(
+            companyID: companyID,
+            payload: payload,
+            signatureHeader: signatureHeader,
+            applicationSecret: secret,
+            seenEventStore: seenEventStore ?? paymentWebhookSeenEventStore(),
+            now: now
+        )
+        return try appendVerifiedPaymentLedgerEntry(
+            PaymentWebhookReceiver.ledgerEntry(for: event),
+            to: session,
+            provider: "gumroad",
+            eventID: event.id
+        )
+    }
+
+    @discardableResult
+    func generateStripeSandboxCheckoutLink(
+        id: String,
+        productName: String,
+        amountUSD: Double,
+        postID: String = "sandbox-checkout",
+        client: StripeCheckoutSessionClient = StripeCheckoutSessionClient()
+    ) async throws -> CompanyCheckoutLink {
+        guard sessions.contains(where: { $0.id == id }) else {
+            throw PaymentWebhookReceiver.Error.paymentsCapabilityNotGranted(id)
+        }
+        CompanyAccessControl.grantCapabilities([.payments], companyID: id)
+        let link = try await client.createTestCheckoutSession(
+            companyID: id,
+            productName: productName,
+            amountUSD: amountUSD,
+            postID: postID
+        )
+        appendEvent(
+            kind: .externalSideEffect,
+            companyID: id,
+            actor: "user",
+            summary: "Generated Stripe sandbox checkout link",
+            tool: "stripe.checkout.sessions.create",
+            outputSummary: link.checkoutURL?.absoluteString,
+            riskTier: "sandbox",
+            approvalState: "operator-initiated",
+            metadata: [
+                "provider": "stripe",
+                "checkoutID": link.id,
+                "amountUSD": String(format: "%.2f", link.amountUSD),
+                "mode": "test"
+            ]
+        )
+        return link
+    }
+
+    @discardableResult
+    func ingestStripePaymentWebhook(
+        id: String,
+        payload: Data,
+        signatureHeader: String?,
+        endpointSecret: String,
+        seenEventStore: PaymentWebhookSeenEventStore,
+        now: Date = Date()
+    ) throws -> CompanyLedgerEntry {
+        let event = try PaymentWebhookReceiver.verifiedStripe(
+            companyID: id,
+            payload: payload,
+            signatureHeader: signatureHeader,
+            endpointSecret: endpointSecret,
+            seenEventStore: seenEventStore,
+            now: now
+        )
+        return try recordVerifiedPaymentEvent(event)
+    }
+
+    @discardableResult
+    func ingestGumroadPaymentWebhook(
+        id: String,
+        payload: Data,
+        signatureHeader: String?,
+        applicationSecret: String,
+        seenEventStore: PaymentWebhookSeenEventStore,
+        now: Date = Date()
+    ) throws -> CompanyLedgerEntry {
+        let event = try PaymentWebhookReceiver.verifiedGumroad(
+            companyID: id,
+            payload: payload,
+            signatureHeader: signatureHeader,
+            applicationSecret: applicationSecret,
+            seenEventStore: seenEventStore,
+            now: now
+        )
+        return try recordVerifiedPaymentEvent(event)
+    }
+
+    @discardableResult
+    func recordVerifiedPaymentEvent(_ event: CompanyPaymentConversionEvent) throws -> CompanyLedgerEntry {
+        guard let session = sessions.first(where: { $0.id == event.companyID }) else {
+            return PaymentWebhookReceiver.ledgerEntry(for: event)
+        }
+        return try appendVerifiedPaymentLedgerEntry(
+            PaymentWebhookReceiver.ledgerEntry(for: event),
+            to: session,
+            provider: event.provider.rawValue,
+            eventID: event.id
+        )
+    }
+
+    @discardableResult
+    private func appendVerifiedPaymentLedgerEntry(
+        _ entry: CompanyLedgerEntry,
+        to session: CodexSession,
+        provider: String,
+        eventID: String
+    ) throws -> CompanyLedgerEntry {
+        if let existing = CompanyLedgerParser.decodeJSONEntries(
+            (try? String(contentsOfFile: session.ledgerPath, encoding: .utf8)) ?? ""
+        ).first(where: { $0.id == entry.id }) {
+            return existing
+        }
+        var ledgerEntry = entry
+        let auditEvent = appendEvent(
+            kind: .ledgerEntryRecorded,
+            companyID: session.id,
+            actor: "payments",
+            summary: "Verified \(provider) payment ledger entry recorded",
+            metadata: [
+                "provider": provider,
+                "eventID": eventID,
+                "ledgerEntryID": entry.id,
+                "amountUSD": String(format: "%.2f", entry.amountUSD),
+                "sourceReference": entry.sourceReference ?? ""
+            ]
+        )
+        ledgerEntry.sourceEventID = auditEvent.id
+        try appendLedgerEntry(ledgerEntry, to: session)
+        updateLifecycleAfterHeartbeat(id: session.id)
+        persistSessions()
+        return ledgerEntry
+    }
+
+    private func appendLedgerEntry(_ entry: CompanyLedgerEntry, to session: CodexSession) throws {
+        var entries = CompanyLedgerParser.decodeJSONEntries(
+            (try? String(contentsOfFile: session.ledgerPath, encoding: .utf8)) ?? ""
+        )
+        if let index = entries.firstIndex(where: { $0.id == entry.id }) {
+            entries[index] = entry
+        } else {
+            entries.append(entry)
+        }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(entries)
         try data.write(to: URL(fileURLWithPath: session.ledgerPath), options: [.atomic])
+    }
+
+    private func paymentWebhookSeenEventStore() -> PaymentWebhookSeenEventStore {
+        PaymentWebhookSeenEventStore(
+            url: sessionsDir.appendingPathComponent("payment-webhook-seen-events.sqlite")
+        )
     }
 
     private func enforceProfitabilityPolicy(id: String) {
@@ -1546,6 +1790,9 @@ final class CodexSessionManager: ObservableObject {
             // often recovers on its own (e.g. after wake from sleep).
             sessions[idx].status = .idle
             sessions[idx].nextHeartbeatAt = Date(timeIntervalSinceNow: 60 + Double.random(in: 0...30))
+        } else if failureAssessment.kind == "codexStartup" {
+            sessions[idx].status = .failedCodexStartup
+            sessions[idx].blockedReason = failureAssessment.operatorAction
         } else if exitCode != 0 {
             sessions[idx].status = .failed
         } else if let reason = blockedReason {
@@ -1600,6 +1847,17 @@ final class CodexSessionManager: ObservableObject {
                 sessions[idx].nextHeartbeatAt = Date(timeIntervalSinceNow: TimeInterval(sessions[idx].cadenceMinutes) * 60)
             }
         }
+        applyStalemateGuard(
+            id: id,
+            currentStatus: sessions[idx].status,
+            currentReason: heartbeatStalemateReason(
+                status: sessions[idx].status,
+                blockedReason: sessions[idx].blockedReason,
+                failureAssessment: failureAssessment,
+                exitCode: exitCode
+            ),
+            completedHeartbeat: completedHeartbeat
+        )
         sessions[idx].exitCode = exitCode
         sessions[idx].heartbeatLease = nil
         persistSessions()
@@ -1640,6 +1898,62 @@ final class CodexSessionManager: ObservableObject {
             scheduleHeartbeat(id: id)
             dispatchFleetHeartbeats(triggeredBy: id)
         }
+    }
+
+    private func heartbeatStalemateReason(
+        status: CodexSession.Status,
+        blockedReason: String?,
+        failureAssessment: (isTransient: Bool, kind: String, operatorAction: String),
+        exitCode: Int32
+    ) -> String {
+        if status == .blocked, let blockedReason, !blockedReason.isEmpty {
+            return blockedReason
+        }
+        if status == .failed || status == .failedCodexStartup {
+            if !failureAssessment.kind.isEmpty && failureAssessment.kind != "none" {
+                return failureAssessment.kind
+            }
+            if !failureAssessment.operatorAction.isEmpty {
+                return failureAssessment.operatorAction
+            }
+            return "heartbeat exited with code \(exitCode)"
+        }
+        return ""
+    }
+
+    private func applyStalemateGuard(
+        id: String,
+        currentStatus: CodexSession.Status,
+        currentReason: String,
+        completedHeartbeat: Int
+    ) {
+        guard let idx = sessions.firstIndex(where: { $0.id == id }),
+              let decision = CompanyStalemateDetector.detect(
+                companyID: id,
+                currentStatus: currentStatus,
+                currentReason: currentReason,
+                previousEvents: eventTimeline(companyID: id, limit: CompanyStalemateDetector.defaultThreshold - 1),
+                threshold: CompanyStalemateDetector.defaultThreshold
+              )
+        else { return }
+
+        sessions[idx].status = decision.action
+        sessions[idx].lifecycleStage = decision.lifecycleStage
+        sessions[idx].nextHeartbeatAt = nil
+        sessions[idx].heartbeatLease = nil
+        sessions[idx].blockedReason = "stalemate: \(decision.reason)"
+        appendEvent(
+            kind: .lifecycleStalemate,
+            companyID: id,
+            summary: decision.summary,
+            metadata: [
+                "reason": decision.reason,
+                "consecutiveCount": "\(decision.consecutiveCount)",
+                "heartbeat": "\(completedHeartbeat)",
+                "operatorAction": "needs evidence, metadata, instruction, or removal",
+                "status": CodexSession.Status.paused.rawValue
+            ]
+        )
     }
 
     private struct HandoffCommandRun: Decodable {
@@ -1893,6 +2207,10 @@ final class CodexSessionManager: ObservableObject {
         )
     }
 
+    func tickApprovalQueue(now: Date = Date()) {
+        applyApprovalQueueRules(now: now)
+    }
+
     @discardableResult
     func approveBatch(batchKey: String, hours: Int = 4, note: String? = nil) -> Int {
         applyApprovalQueueRules()
@@ -1991,6 +2309,44 @@ final class CodexSessionManager: ObservableObject {
         return latestByID.values
             .filter { includeRevoked || !$0.isRevoked }
             .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    private func promoteAutoApprovalPolicyIfEligible(
+        request: CompanyApprovalRequest,
+        approvedAt: Date,
+        approvalMode: String,
+        thresholdCount: Int = 3,
+        windowDays: Int = 14
+    ) {
+        guard approvalMode != "auto" else { return }
+        let actionType = CompanyApprovalQueueEngine.actionType(for: request.proposedAction)
+        let companyPattern = request.companyID
+        let policies = autoApprovalPolicies(includeRevoked: true)
+        let sameScopePolicies = policies.filter {
+            $0.companyPattern == companyPattern &&
+                $0.actionType == actionType &&
+                $0.riskTier == request.riskTier
+        }
+        guard sameScopePolicies.isEmpty else { return }
+
+        let since = approvedAt.addingTimeInterval(TimeInterval(-windowDays * 86_400))
+        let priorApprovals = recentEvents(limit: 10_000).filter { event in
+            event.kind == .approvalApproved &&
+                event.companyID == request.companyID &&
+                event.occurredAt >= since &&
+                event.metadata["approval_mode"] != "auto" &&
+                event.metadata["actionType"] == actionType &&
+                event.riskTier == request.riskTier.rawValue
+        }
+        guard priorApprovals.count + 1 >= thresholdCount else { return }
+
+        _ = createAutoApprovalPolicy(
+            from: request,
+            createdBy: "approval-history",
+            companyPattern: companyPattern,
+            thresholdCount: thresholdCount,
+            windowDays: windowDays
+        )
     }
 
     private func approvalRequestSnapshot(status: CompanyApprovalRequest.Status? = nil) -> [CompanyApprovalRequest] {
@@ -2264,12 +2620,19 @@ final class CodexSessionManager: ObservableObject {
                 companyID: request.companyID,
                 actor: "user",
                 summary: "Approval granted: \(request.proposedAction)",
+                riskTier: request.riskTier.rawValue,
+                approvalState: "approved",
                 metadata: [
                     "requestID": request.id,
                     "expiresAt": decided.expiresAt.map { ISO8601DateFormatter().string(from: $0) } ?? "",
                     "approval_mode": approvalMode,
                     "actionType": CompanyApprovalQueueEngine.actionType(for: request.proposedAction)
                 ]
+            )
+            promoteAutoApprovalPolicyIfEligible(
+                request: request,
+                approvedAt: now,
+                approvalMode: approvalMode
             )
             injectInstruction(
                 id: request.companyID,
@@ -2561,6 +2924,179 @@ final class CodexSessionManager: ObservableObject {
             .filter { $0.companyID == companyID }
             .prefix(max(0, limit))
             .map { $0 }
+    }
+
+    func complianceMetadata(id: String) -> CompanyComplianceMetadata? {
+        guard let session = sessions.first(where: { $0.id == id }),
+              let data = try? Data(contentsOf: URL(fileURLWithPath: session.complianceMetadataPath))
+        else { return nil }
+        return try? JSONDecoder().decode(CompanyComplianceMetadata.self, from: data)
+    }
+
+    func saveComplianceMetadata(id: String, metadata: CompanyComplianceMetadata) {
+        guard let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        if let data = try? encoder.encode(metadata) {
+            try? data.write(to: URL(fileURLWithPath: sessions[idx].complianceMetadataPath), options: [.atomic])
+        }
+        let policy = [
+            "metadata": "complete",
+            "legalBasis": metadata.legalBasis ?? "",
+            "unsubscribePath": metadata.unsubscribePath ?? "",
+            "disclosureText": metadata.disclosureText ?? "",
+            "targetAudience": metadata.targetAudience ?? "",
+            "contactSource": metadata.contactSource ?? "",
+            "dataRetentionPolicy": metadata.dataRetentionPolicy ?? ""
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: policy, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: URL(fileURLWithPath: sessions[idx].compliancePolicyPath), options: [.atomic])
+        }
+        if sessions[idx].status == .failed || sessions[idx].status == .paused {
+            sessions[idx].status = .idle
+            sessions[idx].nextHeartbeatAt = Date()
+        }
+        persistSessions()
+        appendEvent(
+            kind: .complianceChecked,
+            companyID: id,
+            actor: "user",
+            summary: "Compliance metadata saved for distribution gates",
+            metadata: [
+                "hasRequiredOutboundFields": "\(metadata.hasRequiredOutboundFields)",
+                "policyFile": sessions[idx].compliancePolicyPath
+            ]
+        )
+    }
+
+    func latestValidationResult(id: String) -> CompanyValidationResult? {
+        guard let session = sessions.first(where: { $0.id == id }),
+              let text = try? String(contentsOfFile: session.validationEvidencePath, encoding: .utf8)
+        else { return nil }
+        let decoder = JSONDecoder()
+        return text
+            .split(separator: "\n")
+            .reversed()
+            .compactMap { line -> CompanyValidationResult? in
+                guard let data = String(line).data(using: .utf8) else { return nil }
+                return try? decoder.decode(CompanyValidationResult.self, from: data)
+            }
+            .first
+    }
+
+    func recordValidationEvidence(
+        id: String,
+        metrics: CompanyValidationResult.Metrics,
+        sourceLinks: [String],
+        screenshots: [String] = [],
+        rawResearchArtifacts: [String],
+        rationale: String
+    ) {
+        guard let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
+        let idea = validationIdea(for: sessions[idx])
+        let plan = CompanyValidationEngine.plan(for: idea)
+        let result = CompanyValidationResult(
+            ideaID: idea.id,
+            metrics: metrics,
+            sourceLinks: sourceLinks,
+            screenshots: screenshots,
+            rawResearchArtifacts: rawResearchArtifacts,
+            rationale: rationale
+        )
+        let decision = CompanyValidationEngine.decide(idea: idea, plan: plan, result: result)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        if let data = try? encoder.encode(result),
+           var line = String(data: data, encoding: .utf8) {
+            line.append("\n")
+            if !FileManager.default.fileExists(atPath: sessions[idx].validationEvidencePath) {
+                FileManager.default.createFile(atPath: sessions[idx].validationEvidencePath, contents: nil)
+            }
+            if let handle = try? FileHandle(forWritingTo: URL(fileURLWithPath: sessions[idx].validationEvidencePath)) {
+                defer { try? handle.close() }
+                _ = try? handle.seekToEnd()
+                handle.write(line.data(using: .utf8) ?? Data())
+            }
+        }
+
+        let previousStage = sessions[idx].lifecycleStage
+        switch decision.decision {
+        case .readyToBuild:
+            sessions[idx].lifecycleStage = .building
+            sessions[idx].status = .idle
+            sessions[idx].blockedReason = nil
+            sessions[idx].pendingUserInstruction = "Validation evidence cleared the gate. Use validation-evidence.jsonl and advance toward the first build artifact."
+            sessions[idx].nextHeartbeatAt = Date()
+        case .needsMoreEvidence:
+            sessions[idx].lifecycleStage = .validating
+            if sessions[idx].status == .failed || sessions[idx].status == .paused {
+                sessions[idx].status = .idle
+                sessions[idx].nextHeartbeatAt = Date()
+            }
+            sessions[idx].pendingUserInstruction = "Validation evidence was added but more proof is needed. Read validation-evidence.jsonl and run the next validation experiment."
+        case .rejected:
+            sessions[idx].lifecycleStage = .pivoting
+            sessions[idx].status = .paused
+            sessions[idx].nextHeartbeatAt = nil
+            sessions[idx].blockedReason = "validation rejected: \(decision.rationale)"
+        }
+        persistSessions()
+        appendEvent(
+            kind: .experimentDecided,
+            companyID: id,
+            actor: "user",
+            summary: "Validation evidence recorded: \(decision.decision.rawValue)",
+            metadata: [
+                "decision": decision.decision.rawValue,
+                "rationale": decision.rationale,
+                "evidenceFile": sessions[idx].validationEvidencePath
+            ]
+        )
+        if previousStage != sessions[idx].lifecycleStage {
+            appendEvent(
+                kind: .lifecycleChanged,
+                companyID: id,
+                summary: "Lifecycle changed from \(previousStage.rawValue) to \(sessions[idx].lifecycleStage.rawValue) after validation evidence",
+                metadata: [
+                    "from": previousStage.rawValue,
+                    "to": sessions[idx].lifecycleStage.rawValue,
+                    "decision": decision.decision.rawValue
+                ]
+            )
+        }
+    }
+
+    private func validationIdea(for session: CodexSession) -> CompanyIdea {
+        if let templateID = session.templateID,
+           let template = CompanyTemplateCatalog.template(id: templateID),
+           let idea = CompanyIdeaEngine.candidates(from: [template], limit: 1).first {
+            return idea
+        }
+        return CompanyIdea(
+            id: "manual-\(session.id)",
+            title: session.title,
+            sourceTemplateID: session.templateID,
+            status: .validating,
+            icp: "Target customer",
+            offer: session.task,
+            channel: "Manual validation",
+            riskTier: .medium,
+            expectedFirstExperiment: "Collect interviews, signup intent, willingness-to-pay, and competitor evidence.",
+            requiredCredentials: [],
+            evidenceLinks: [],
+            rationale: session.task,
+            rejectionReason: nil,
+            nextAction: "Record validation evidence.",
+            scorecard: .init(
+                customerPain: 5,
+                willingnessToPay: 5,
+                distributionChannel: 5,
+                legalComplianceRisk: 5,
+                buildComplexity: 5,
+                timeToFirstDollar: 5,
+                credentialReadiness: 5
+            )
+        )
     }
 
     func metricsSnapshot(companyID: String? = nil) -> CompanyMetricsSnapshot {
@@ -2956,6 +3492,16 @@ final class CodexSessionManager: ObservableObject {
                 false,
                 "authentication",
                 "Refresh or revoke the affected credential, then rerun the heartbeat."
+            )
+        }
+
+        if logTail.localizedCaseInsensitiveContains("failed to initialize in-process app-server client")
+            || (logTail.localizedCaseInsensitiveContains("operation not permitted")
+                && logTail.localizedCaseInsensitiveContains("codex")) {
+            return (
+                false,
+                "codexStartup",
+                "Codex CLI failed to initialize under the heartbeat sandbox. Check sandbox profile permissions for ~/.codex, temp directories, and IPC primitives before rerunning."
             )
         }
 

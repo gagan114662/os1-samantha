@@ -311,3 +311,67 @@ enum CompanyLifecycleEngine {
         return "\(base) Evidence strength: \(experiment.evidenceStrength.rawValue). Uncertainty: \(uncertainty)."
     }
 }
+
+struct CompanyStalemateDecision: Codable, Hashable {
+    var companyID: String
+    var reason: String
+    var consecutiveCount: Int
+    var action: CodexSession.Status
+    var lifecycleStage: CodexSession.LifecycleStage
+
+    var summary: String {
+        "\(companyID) has been blocked for \(consecutiveCount) heartbeats on \(reason)"
+    }
+}
+
+enum CompanyStalemateDetector {
+    static let defaultThreshold = 3
+
+    static func detect(
+        companyID: String,
+        currentStatus: CodexSession.Status,
+        currentReason: String,
+        previousEvents: [CompanyEvent],
+        threshold: Int = defaultThreshold
+    ) -> CompanyStalemateDecision? {
+        let reason = normalizedReason(currentReason)
+        guard threshold > 1,
+              !reason.isEmpty,
+              currentStatus == .failed || currentStatus == .blocked
+        else { return nil }
+
+        let priorEvents = Array(previousEvents
+            .filter { $0.companyID == companyID && $0.kind == .heartbeatFinished }
+            .prefix(max(0, threshold - 1)))
+        guard priorEvents.count == threshold - 1 else { return nil }
+
+        let priorMatches = priorEvents.allSatisfy { event in
+                let status = event.metadata["status"] ?? ""
+                let eventReason = normalizedReason(Self.reason(from: event))
+                return (status == CodexSession.Status.failed.rawValue || status == CodexSession.Status.blocked.rawValue)
+                    && eventReason == reason
+            }
+        guard priorMatches else { return nil }
+
+        return CompanyStalemateDecision(
+            companyID: companyID,
+            reason: reason,
+            consecutiveCount: threshold,
+            action: .paused,
+            lifecycleStage: .paused
+        )
+    }
+
+    static func reason(from event: CompanyEvent) -> String {
+        if let blocked = event.metadata["blockedReason"], !blocked.isEmpty { return blocked }
+        if let failure = event.metadata["failureKind"], !failure.isEmpty { return failure }
+        if let action = event.metadata["operatorAction"], !action.isEmpty { return action }
+        return event.summary
+    }
+
+    private static func normalizedReason(_ reason: String) -> String {
+        reason
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+    }
+}

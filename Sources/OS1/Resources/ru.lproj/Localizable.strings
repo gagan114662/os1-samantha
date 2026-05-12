@@ -287,10 +287,12 @@
 "Browse the active host." = "Просмотр активного хоста.";
 "Canonical" = "Основные";
 "Choose a file from the library." = "Выберите файл из библиотеки.";
+"Choose a different file from the library, or reload after creating it on the active host." = "Выберите другой файл в библиотеке или перезагрузите его после создания на активном хосте.";
 "Content" = "Содержимое";
 "Done" = "Готово";
 "Enter a remote path to browse files over SSH." = "Введите удаленный путь для просмотра файлов через SSH.";
 "Folder" = "Папка";
+"File unavailable" = "Файл недоступен";
 "Go" = "Перейти";
 "Hermes Home" = "Домашняя папка Hermes";
 "Home" = "Домой";
@@ -310,6 +312,7 @@
 "Reading over SSH." = "Чтение через SSH.";
 "Reload the file before saving." = "Перезагрузите файл перед сохранением.";
 "Remove Bookmark" = "Удалить закладку";
+"Resolve the error above before editing this file." = "Устраните ошибку выше перед редактированием этого файла.";
 "Remove this bookmark?" = "Удалить эту закладку?";
 "Showing %@ of %@ items" = "Показано %@ из %@ элементов";
 "The remote file stays untouched." = "Удаленный файл не изменится.";
@@ -492,6 +495,7 @@
 "Save Current File" = "Сохранить текущий файл";
 "Show %@" = "Показать %@";
 "New Terminal tab opened" = "Открыта новая вкладка Терминала";
+"Needs evidence, metadata, instruction, or removal." = "Нужны доказательства, метаданные, инструкция или удаление.";
 "Name is required." = "Требуется имя.";
 "Add an SSH alias or host." = "Добавьте SSH-алиас или хост.";
 "Enter a valid SSH port from 1 to 65535." = "Введите корректный SSH-порт от 1 до 65535.";
@@ -999,6 +1003,14 @@
 "Realtime Voice" = "Realtime Voice";
 "Toggle Voice Mode" = "Toggle Voice Mode";
 "Voice" = "Voice";
+"Voice mode is off." = "Режим Voice выключен.";
+"Voice mode is off. Click to open the Voice panel and turn it back on." = "Режим Voice выключен. Нажмите, чтобы открыть панель Voice и снова включить его.";
+"Voice status is not available yet." = "Статус Voice пока недоступен.";
+"Voice status: %@" = "Статус Voice: %@";
+"Turn it back on here, or configure provider credentials if startup reports an error." = "Включите его здесь или настройте учетные данные провайдера, если при запуске появляется ошибка.";
+"Enable Voice" = "Включить Voice";
+"Off" = "Выключено";
+"Configure in Providers" = "Настроить в Providers";
 
 // MARK: - Pass 2 additions: Tasks / Tiles / Doctor (auto-appended)
 "%lld computers" = "%lld computers";
@@ -1048,7 +1060,13 @@
 "queued %lld" = "queued %lld";
 "Reachable on :7891 — %lld channel(s)" = "Reachable on :7891 — %lld channel(s)";
 "Remove company" = "Remove company";
+"Remove company?" = "Удалить компанию?";
+"Company controls" = "Управление компанией";
 "Request changes" = "Request changes";
+"PLACEHOLDER" = "ЗАПОЛНИТЕЛЬ";
+"No email will be sent until a real domain is provisioned." = "Письма не будут отправляться, пока не подключен реальный домен.";
+"metrics suppressed" = "метрики скрыты";
+"Provision real domain" = "Подключить реальный домен";
 "Resume fleet" = "Resume fleet";
 "Run heartbeat now" = "Run heartbeat now";
 "Kill heartbeat" = "Kill heartbeat";
@@ -1127,7 +1145,19 @@
 "%lldh" = "%lldч";
 "Fleet capacity: %lld workers × cap %lld = %lld concurrent" = "Емкость флота: %lld воркеров × лимит %lld = %lld одновременно";
 "Companies flagged as drifting: %lld" = "Компаний с отмеченным дрейфом: %lld";
+"Watchers" = "Наблюдатели";
+"%lld scheduled" = "запланировано %lld";
+"Schedule" = "Расписание";
+"Last run" = "Последний запуск";
+"Last digest" = "Последний дайджест";
+"every %lldm" = "каждые %lldм";
+"never" = "никогда";
+"watch-only" = "только наблюдение";
+"approval" = "подтверждение";
 "Approve %lld %@" = "Одобрить %lld %@";
+"%lld active auto policies" = "%lld active auto policies";
+"Auto future" = "Auto future";
+"Revoke" = "Revoke";
 
 // MARK: - Provider modalities
 "Each provider's API key is stored in macOS Keychain on this Mac, scoped per host. Installing pushes it onto that host's ~/.hermes/.env so Samantha can use the provider on the next heartbeat — no daemon restart needed." = "API-ключ каждого провайдера хранится в Keychain на этом Mac и привязан к хосту. Установка записывает его в ~/.hermes/.env на этом хосте, чтобы Samantha могла использовать провайдера на следующем heartbeat — перезапуск демона не нужен.";

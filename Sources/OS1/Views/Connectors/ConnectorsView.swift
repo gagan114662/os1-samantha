@@ -94,6 +94,8 @@ struct ConnectorsView: View {
 
                 gettingStartedBanner
 
+                paymentsPanel
+
                 HermesSurfacePanel(
                     title: "API key",
                     subtitle: "Stored in macOS Keychain — never written to disk."
@@ -274,6 +276,8 @@ struct ConnectorsView: View {
                         }
                     }
                 }
+
+                paymentsPanel
 
                 vmInstallPanel
 
@@ -642,6 +646,109 @@ struct ConnectorsView: View {
         switch viewModel.vmInstallState {
         case .checking, .installing: return true
         default: return false
+        }
+    }
+
+    // MARK: - Payments
+
+    private var paymentsPanel: some View {
+        HermesSurfacePanel(
+            title: "Payments",
+            subtitle: "Store test-mode payment secrets for company checkout links and verified webhook ledger ingest."
+        ) {
+            VStack(alignment: .leading, spacing: 14) {
+                paymentCredentialRow(
+                    kind: .stripeSecretKey,
+                    placeholder: "sk_test_...",
+                    text: $viewModel.stripeSecretKeyDraft,
+                    help: "Used by company detail checkout generation."
+                )
+                paymentCredentialRow(
+                    kind: .stripeWebhookSecret,
+                    placeholder: "whsec_...",
+                    text: $viewModel.stripeWebhookSecretDraft,
+                    help: "Used by verified Stripe webhooks before appending LEDGER.json."
+                )
+                paymentCredentialRow(
+                    kind: .gumroadApplicationSecret,
+                    placeholder: "Gumroad application secret",
+                    text: $viewModel.gumroadApplicationSecretDraft,
+                    help: "Used by verified Gumroad webhooks before appending LEDGER.json."
+                )
+                Divider().overlay(theme.palette.glassBorder)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Webhook route templates")
+                        .os1Style(theme.typography.label)
+                        .foregroundStyle(theme.palette.onCoralMuted)
+                    Text("/payments/stripe/<companyID>")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(theme.palette.onCoralSecondary)
+                    Text("/payments/gumroad/<companyID>")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(theme.palette.onCoralSecondary)
+                }
+                if let message = viewModel.paymentCredentialMessage {
+                    errorBanner(message)
+                }
+            }
+        }
+    }
+
+    private func paymentCredentialRow(
+        kind: PaymentCredentialStore.SecretKind,
+        placeholder: String,
+        text: Binding<String>,
+        help: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Label(kind.displayName, systemImage: paymentCredentialIcon(kind))
+                    .os1Style(theme.typography.label)
+                    .foregroundStyle(theme.palette.onCoralPrimary)
+                Spacer()
+                if viewModel.hasPaymentCredential(kind) {
+                    Label("stored", systemImage: "checkmark.seal")
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.green)
+                } else {
+                    Label("missing", systemImage: "circle")
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(theme.palette.onCoralMuted)
+                }
+            }
+            HStack(spacing: 8) {
+                SecureField(placeholder, text: text)
+                    .textFieldStyle(.plain)
+                    .padding(.vertical, 6)
+                    .padding(.horizontal, 8)
+                    .background(theme.palette.glassFill)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                Button("Save") {
+                    viewModel.savePaymentCredential(kind)
+                }
+                .buttonStyle(.os1Secondary)
+                .disabled(text.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button("Remove") {
+                    viewModel.deletePaymentCredential(kind)
+                }
+                .buttonStyle(.os1Secondary)
+                .disabled(!viewModel.hasPaymentCredential(kind))
+            }
+            Text(help)
+                .os1Style(theme.typography.smallCaps)
+                .foregroundStyle(theme.palette.onCoralMuted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func paymentCredentialIcon(_ kind: PaymentCredentialStore.SecretKind) -> String {
+        switch kind {
+        case .stripeSecretKey:
+            "creditcard"
+        case .stripeWebhookSecret:
+            "point.3.connected.trianglepath.dotted"
+        case .gumroadApplicationSecret:
+            "shippingbox"
         }
     }
 

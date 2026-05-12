@@ -287,10 +287,12 @@
 "Browse the active host." = "浏览当前主机。";
 "Canonical" = "核心";
 "Choose a file from the library." = "从库中选择一个文件。";
+"Choose a different file from the library, or reload after creating it on the active host." = "请从库中选择其他文件，或在活动主机上创建后重新加载。";
 "Content" = "内容";
 "Done" = "完成";
 "Enter a remote path to browse files over SSH." = "输入远端路径，通过 SSH 浏览文件。";
 "Folder" = "文件夹";
+"File unavailable" = "文件不可用";
 "Go" = "前往";
 "Hermes Home" = "Hermes 主目录";
 "Home" = "主目录";
@@ -310,6 +312,7 @@
 "Reading over SSH." = "正在通过 SSH 读取。";
 "Reload the file before saving." = "保存前请重新加载文件。";
 "Remove Bookmark" = "移除书签";
+"Resolve the error above before editing this file." = "请先解决上方错误，然后再编辑此文件。";
 "Remove this bookmark?" = "移除此书签？";
 "Showing %@ of %@ items" = "显示 %@ / %@ 项";
 "The remote file stays untouched." = "远端文件不会被更改。";
@@ -492,6 +495,7 @@
 "Save Current File" = "保存当前文件";
 "Show %@" = "显示 %@";
 "New Terminal tab opened" = "已打开新的终端标签页";
+"Needs evidence, metadata, instruction, or removal." = "需要证据、元数据、指令或移除。";
 "Name is required." = "需要名称。";
 "Add an SSH alias or host." = "添加 SSH 别名或主机。";
 "Enter a valid SSH port from 1 to 65535." = "请输入 1 到 65535 之间的有效 SSH 端口。";
@@ -999,6 +1003,14 @@
 "Realtime Voice" = "Realtime Voice";
 "Toggle Voice Mode" = "Toggle Voice Mode";
 "Voice" = "Voice";
+"Voice mode is off." = "语音模式已关闭。";
+"Voice mode is off. Click to open the Voice panel and turn it back on." = "语音模式已关闭。点击打开语音面板并重新开启。";
+"Voice status is not available yet." = "语音状态尚不可用。";
+"Voice status: %@" = "语音状态：%@";
+"Turn it back on here, or configure provider credentials if startup reports an error." = "可在这里重新开启；如果启动时报错，请配置提供商凭据。";
+"Enable Voice" = "启用语音";
+"Off" = "关闭";
+"Configure in Providers" = "在 Providers 中配置";
 
 // MARK: - Pass 2 additions: Tasks / Tiles / Doctor (auto-appended)
 "%lld computers" = "%lld computers";
@@ -1048,7 +1060,13 @@
 "queued %lld" = "queued %lld";
 "Reachable on :7891 — %lld channel(s)" = "Reachable on :7891 — %lld channel(s)";
 "Remove company" = "Remove company";
+"Remove company?" = "移除公司？";
+"Company controls" = "公司控制";
 "Request changes" = "Request changes";
+"PLACEHOLDER" = "占位符";
+"No email will be sent until a real domain is provisioned." = "配置真实域名前不会发送邮件。";
+"metrics suppressed" = "指标已隐藏";
+"Provision real domain" = "配置真实域名";
 "Resume fleet" = "Resume fleet";
 "Run heartbeat now" = "Run heartbeat now";
 "Kill heartbeat" = "Kill heartbeat";
@@ -1127,7 +1145,19 @@
 "%lldh" = "%lld小时";
 "Fleet capacity: %lld workers × cap %lld = %lld concurrent" = "队列容量：%lld 个 worker × 上限 %lld = %lld 并发";
 "Companies flagged as drifting: %lld" = "标记为漂移的公司：%lld";
+"Watchers" = "观察器";
+"%lld scheduled" = "已计划 %lld";
+"Schedule" = "计划";
+"Last run" = "上次运行";
+"Last digest" = "上次摘要";
+"every %lldm" = "每 %lld 分钟";
+"never" = "从未";
+"watch-only" = "仅观察";
+"approval" = "需批准";
 "Approve %lld %@" = "批准 %lld %@";
+"%lld active auto policies" = "%lld active auto policies";
+"Auto future" = "Auto future";
+"Revoke" = "Revoke";
 
 // MARK: - Provider modalities
 "Each provider's API key is stored in macOS Keychain on this Mac, scoped per host. Installing pushes it onto that host's ~/.hermes/.env so Samantha can use the provider on the next heartbeat — no daemon restart needed." = "每个提供商的 API 密钥都会按主机范围存储在这台 Mac 的 Keychain 中。安装会把它写入该主机的 ~/.hermes/.env，让 Samantha 在下一次心跳中使用该提供商，无需重启守护进程。";

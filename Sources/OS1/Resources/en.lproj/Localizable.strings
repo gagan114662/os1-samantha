@@ -287,10 +287,12 @@
 "Browse the active host." = "Browse the active host.";
 "Canonical" = "Canonical";
 "Choose a file from the library." = "Choose a file from the library.";
+"Choose a different file from the library, or reload after creating it on the active host." = "Choose a different file from the library, or reload after creating it on the active host.";
 "Content" = "Content";
 "Done" = "Done";
 "Enter a remote path to browse files over SSH." = "Enter a remote path to browse files over SSH.";
 "Folder" = "Folder";
+"File unavailable" = "File unavailable";
 "Go" = "Go";
 "Hermes Home" = "Hermes Home";
 "Home" = "Home";
@@ -310,6 +312,7 @@
 "Reading over SSH." = "Reading over SSH.";
 "Reload the file before saving." = "Reload the file before saving.";
 "Remove Bookmark" = "Remove Bookmark";
+"Resolve the error above before editing this file." = "Resolve the error above before editing this file.";
 "Remove this bookmark?" = "Remove this bookmark?";
 "Showing %@ of %@ items" = "Showing %@ of %@ items";
 "The remote file stays untouched." = "The remote file stays untouched.";
@@ -492,6 +495,7 @@
 "Save Current File" = "Save Current File";
 "Show %@" = "Show %@";
 "New Terminal tab opened" = "New Terminal tab opened";
+"Needs evidence, metadata, instruction, or removal." = "Needs evidence, metadata, instruction, or removal.";
 "Name is required." = "Name is required.";
 "Add an SSH alias or host." = "Add an SSH alias or host.";
 "Enter a valid SSH port from 1 to 65535." = "Enter a valid SSH port from 1 to 65535.";
@@ -1000,6 +1004,14 @@
 "Realtime Voice" = "Realtime Voice";
 "Toggle Voice Mode" = "Toggle Voice Mode";
 "Voice" = "Voice";
+"Voice mode is off." = "Voice mode is off.";
+"Voice mode is off. Click to open the Voice panel and turn it back on." = "Voice mode is off. Click to open the Voice panel and turn it back on.";
+"Voice status is not available yet." = "Voice status is not available yet.";
+"Voice status: %@" = "Voice status: %@";
+"Turn it back on here, or configure provider credentials if startup reports an error." = "Turn it back on here, or configure provider credentials if startup reports an error.";
+"Enable Voice" = "Enable Voice";
+"Off" = "Off";
+"Configure in Providers" = "Configure in Providers";
 
 // MARK: - Pass 2 additions: Tasks / Tiles / Doctor (auto-appended)
 "%lld computers" = "%lld computers";
@@ -1049,7 +1061,13 @@
 "queued %lld" = "queued %lld";
 "Reachable on :7891 — %lld channel(s)" = "Reachable on :7891 — %lld channel(s)";
 "Remove company" = "Remove company";
+"Remove company?" = "Remove company?";
+"Company controls" = "Company controls";
 "Request changes" = "Request changes";
+"PLACEHOLDER" = "PLACEHOLDER";
+"No email will be sent until a real domain is provisioned." = "No email will be sent until a real domain is provisioned.";
+"metrics suppressed" = "metrics suppressed";
+"Provision real domain" = "Provision real domain";
 "Resume fleet" = "Resume fleet";
 "Run heartbeat now" = "Run heartbeat now";
 "Kill heartbeat" = "Kill heartbeat";
@@ -1128,7 +1146,19 @@
 "%lldh" = "%lldh";
 "Fleet capacity: %lld workers × cap %lld = %lld concurrent" = "Fleet capacity: %lld workers × cap %lld = %lld concurrent";
 "Companies flagged as drifting: %lld" = "Companies flagged as drifting: %lld";
+"Watchers" = "Watchers";
+"%lld scheduled" = "%lld scheduled";
+"Schedule" = "Schedule";
+"Last run" = "Last run";
+"Last digest" = "Last digest";
+"every %lldm" = "every %lldm";
+"never" = "never";
+"watch-only" = "watch-only";
+"approval" = "approval";
 "Approve %lld %@" = "Approve %lld %@";
+"%lld active auto policies" = "%lld active auto policies";
+"Auto future" = "Auto future";
+"Revoke" = "Revoke";
 
 // MARK: - Provider modalities
 "Each provider's API key is stored in macOS Keychain on this Mac, scoped per host. Installing pushes it onto that host's ~/.hermes/.env so Samantha can use the provider on the next heartbeat — no daemon restart needed." = "Each provider's API key is stored in macOS Keychain on this Mac, scoped per host. Installing pushes it onto that host's ~/.hermes/.env so Samantha can use the provider on the next heartbeat — no daemon restart needed.";

@@ -4,6 +4,7 @@ import SwiftUI
 /// in its own git worktree under ~/.os1/codex-tasks/sessions/<id>.
 struct CodexTasksView: View {
     @Environment(\.os1Theme) private var theme
+    @EnvironmentObject private var appState: AppState
     @StateObject private var manager = CodexSessionManager.shared
 
     @State private var newTaskText: String = ""
@@ -17,13 +18,27 @@ struct CodexTasksView: View {
     @State private var bulkCadenceOverride: Int = 0
     @State private var spawnError: String = ""
     @State private var selectedID: String?
+    @State private var pendingRemovalID: String?
     @State private var interveneTexts: [String: String] = [:]
     @State private var approvalChangeTexts: [String: String] = [:]
     @State private var ledgerAmounts: [String: String] = [:]
     @State private var ledgerNotes: [String: String] = [:]
+    @State private var checkoutAmounts: [String: String] = [:]
+    @State private var checkoutProducts: [String: String] = [:]
+    @State private var checkoutMessages: [String: String] = [:]
+    @State private var generatingCheckoutIDs: Set<String> = []
+    @State private var validationInputs: [String: [String: String]] = [:]
+    @State private var complianceInputs: [String: [String: String]] = [:]
     @State private var nowTick: Date = Date()  // drives countdown labels
 
     private let columns = [GridItem(.adaptive(minimum: 320), spacing: 12)]
+
+    private struct WatcherPanelItem: Identifiable {
+        var session: CodexSession
+        var template: CompanyTemplate
+
+        var id: String { session.id }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -32,6 +47,8 @@ struct CodexTasksView: View {
             templateBar
             ideaBacklog
             portfolioDashboard
+            stalemateBanner
+            watchersPanel
             fleetSection
             reputationConsole
             approvalConsole
@@ -47,12 +64,35 @@ struct CodexTasksView: View {
         .background(theme.palette.coral)
         .onReceive(Timer.publish(every: 5, on: .main, in: .common).autoconnect()) { now in
             nowTick = now
+            manager.tickApprovalQueue(now: now)
         }
         .sheet(item: Binding(
             get: { selectedID.flatMap { id in manager.sessions.first(where: { $0.id == id }) } },
             set: { _ in selectedID = nil }
         )) { session in
             sessionDetail(session: session)
+                .onExitCommand {
+                    closeSessionDetail()
+                }
+        }
+        .confirmationDialog(
+            L10n.string("Remove company?"),
+            isPresented: Binding(
+                get: { pendingRemovalID != nil },
+                set: { if !$0 { pendingRemovalID = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button(L10n.string("Remove company"), role: .destructive) {
+                if let id = pendingRemovalID {
+                    manager.cleanup(id: id)
+                    if selectedID == id { selectedID = nil }
+                }
+                pendingRemovalID = nil
+            }
+            Button(L10n.string("Cancel"), role: .cancel) {
+                pendingRemovalID = nil
+            }
         }
     }
 
@@ -313,6 +353,19 @@ struct CodexTasksView: View {
         Array(filteredTemplates.prefix(bulkLaunchLimit))
     }
 
+    private var watcherPanelItems: [WatcherPanelItem] {
+        manager.sessions.compactMap { session in
+            guard let templateID = session.templateID,
+                  templateID.hasPrefix("watcher-"),
+                  let template = CompanyTemplateCatalog.template(id: templateID)
+            else { return nil }
+            return WatcherPanelItem(session: session, template: template)
+        }
+        .sorted {
+            ($0.session.nextHeartbeatAt ?? .distantFuture) < ($1.session.nextHeartbeatAt ?? .distantFuture)
+        }
+    }
+
     private var rankedIdeas: [CompanyIdea] {
         CompanyIdeaEngine.topIdeas(
             count: 10,
@@ -518,6 +571,154 @@ struct CodexTasksView: View {
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
+    @ViewBuilder
+    private var stalemateBanner: some View {
+        let events = manager.recentEvents(limit: 100)
+            .filter { $0.kind == .lifecycleStalemate }
+        if let event = events.first {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "pause.circle.fill")
+                    .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(event.summary)
+                        .os1Style(theme.typography.label)
+                        .foregroundStyle(theme.palette.onCoralPrimary)
+                    Text(event.metadata["operatorAction"] ?? L10n.string("Needs evidence, metadata, instruction, or removal."))
+                        .font(.caption2)
+                        .foregroundStyle(theme.palette.onCoralSecondary)
+                }
+                Spacer()
+            }
+            .padding(10)
+            .background(Color.orange.opacity(0.16))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(Color.orange.opacity(0.55), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .padding(.horizontal, 18)
+            .padding(.bottom, 10)
+        }
+    }
+
+    // MARK: - Watchers panel
+
+    @ViewBuilder
+    private var watchersPanel: some View {
+        let watchers = watcherPanelItems
+        if !watchers.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Label(L10n.string("Watchers"), systemImage: "dot.radiowaves.left.and.right")
+                        .os1Style(theme.typography.label)
+                        .foregroundStyle(theme.palette.onCoralPrimary)
+                    Text(L10n.string("%lld scheduled", watchers.count))
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(theme.palette.onCoralMuted)
+                    Spacer()
+                }
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .top, spacing: 8) {
+                        ForEach(watchers) { item in
+                            watcherCard(item)
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.bottom, 10)
+        }
+    }
+
+    private func watcherCard(_ item: WatcherPanelItem) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 6) {
+                Image(systemName: "antenna.radiowaves.left.and.right")
+                    .foregroundStyle(.green)
+                Text(item.template.channel)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(theme.palette.onCoralMuted)
+                Spacer()
+                Text(watcherDeliveryModeLabel(item.session))
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(watcherDeliveryModeColor(item.session))
+            }
+
+            Text(item.template.title)
+                .os1Style(theme.typography.label)
+                .foregroundStyle(theme.palette.onCoralPrimary)
+                .lineLimit(1)
+
+            VStack(alignment: .leading, spacing: 4) {
+                watcherFactRow(L10n.string("Schedule"), value: watcherScheduleLabel(item.session), icon: "calendar.badge.clock")
+                watcherFactRow(L10n.string("Last run"), value: watcherLastRunLabel(item.session), icon: "clock.arrow.circlepath")
+                watcherFactRow(L10n.string("Last digest"), value: watcherDigestPreview(item), icon: "text.badge.star")
+            }
+        }
+        .padding(10)
+        .frame(width: 280, alignment: .leading)
+        .background(theme.palette.glassFill.opacity(0.78))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color.green.opacity(0.45), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func watcherFactRow(_ label: String, value: String, icon: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: icon)
+                .frame(width: 14)
+                .foregroundStyle(theme.palette.onCoralMuted)
+            Text(label)
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundStyle(theme.palette.onCoralMuted)
+                .frame(width: 62, alignment: .leading)
+            Text(value)
+                .font(.caption2)
+                .foregroundStyle(theme.palette.onCoralSecondary)
+                .lineLimit(2)
+        }
+    }
+
+    private func watcherScheduleLabel(_ session: CodexSession) -> String {
+        L10n.string("every %lldm", session.cadenceMinutes)
+    }
+
+    private func watcherLastRunLabel(_ session: CodexSession) -> String {
+        guard let lastHeartbeatAt = session.lastHeartbeatAt else { return L10n.string("never") }
+        return relativeAge(lastHeartbeatAt)
+    }
+
+    private func watcherDigestPreview(_ item: WatcherPanelItem) -> String {
+        let journalLines = manager.readJournal(id: item.session.id, maxBytes: 2400)
+            .components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        if let digestIndex = journalLines.lastIndex(where: { line in
+            let lowercased = line.lowercased()
+            return lowercased.contains("digest") || lowercased.contains("signal")
+        }) {
+            return journalLines[digestIndex...].prefix(2).joined(separator: " ")
+        }
+        return item.template.validationSignals.prefix(2).joined(separator: " · ")
+    }
+
+    private func watcherDeliveryModeLabel(_ session: CodexSession) -> String {
+        if session.lifecycleStage == .launched || session.lifecycleStage == .revenuePositive || session.lifecycleStage == .scaling {
+            return L10n.string("approval")
+        }
+        return L10n.string("watch-only")
+    }
+
+    private func watcherDeliveryModeColor(_ session: CodexSession) -> Color {
+        if session.lifecycleStage == .launched || session.lifecycleStage == .revenuePositive || session.lifecycleStage == .scaling {
+            return .orange
+        }
+        return .green
+    }
+
     // MARK: - Fleet scheduler
 
     @ViewBuilder
@@ -564,7 +765,8 @@ struct CodexTasksView: View {
     }
 
     private func reputationCard(_ health: CompanyReputationHealth) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        let placeholder = health.isPlaceholderSenderDomain
+        return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Image(systemName: reputationIcon(health))
                     .foregroundStyle(reputationColor(health))
@@ -572,20 +774,37 @@ struct CodexTasksView: View {
                     .font(.system(.caption2, design: .monospaced))
                     .foregroundStyle(reputationColor(health))
                 Spacer()
-                Text(health.status.rawValue)
+                Text(placeholder ? L10n.string("PLACEHOLDER") : health.status.rawValue)
                     .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(theme.palette.onCoralMuted)
+                    .foregroundStyle(placeholder ? .orange : theme.palette.onCoralMuted)
             }
             Text(health.label)
                 .os1Style(theme.typography.label)
                 .foregroundStyle(theme.palette.onCoralPrimary)
                 .lineLimit(1)
-            HStack(spacing: 6) {
-                Text("bounce \(percentLabel(health.bounceRate))")
-                Text("complaint \(percentLabel(health.complaintRate))")
+            if placeholder {
+                Label(L10n.string("No email will be sent until a real domain is provisioned."), systemImage: "exclamationmark.triangle")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .lineLimit(2)
+                Text(L10n.string("metrics suppressed"))
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(theme.palette.onCoralMuted)
+                Button {
+                    requestSenderDomainProvisioning(health)
+                } label: {
+                    Label(L10n.string("Provision real domain"), systemImage: "globe.badge.chevron.backward")
+                }
+                .buttonStyle(.os1Secondary)
+                .disabled(health.ownerCompanyIDs.isEmpty)
+            } else {
+                HStack(spacing: 6) {
+                    Text("bounce \(percentLabel(health.bounceRate))")
+                    Text("complaint \(percentLabel(health.complaintRate))")
+                }
+                .font(.caption2)
+                .foregroundStyle(theme.palette.onCoralMuted)
             }
-            .font(.caption2)
-            .foregroundStyle(theme.palette.onCoralMuted)
             if let review = health.reviewAverage {
                 Text("reviews \(review, specifier: "%.1f")")
                     .font(.caption2)
@@ -612,6 +831,7 @@ struct CodexTasksView: View {
     private var approvalConsole: some View {
         let requests = manager.approvalRequests(status: .pending)
         let plan = manager.approvalQueuePlan()
+        let policies = manager.autoApprovalPolicies()
         if !requests.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
@@ -644,10 +864,29 @@ struct CodexTasksView: View {
                     }
                 }
 
+                if !policies.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            Label(
+                                L10n.string("%lld active auto policies", policies.count),
+                                systemImage: "bolt.shield"
+                            )
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(theme.palette.onCoralMuted)
+                            ForEach(policies) { policy in
+                                autoApprovalPolicyChip(policy)
+                            }
+                        }
+                    }
+                }
+
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
                         ForEach(requests) { request in
-                            approvalCard(request)
+                            approvalCard(
+                                request,
+                                queueItem: plan.items.first(where: { $0.requestID == request.id })
+                            )
                         }
                     }
                 }
@@ -657,7 +896,36 @@ struct CodexTasksView: View {
         }
     }
 
-    private func approvalCard(_ request: CompanyApprovalRequest) -> some View {
+    private func autoApprovalPolicyChip(_ policy: CompanyApprovalAutoPolicy) -> some View {
+        HStack(spacing: 6) {
+            Text(approvalBatchTitle("\(policy.actionType)|\(policy.riskTier.rawValue)"))
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundStyle(theme.palette.onCoralPrimary)
+            Text(policy.companyPattern)
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundStyle(theme.palette.onCoralMuted)
+            Button(L10n.string("Revoke")) {
+                manager.revokeAutoApprovalPolicy(
+                    id: policy.id,
+                    reason: "Operator revoked auto-approval policy"
+                )
+            }
+            .buttonStyle(.os1Secondary)
+        }
+        .padding(.vertical, 5)
+        .padding(.horizontal, 8)
+        .background(theme.palette.glassFill.opacity(0.72))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color.green.opacity(0.45), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func approvalCard(
+        _ request: CompanyApprovalRequest,
+        queueItem: CompanyApprovalQueueItem?
+    ) -> some View {
         let compliance = manager.complianceDecision(for: request)
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
@@ -694,6 +962,16 @@ struct CodexTasksView: View {
             .font(.system(.caption2, design: .monospaced))
             .foregroundStyle(theme.palette.onCoralMuted)
             .lineLimit(1)
+
+            if let queueItem {
+                HStack(spacing: 8) {
+                    Label(queueItem.route.replacingOccurrences(of: "_", with: " "), systemImage: "paperplane")
+                    Label(approvalBatchTitle(queueItem.batchKey), systemImage: "rectangle.3.group")
+                }
+                .font(.caption2)
+                .foregroundStyle(theme.palette.onCoralMuted)
+                .lineLimit(1)
+            }
 
             if compliance.status != .approved {
                 VStack(alignment: .leading, spacing: 4) {
@@ -737,6 +1015,12 @@ struct CodexTasksView: View {
                     manager.alwaysRequireApproval(request: request)
                 }
                 .buttonStyle(.os1Secondary)
+
+                Button(L10n.string("Auto future")) {
+                    _ = manager.createAutoApprovalPolicy(from: request)
+                }
+                .buttonStyle(.os1Secondary)
+                .disabled(compliance.status == .blocked)
             }
 
             HStack(spacing: 6) {
@@ -877,6 +1161,9 @@ struct CodexTasksView: View {
             ForEach(manager.sessions) { session in
                 tile(session: session)
                     .onTapGesture { selectedID = session.id }
+                    .contextMenu {
+                        companyControlMenu(session)
+                    }
             }
         }
         .padding(14)
@@ -994,26 +1281,9 @@ struct CodexTasksView: View {
                 .buttonStyle(.os1Icon)
 
                 Menu {
-                    if session.status == .paused {
-                        Button(L10n.string("Resume")) { manager.resume(id: session.id) }
-                    } else {
-                        Button(L10n.string("Pause")) { manager.pause(id: session.id) }
-                    }
-                    Button(L10n.string("Run heartbeat now")) {
-                        Task { await manager.runHeartbeat(id: session.id) }
-                    }
-                    if session.status == .running {
-                        Button(L10n.string("Kill heartbeat"), role: .destructive) {
-                            manager.kill(id: session.id)
-                        }
-                    }
-                    Divider()
+                    companyControlMenu(session)
                     Button(L10n.string("Open journal in Finder")) {
                         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: session.journalPath)])
-                    }
-                    Divider()
-                    Button(L10n.string("Remove company"), role: .destructive) {
-                        manager.cleanup(id: session.id)
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle").font(.system(size: 14))
@@ -1034,7 +1304,31 @@ struct CodexTasksView: View {
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
+    @ViewBuilder
+    private func companyControlMenu(_ session: CodexSession) -> some View {
+        if session.status == .paused {
+            Button(L10n.string("Resume")) { manager.resume(id: session.id) }
+        } else {
+            Button(L10n.string("Pause")) { manager.pause(id: session.id) }
+        }
+        Button(L10n.string("Run heartbeat now")) {
+            Task { await manager.runHeartbeat(id: session.id) }
+        }
+        Button(L10n.string("Kill heartbeat"), role: .destructive) {
+            manager.kill(id: session.id)
+        }
+        .disabled(session.status != .running)
+        Divider()
+        Button(L10n.string("Remove company"), role: .destructive) {
+            pendingRemovalID = session.id
+        }
+    }
+
     // MARK: - Detail sheet
+
+    private func closeSessionDetail() {
+        selectedID = nil
+    }
 
     private func sessionDetail(session: CodexSession) -> some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1042,8 +1336,47 @@ struct CodexTasksView: View {
                 Circle().fill(statusColor(session.status)).frame(width: 10, height: 10)
                 Text(session.title).os1Style(theme.typography.titlePanel)
                 Spacer()
-                Button(L10n.string("Close")) { selectedID = nil }
+                Button {
+                    closeSessionDetail()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                }
                     .buttonStyle(.os1Icon)
+                    .keyboardShortcut(.cancelAction)
+                    .help(L10n.string("Close"))
+                    .accessibilityLabel(L10n.string("Close"))
+                Button {
+                    closeSessionDetail()
+                } label: {
+                    EmptyView()
+                }
+                .keyboardShortcut("w", modifiers: [.command])
+                .frame(width: 0, height: 0)
+                .opacity(0)
+                .accessibilityHidden(true)
+            }
+            HStack(spacing: 8) {
+                Label(L10n.string("Company controls"), systemImage: "slider.horizontal.3")
+                    .os1Style(theme.typography.label)
+                    .foregroundStyle(theme.palette.onCoralMuted)
+                Spacer()
+                if session.status == .paused {
+                    Button(L10n.string("Resume")) { manager.resume(id: session.id) }
+                        .buttonStyle(.os1Secondary)
+                } else {
+                    Button(L10n.string("Pause")) { manager.pause(id: session.id) }
+                        .buttonStyle(.os1Secondary)
+                }
+                Button(L10n.string("Kill heartbeat"), role: .destructive) {
+                    manager.kill(id: session.id)
+                }
+                .buttonStyle(.os1Secondary)
+                .disabled(session.status != .running)
+                Button(L10n.string("Remove company"), role: .destructive) {
+                    pendingRemovalID = session.id
+                }
+                .buttonStyle(.os1Secondary)
             }
             HStack(spacing: 14) {
                 Label(session.id, systemImage: "number")
@@ -1240,13 +1573,82 @@ struct CodexTasksView: View {
                     Button("Refund") { recordLedger(session.id, kind: .refund) }
                         .buttonStyle(.os1Secondary)
                 }
+                Divider().overlay(theme.palette.glassBorder)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Stripe sandbox checkout")
+                            .os1Style(theme.typography.label)
+                            .foregroundStyle(theme.palette.onCoralMuted)
+                        Spacer()
+                        Label(
+                            hasStripeCheckoutCredential ? "test key stored" : "test key missing",
+                            systemImage: hasStripeCheckoutCredential ? "checkmark.seal" : "exclamationmark.triangle"
+                        )
+                        .foregroundStyle(hasStripeCheckoutCredential ? .green : .orange)
+                    }
+                    HStack(spacing: 8) {
+                        TextField("Product", text: Binding(
+                            get: { checkoutProducts[session.id] ?? "" },
+                            set: { checkoutProducts[session.id] = $0 }
+                        ))
+                        .textFieldStyle(.plain)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 8)
+                        .background(theme.palette.glassFill)
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+
+                        TextField("Amount", text: Binding(
+                            get: { checkoutAmounts[session.id] ?? "" },
+                            set: { checkoutAmounts[session.id] = $0 }
+                        ))
+                        .textFieldStyle(.plain)
+                        .frame(width: 82)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 8)
+                        .background(theme.palette.glassFill)
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+
+                        Button {
+                            generateCheckout(session.id)
+                        } label: {
+                            if generatingCheckoutIDs.contains(session.id) {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Text("Generate")
+                            }
+                        }
+                        .buttonStyle(.os1Secondary)
+                        .disabled(!canGenerateCheckout(session.id))
+                    }
+                    if let message = checkoutMessages[session.id] {
+                        Text(message)
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(theme.palette.onCoralSecondary)
+                            .textSelection(.enabled)
+                    }
+                }
             }
             .font(.caption)
             .foregroundStyle(theme.palette.onCoralMuted)
 
+            validationEvidenceEditor(session)
+            complianceMetadataEditor(session)
+
             if let manifest = manager.factoryManifest(id: session.id) {
+                let savedCompliance = manager.complianceMetadata(id: session.id)
                 let campaigns = CompanyDistributionEngine.proposedCampaigns(companyID: session.id, manifest: manifest)
+                    .map { campaign in
+                        guard let savedCompliance else { return campaign }
+                        let checked = CompanyDistributionEngine.attachCompliance(to: campaign, metadata: savedCompliance)
+                        if checked.complianceDecision.canRun && checked.approvalState == .draft {
+                            return CompanyDistributionEngine.approve(checked)
+                        }
+                        return checked
+                    }
                 let distribution = CompanyDistributionEngine.summarize(campaigns: campaigns, results: [])
+                let awaitingApproval = campaigns.filter {
+                    $0.approvalState == .approvalRequired && $0.complianceDecision.canRun
+                }
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
                         Text("Factory assets")
@@ -1280,7 +1682,7 @@ struct CodexTasksView: View {
                             .os1Style(theme.typography.label)
                             .foregroundStyle(theme.palette.onCoralMuted)
                         Spacer()
-                        Text("active \(distribution.active.count) · blocked \(distribution.blocked.count)")
+                        Text("active \(distribution.active.count) · awaiting \(awaitingApproval.count) · blocked \(distribution.blocked.count)")
                             .font(.system(.caption2, design: .monospaced))
                             .foregroundStyle(theme.palette.onCoralMuted)
                     }
@@ -1336,6 +1738,88 @@ struct CodexTasksView: View {
         }
         .padding(20)
         .frame(width: 760, height: 640)
+    }
+
+    private func validationEvidenceEditor(_ session: CodexSession) -> some View {
+        let latest = manager.latestValidationResult(id: session.id)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Validation Evidence")
+                    .os1Style(theme.typography.label)
+                    .foregroundStyle(theme.palette.onCoralMuted)
+                Spacer()
+                if let latest {
+                    Text("interviews \(latest.metrics.interviewsCompleted) · replies \(percentLabel(latest.metrics.replyRate)) · signups \(percentLabel(latest.metrics.signupRate))")
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(theme.palette.onCoralMuted)
+                }
+            }
+            HStack(spacing: 8) {
+                compactInput("Interviews", text: validationInput(session.id, "interviews", fallback: latest.map { "\($0.metrics.interviewsCompleted)" } ?? ""))
+                compactInput("Reply %", text: validationInput(session.id, "reply", fallback: latest.map { percentInput($0.metrics.replyRate) } ?? ""))
+                compactInput("Signup %", text: validationInput(session.id, "signup", fallback: latest.map { percentInput($0.metrics.signupRate) } ?? ""))
+                compactInput("WTP", text: validationInput(session.id, "wtp", fallback: latest.map { "\($0.metrics.willingnessToPayCount)" } ?? ""))
+            }
+            HStack(spacing: 8) {
+                compactInput("Competitors", text: validationInput(session.id, "competitors", fallback: latest.map { "\($0.metrics.competitorDensity)" } ?? ""))
+                compactInput("CAC $", text: validationInput(session.id, "cac", fallback: latest.map { moneyInput($0.metrics.cacEstimateUSD) } ?? ""))
+                compactInput("Days", text: validationInput(session.id, "days", fallback: latest.map { "\($0.metrics.timeToFirstDollarDays)" } ?? ""))
+                Button("Save evidence") { saveValidationEvidence(session.id) }
+                    .buttonStyle(.os1Secondary)
+            }
+            TextField("Source URL or artifact path", text: validationInput(session.id, "source", fallback: latest?.sourceLinks.first ?? latest?.rawResearchArtifacts.first ?? ""))
+                .textFieldStyle(.plain)
+                .padding(.vertical, 6)
+                .padding(.horizontal, 8)
+                .background(theme.palette.glassFill)
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            TextField("Evidence rationale", text: validationInput(session.id, "rationale", fallback: latest?.rationale ?? ""))
+                .textFieldStyle(.plain)
+                .padding(.vertical, 6)
+                .padding(.horizontal, 8)
+                .background(theme.palette.glassFill)
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+        .font(.caption)
+        .foregroundStyle(theme.palette.onCoralMuted)
+    }
+
+    private func complianceMetadataEditor(_ session: CodexSession) -> some View {
+        let metadata = manager.complianceMetadata(id: session.id)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Compliance Metadata")
+                    .os1Style(theme.typography.label)
+                    .foregroundStyle(theme.palette.onCoralMuted)
+                Spacer()
+                Label(metadata?.hasRequiredOutboundFields == true ? "complete" : "incomplete", systemImage: metadata?.hasRequiredOutboundFields == true ? "checkmark.seal" : "lock.shield")
+                    .foregroundStyle(metadata?.hasRequiredOutboundFields == true ? .green : .orange)
+            }
+            HStack(spacing: 8) {
+                compactInput("Legal basis", text: complianceInput(session.id, "legalBasis", fallback: metadata?.legalBasis ?? ""))
+                compactInput("Audience", text: complianceInput(session.id, "targetAudience", fallback: metadata?.targetAudience ?? ""))
+                compactInput("Contact source", text: complianceInput(session.id, "contactSource", fallback: metadata?.contactSource ?? ""))
+            }
+            HStack(spacing: 8) {
+                compactInput("Unsubscribe", text: complianceInput(session.id, "unsubscribePath", fallback: metadata?.unsubscribePath ?? ""))
+                compactInput("Disclosure", text: complianceInput(session.id, "disclosureText", fallback: metadata?.disclosureText ?? ""))
+                compactInput("Retention", text: complianceInput(session.id, "dataRetentionPolicy", fallback: metadata?.dataRetentionPolicy ?? ""))
+                Button("Save metadata") { saveComplianceMetadata(session.id) }
+                    .buttonStyle(.os1Secondary)
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(theme.palette.onCoralMuted)
+    }
+
+    private func compactInput(_ title: String, text: Binding<String>) -> some View {
+        TextField(title, text: text)
+            .textFieldStyle(.plain)
+            .frame(minWidth: 72)
+            .padding(.vertical, 6)
+            .padding(.horizontal, 8)
+            .background(theme.palette.glassFill)
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
     }
 
     private func eventTimelineRow(_ event: CompanyEvent) -> some View {
@@ -1546,6 +2030,164 @@ struct CodexTasksView: View {
         ledgerNotes[id] = ""
     }
 
+    private var activePaymentProfileID: String? {
+        appState.activeConnection?.id.uuidString
+    }
+
+    private var hasStripeCheckoutCredential: Bool {
+        appState.paymentCredentialStore.hasSecret(.stripeSecretKey, forProfileId: activePaymentProfileID)
+    }
+
+    private func canGenerateCheckout(_ id: String) -> Bool {
+        let product = (checkoutProducts[id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawAmount = (checkoutAmounts[id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return !generatingCheckoutIDs.contains(id)
+            && !product.isEmpty
+            && Double(rawAmount.replacingOccurrences(of: "$", with: "")) ?? 0 > 0
+            && hasStripeCheckoutCredential
+    }
+
+    private func generateCheckout(_ id: String) {
+        let product = (checkoutProducts[id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawAmount = (checkoutAmounts[id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let amount = Double(rawAmount.replacingOccurrences(of: "$", with: "")),
+              amount > 0,
+              !product.isEmpty
+        else { return }
+
+        let profileID = activePaymentProfileID
+        let credentialStore = appState.paymentCredentialStore
+        let client = StripeCheckoutSessionClient(
+            apiKeyProvider: {
+                credentialStore.loadSecret(.stripeSecretKey, forProfileId: profileID)
+            }
+        )
+        generatingCheckoutIDs.insert(id)
+        checkoutMessages[id] = nil
+        Task {
+            do {
+                let link = try await manager.generateStripeSandboxCheckoutLink(
+                    id: id,
+                    productName: product,
+                    amountUSD: amount,
+                    client: client
+                )
+                await MainActor.run {
+                    if let url = link.checkoutURL {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(url.absoluteString, forType: .string)
+                        checkoutMessages[id] = "Copied Stripe sandbox checkout link: \(url.absoluteString)"
+                    } else {
+                        checkoutMessages[id] = "Stripe created checkout \(link.id)."
+                    }
+                    checkoutAmounts[id] = ""
+                    checkoutProducts[id] = ""
+                    generatingCheckoutIDs.remove(id)
+                }
+            } catch {
+                await MainActor.run {
+                    checkoutMessages[id] = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    generatingCheckoutIDs.remove(id)
+                }
+            }
+        }
+    }
+
+    private func validationInput(_ id: String, _ key: String, fallback: String) -> Binding<String> {
+        Binding(
+            get: { validationInputs[id]?[key] ?? fallback },
+            set: { value in
+                var scoped = validationInputs[id] ?? [:]
+                scoped[key] = value
+                validationInputs[id] = scoped
+            }
+        )
+    }
+
+    private func complianceInput(_ id: String, _ key: String, fallback: String) -> Binding<String> {
+        Binding(
+            get: { complianceInputs[id]?[key] ?? fallback },
+            set: { value in
+                var scoped = complianceInputs[id] ?? [:]
+                scoped[key] = value
+                complianceInputs[id] = scoped
+            }
+        )
+    }
+
+    private func saveValidationEvidence(_ id: String) {
+        let scoped = validationInputs[id] ?? [:]
+        let existing = manager.latestValidationResult(id: id)
+        let metrics = CompanyValidationResult.Metrics(
+            interviewsCompleted: scoped["interviews"].map { intValue($0) } ?? existing?.metrics.interviewsCompleted ?? 0,
+            replyRate: scoped["reply"].map { percentValue($0) } ?? existing?.metrics.replyRate ?? 0,
+            signupRate: scoped["signup"].map { percentValue($0) } ?? existing?.metrics.signupRate ?? 0,
+            willingnessToPayCount: scoped["wtp"].map { intValue($0) } ?? existing?.metrics.willingnessToPayCount ?? 0,
+            competitorDensity: scoped["competitors"].map { intValue($0) } ?? existing?.metrics.competitorDensity ?? 0,
+            cacEstimateUSD: scoped["cac"].map { doubleValue($0) } ?? existing?.metrics.cacEstimateUSD ?? 0,
+            timeToFirstDollarDays: max(1, scoped["days"].map { intValue($0) } ?? existing?.metrics.timeToFirstDollarDays ?? 1)
+        )
+        let source = (scoped["source"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let rationale = (scoped["rationale"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        manager.recordValidationEvidence(
+            id: id,
+            metrics: metrics,
+            sourceLinks: source.hasPrefix("http") ? [source] : [],
+            rawResearchArtifacts: source.isEmpty || source.hasPrefix("http") ? [] : [source],
+            rationale: rationale.isEmpty ? "Operator-entered validation evidence." : rationale
+        )
+    }
+
+    private func saveComplianceMetadata(_ id: String) {
+        let scoped = complianceInputs[id] ?? [:]
+        let existing = manager.complianceMetadata(id: id)
+        manager.saveComplianceMetadata(
+            id: id,
+            metadata: CompanyComplianceMetadata(
+                legalBasis: cleaned(scoped["legalBasis"]) ?? existing?.legalBasis,
+                unsubscribePath: cleaned(scoped["unsubscribePath"]) ?? existing?.unsubscribePath,
+                disclosureText: cleaned(scoped["disclosureText"]) ?? existing?.disclosureText,
+                targetAudience: cleaned(scoped["targetAudience"]) ?? existing?.targetAudience,
+                contactSource: cleaned(scoped["contactSource"]) ?? existing?.contactSource,
+                dataRetentionPolicy: cleaned(scoped["dataRetentionPolicy"]) ?? existing?.dataRetentionPolicy
+            )
+        )
+    }
+
+    private func cleaned(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func intValue(_ value: String?) -> Int {
+        Int((value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+    }
+
+    private func doubleValue(_ value: String?) -> Double {
+        Double((value ?? "").replacingOccurrences(of: "$", with: "").trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+    }
+
+    private func percentValue(_ value: String?) -> Double {
+        let numeric = doubleValue(value?.replacingOccurrences(of: "%", with: ""))
+        return numeric > 1 ? numeric / 100 : numeric
+    }
+
+    private func percentInput(_ value: Double) -> String {
+        String(format: "%.0f", value * 100)
+    }
+
+    private func moneyInput(_ value: Double) -> String {
+        String(format: "%.0f", value)
+    }
+
+    private func requestSenderDomainProvisioning(_ health: CompanyReputationHealth) {
+        guard let companyID = health.ownerCompanyIDs.first else { return }
+        manager.injectInstruction(
+            id: companyID,
+            instruction: "Provision a real sender domain before email warmup. The current derived domain \(health.label) is RFC-reserved placeholder-only, so do not send email or count warmup metrics until domain procurement, DNS, SPF, DKIM, and DMARC are configured."
+        )
+    }
+
     private func countdown(to date: Date?) -> String {
         guard let date else { return "—" }
         let interval = date.timeIntervalSince(nowTick)
@@ -1572,6 +2214,7 @@ struct CodexTasksView: View {
         case .paused:    return .gray
         case .completed: return .green
         case .failed:    return .red
+        case .failedCodexStartup: return .red
         case .killed:    return .gray
         }
     }
@@ -1653,6 +2296,7 @@ struct CodexTasksView: View {
         case .ledgerEntryRecorded: return "dollarsign.circle"
         case .untrustedContentInfluencedDecision: return "exclamationmark.shield"
         case .driftDetected: return "point.3.connected.trianglepath.dotted"
+        case .lifecycleStalemate: return "pause.circle.fill"
         case .experimentDecided: return "chart.line.uptrend.xyaxis"
         }
     }
@@ -1664,7 +2308,8 @@ struct CodexTasksView: View {
         case .heartbeatQueued, .externalSideEffect, .permissionChanged, .governanceDecisionRecorded:
             return .purple
         case .companyPaused, .fleetPaused, .approvalRequested, .approvalChangesRequested,
-             .untrustedContentInfluencedDecision, .permissionEscalated, .driftDetected:
+             .untrustedContentInfluencedDecision, .permissionEscalated, .driftDetected,
+             .lifecycleStalemate:
             return .orange
         case .heartbeatStarted:
             return .yellow

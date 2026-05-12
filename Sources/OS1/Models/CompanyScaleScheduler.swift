@@ -68,7 +68,7 @@ enum CompanyScaleScheduler {
     ) -> CompanyHeartbeatSchedulePlan {
         let activeCount = sessions.filter { $0.status == .running }.count
         let queuedCount = sessions.filter { $0.status == .queued }.count
-        let failedCount = sessions.filter { $0.status == .failed }.count
+        let failedCount = sessions.filter { $0.status == .failed || $0.status == .failedCodexStartup }.count
         var backpressure: [String] = []
         let computedBudgetReports: [String: CompanyBudgetReport] = budgetReports.isEmpty
             ? Dictionary(uniqueKeysWithValues: sessions.compactMap { session in
@@ -250,7 +250,7 @@ enum CompanyScaleScheduler {
             active: sessions.filter { $0.status == .running }.count,
             queued: sessions.filter { $0.status == .queued }.count,
             blocked: sessions.filter { $0.status == .blocked }.count,
-            failed: sessions.filter { $0.status == .failed }.count,
+            failed: sessions.filter { $0.status == .failed || $0.status == .failedCodexStartup }.count,
             profitable: sessions.filter { profitableCompanyIDs.contains($0.id) }.count,
             paused: sessions.filter { $0.status == .paused }.count,
             idle: sessions.filter { $0.status == .idle }.count,

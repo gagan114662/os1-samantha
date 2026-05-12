@@ -57,6 +57,28 @@ struct CompanyReputationTests {
     }
 
     @Test
+    func reservedSenderDomainsArePlaceholderOnlyAndCannotWarmUp() {
+        let placeholder = CompanyReputationEngine.evaluate(
+            asset: asset(id: "sender-domain:foo.example", label: "foo.example", status: .warmup),
+            signals: [signal(companyID: "company", assetID: "sender-domain:foo.example", sent: 100)]
+        )
+        let real = CompanyReputationEngine.evaluate(
+            asset: asset(id: "sender-domain:foo.com", label: "foo.com", status: .warmup),
+            signals: []
+        )
+
+        #expect(CompanyReputationEngine.isReservedSenderDomain("foo.example"))
+        #expect(CompanyReputationEngine.isReservedSenderDomain("https://mail.foo.test/warmup"))
+        #expect(!CompanyReputationEngine.isReservedSenderDomain("foo.com"))
+        #expect(placeholder.isPlaceholderSenderDomain)
+        #expect(placeholder.canUseForOutbound == false)
+        #expect(placeholder.recommendedDailyLimit == 0)
+        #expect(placeholder.warnings.contains { $0.contains("placeholder sender domain") })
+        #expect(placeholder.escalationTasks.contains { $0.contains("Provision a real sender domain") })
+        #expect(!real.isPlaceholderSenderDomain)
+    }
+
+    @Test
     func assetsCanBeQuarantinedOrRetiredAndCannotSend() {
         let quarantined = CompanyReputationEngine.quarantine(asset(id: "sender"), reason: "complaints")
         let retired = CompanyReputationEngine.retire(asset(id: "old"), reason: "burned domain")
@@ -98,12 +120,13 @@ struct CompanyReputationTests {
     private func asset(
         id: String,
         owners: [String] = ["company"],
+        label: String? = nil,
         status: CompanyReputationAsset.Status = .active
     ) -> CompanyReputationAsset {
         CompanyReputationAsset(
             id: id,
             kind: .senderDomain,
-            label: id,
+            label: label ?? id,
             ownerCompanyIDs: owners,
             status: status,
             dailySendLimit: 25,
