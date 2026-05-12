@@ -602,21 +602,72 @@ enum CompanyWindDownEngine {
     }
 }
 
+enum CompanyProfitMetric: String, Codable, CaseIterable, Hashable {
+    case timeToFirstRevenueDays
+    case mrr30
+    case mrr60
+    case mrr90
+    case grossMargin
+    case churn
+    case cac
+    case paybackPeriodDays
+}
+
+struct CompanyProfitMetricPrior: Codable, Hashable {
+    var metric: CompanyProfitMetric
+    var expectedValue: Double
+    var lowerCredible: Double
+    var upperCredible: Double
+}
+
+struct CompanyProfitMetricPosterior: Codable, Hashable {
+    var metric: CompanyProfitMetric
+    var expectedValue: Double
+    var lowerCredible: Double
+    var upperCredible: Double
+}
+
 struct CompanyProfitPrior: Codable, Hashable {
     var templateID: String
     var expectedMonthlyRevenueUSD: Double
     var tractability: Double
     var killThresholdEVUSD: Double
+    var targetMRRUSD: Double = 500
+    var killProbabilityThreshold: Double = 0.20
+    var killEvaluationDay: Int = 60
+    var metricPriors: [CompanyProfitMetric: CompanyProfitMetricPrior] = [:]
+
+    var effectiveMetricPriors: [CompanyProfitMetric: CompanyProfitMetricPrior] {
+        metricPriors.isEmpty ? Self.seededMetricPriors(monthlyRevenueUSD: expectedMonthlyRevenueUSD) : metricPriors
+    }
+
+    static func seededMetricPriors(monthlyRevenueUSD: Double) -> [CompanyProfitMetric: CompanyProfitMetricPrior] {
+        [
+            .timeToFirstRevenueDays: .init(metric: .timeToFirstRevenueDays, expectedValue: 30, lowerCredible: 7, upperCredible: 90),
+            .mrr30: .init(metric: .mrr30, expectedValue: monthlyRevenueUSD * 0.30, lowerCredible: monthlyRevenueUSD * 0.05, upperCredible: monthlyRevenueUSD * 0.60),
+            .mrr60: .init(metric: .mrr60, expectedValue: monthlyRevenueUSD * 0.65, lowerCredible: monthlyRevenueUSD * 0.15, upperCredible: monthlyRevenueUSD),
+            .mrr90: .init(metric: .mrr90, expectedValue: monthlyRevenueUSD, lowerCredible: monthlyRevenueUSD * 0.25, upperCredible: monthlyRevenueUSD * 1.60),
+            .grossMargin: .init(metric: .grossMargin, expectedValue: 0.65, lowerCredible: 0.35, upperCredible: 0.85),
+            .churn: .init(metric: .churn, expectedValue: 0.08, lowerCredible: 0.02, upperCredible: 0.18),
+            .cac: .init(metric: .cac, expectedValue: max(20, monthlyRevenueUSD * 0.20), lowerCredible: 5, upperCredible: max(50, monthlyRevenueUSD * 0.60)),
+            .paybackPeriodDays: .init(metric: .paybackPeriodDays, expectedValue: 45, lowerCredible: 14, upperCredible: 120)
+        ]
+    }
 }
 
 struct CompanyProfitPosterior: Codable, Hashable, Identifiable {
     var id: String { companyID }
     var companyID: String
     var templateID: String
+    var generatedAt: Date = Date()
+    var companyAgeDays: Int = 0
     var expectedValueUSD: Double
     var lowerCredibleUSD: Double
     var upperCredibleUSD: Double
     var tractability: Double
+    var probabilityMRRExceedsTarget: Double = 0
+    var metricEstimates: [CompanyProfitMetricPosterior] = []
+    var reasoning: [String] = []
     var overrideReason: String?
 }
 
@@ -633,21 +684,106 @@ struct CompanyPriorCalibrationRow: Codable, Hashable {
 }
 
 struct CompanyPriorCalibrationReport: Codable, Hashable {
+    var quarter: String = "current"
     var predictedVsActual: [CompanyPriorCalibrationRow]
     var calibrationError: Double
+    var historicalCalibrationError: [String: Double] = [:]
+}
+
+struct CompanyProfitActiveCompanyInput: Codable, Hashable, Identifiable {
+    var id: String { companyID }
+    var companyID: String
+    var templateID: String
+    var companyAgeDays: Int
+    var actualRevenueUSD: Double?
+    var metricObservations: [CompanyProfitMetric: Double]
+    var isActive: Bool
+}
+
+struct CompanyProfitNightlySnapshot: Codable, Hashable {
+    var generatedAt: Date
+    var posteriors: [CompanyProfitPosterior]
+}
+
+struct CompanyProfitDigestRank: Codable, Hashable, Identifiable {
+    var id: String { companyID }
+    var rank: Int
+    var companyID: String
+    var score: Double
+    var expectedValueUSD: Double
+    var credibleIntervalUSD: ClosedRange<Double>
+    var reasoning: [String]
+}
+
+struct CompanyProfitPriorOverride: Codable, Hashable {
+    var companyID: String
+    var templateID: String
+    var metric: CompanyProfitMetric
+    var expectedValue: Double
+    var reason: String
+    var createdBy: String
+    var createdAt: Date
+}
+
+struct CompanyPriorBacktestDecision: Codable, Hashable {
+    var companyID: String
+    var predictedKeep: Bool
+    var actualKeep: Bool
+    var probability: Double
+}
+
+struct CompanyClosedCompanyHistory: Codable, Hashable {
+    var companyID: String
+    var templateID: String
+    var day60RevenueUSD: Double
+    var day180MRRUSD: Double
+    var actualKept: Bool
+}
+
+struct CompanyPriorBacktestReport: Codable, Hashable {
+    var decisions: [CompanyPriorBacktestDecision]
+    var accuracy: Double
 }
 
 enum CompanyProfitPriorEngine {
-    static func posterior(companyID: String, prior: CompanyProfitPrior, actualRevenueUSD: Double?, overrideReason: String? = nil) -> CompanyProfitPosterior {
+    static func posterior(
+        companyID: String,
+        prior: CompanyProfitPrior,
+        actualRevenueUSD: Double?,
+        metricObservations: [CompanyProfitMetric: Double] = [:],
+        companyAgeDays: Int = 60,
+        now: Date = Date(),
+        overrideReason: String? = nil
+    ) -> CompanyProfitPosterior {
         let observed = actualRevenueUSD ?? prior.expectedMonthlyRevenueUSD
         let ev = (prior.expectedMonthlyRevenueUSD * 0.4) + (observed * 0.6)
+        let metricPosteriors = posteriorMetrics(
+            prior: prior,
+            observedRevenueUSD: observed,
+            observations: metricObservations
+        )
+        let probability = probabilityMRRExceedsTarget(
+            expectedValueUSD: ev,
+            lowerCredibleUSD: ev * 0.65,
+            upperCredibleUSD: ev * 1.35,
+            targetMRRUSD: prior.targetMRRUSD
+        )
         return CompanyProfitPosterior(
             companyID: companyID,
             templateID: prior.templateID,
+            generatedAt: now,
+            companyAgeDays: companyAgeDays,
             expectedValueUSD: ev,
             lowerCredibleUSD: ev * 0.65,
             upperCredibleUSD: ev * 1.35,
             tractability: prior.tractability,
+            probabilityMRRExceedsTarget: probability,
+            metricEstimates: metricPosteriors,
+            reasoning: [
+                "EV blends seeded template prior with observed revenue",
+                "score uses expected value times tractability",
+                "P(MRR >= \(Int(prior.targetMRRUSD))) = \(String(format: "%.2f", probability))"
+            ],
             overrideReason: overrideReason
         )
     }
@@ -660,19 +796,183 @@ enum CompanyProfitPriorEngine {
         }.prefix(7).map { $0 }
     }
 
+    static func portfolioDigestTopSeven(_ posteriors: [CompanyProfitPosterior]) -> [CompanyProfitDigestRank] {
+        topSeven(posteriors).enumerated().map { offset, posterior in
+            CompanyProfitDigestRank(
+                rank: offset + 1,
+                companyID: posterior.companyID,
+                score: posterior.expectedValueUSD * posterior.tractability,
+                expectedValueUSD: posterior.expectedValueUSD,
+                credibleIntervalUSD: posterior.lowerCredibleUSD...posterior.upperCredibleUSD,
+                reasoning: posterior.reasoning + [
+                    "tractability \(String(format: "%.2f", posterior.tractability))",
+                    "credible band \(Int(posterior.lowerCredibleUSD))-\(Int(posterior.upperCredibleUSD))"
+                ]
+            )
+        }
+    }
+
     static func killRecommendations(_ posteriors: [CompanyProfitPosterior], priors: [String: CompanyProfitPrior]) -> [CompanyKillRecommendation] {
         posteriors.compactMap { posterior in
-            guard let prior = priors[posterior.templateID], posterior.expectedValueUSD < prior.killThresholdEVUSD else { return nil }
+            guard let prior = priors[posterior.templateID],
+                  posterior.companyAgeDays >= prior.killEvaluationDay,
+                  (posterior.expectedValueUSD < prior.killThresholdEVUSD ||
+                   posterior.probabilityMRRExceedsTarget < prior.killProbabilityThreshold)
+            else { return nil }
             return CompanyKillRecommendation(companyID: posterior.companyID, approvalGated: true, reason: "belowTemplateKillThreshold")
         }
     }
 
-    static func calibrationReport(predicted: [String: Double], actual: [String: Double]) -> CompanyPriorCalibrationReport {
+    static func nightlySnapshot(
+        companies: [CompanyProfitActiveCompanyInput],
+        priors: [String: CompanyProfitPrior],
+        now: Date = Date()
+    ) -> CompanyProfitNightlySnapshot {
+        let posteriors = companies
+            .filter(\.isActive)
+            .compactMap { company -> CompanyProfitPosterior? in
+                guard let prior = priors[company.templateID] else { return nil }
+                return posterior(
+                    companyID: company.companyID,
+                    prior: prior,
+                    actualRevenueUSD: company.actualRevenueUSD,
+                    metricObservations: company.metricObservations,
+                    companyAgeDays: company.companyAgeDays,
+                    now: now
+                )
+            }
+        return CompanyProfitNightlySnapshot(generatedAt: now, posteriors: posteriors)
+    }
+
+    static func overridePrior(
+        _ prior: CompanyProfitPrior,
+        override: CompanyProfitPriorOverride
+    ) -> (prior: CompanyProfitPrior, event: CompanyEvent) {
+        var updated = prior
+        var metrics = updated.effectiveMetricPriors
+        let current = metrics[override.metric] ?? CompanyProfitMetricPrior(
+            metric: override.metric,
+            expectedValue: override.expectedValue,
+            lowerCredible: override.expectedValue * 0.5,
+            upperCredible: override.expectedValue * 1.5
+        )
+        metrics[override.metric] = CompanyProfitMetricPrior(
+            metric: override.metric,
+            expectedValue: override.expectedValue,
+            lowerCredible: min(current.lowerCredible, override.expectedValue * 0.75),
+            upperCredible: max(current.upperCredible, override.expectedValue * 1.25)
+        )
+        updated.metricPriors = metrics
+        let event = CompanyEvent(
+            occurredAt: override.createdAt,
+            companyID: override.companyID,
+            actor: override.createdBy,
+            kind: .governanceDecisionRecorded,
+            summary: "Profit prior override for \(override.metric.rawValue)",
+            metadata: [
+                "templateID": override.templateID,
+                "metric": override.metric.rawValue,
+                "expectedValue": String(format: "%.2f", override.expectedValue),
+                "reason": override.reason
+            ]
+        )
+        return (updated, event)
+    }
+
+    static func calibrationReport(
+        predicted: [String: Double],
+        actual: [String: Double],
+        quarter: String = "current",
+        historicalCalibrationError: [String: Double] = [:]
+    ) -> CompanyPriorCalibrationReport {
         let rows = predicted.compactMap { key, value -> CompanyPriorCalibrationRow? in
             guard let actualValue = actual[key] else { return nil }
             return CompanyPriorCalibrationRow(companyID: key, predictedUSD: value, actualUSD: actualValue)
         }
         let error = rows.isEmpty ? 0 : rows.map { abs($0.predictedUSD - $0.actualUSD) / max(1, abs($0.actualUSD)) }.reduce(0, +) / Double(rows.count)
-        return CompanyPriorCalibrationReport(predictedVsActual: rows, calibrationError: error)
+        var history = historicalCalibrationError
+        history[quarter] = error
+        return CompanyPriorCalibrationReport(
+            quarter: quarter,
+            predictedVsActual: rows,
+            calibrationError: error,
+            historicalCalibrationError: history
+        )
+    }
+
+    static func backtest(
+        history: [CompanyClosedCompanyHistory],
+        priors: [String: CompanyProfitPrior]
+    ) -> CompanyPriorBacktestReport {
+        let decisions = history.compactMap { record -> CompanyPriorBacktestDecision? in
+            guard let prior = priors[record.templateID] else { return nil }
+            let posterior = posterior(
+                companyID: record.companyID,
+                prior: prior,
+                actualRevenueUSD: record.day60RevenueUSD,
+                metricObservations: [.mrr60: record.day60RevenueUSD, .mrr90: record.day180MRRUSD],
+                companyAgeDays: 60
+            )
+            let predictedKeep = posterior.probabilityMRRExceedsTarget >= prior.killProbabilityThreshold &&
+                posterior.expectedValueUSD >= prior.killThresholdEVUSD
+            return CompanyPriorBacktestDecision(
+                companyID: record.companyID,
+                predictedKeep: predictedKeep,
+                actualKeep: record.actualKept,
+                probability: posterior.probabilityMRRExceedsTarget
+            )
+        }
+        let correct = decisions.filter { $0.predictedKeep == $0.actualKeep }.count
+        let accuracy = decisions.isEmpty ? 0 : Double(correct) / Double(decisions.count)
+        return CompanyPriorBacktestReport(decisions: decisions, accuracy: accuracy)
+    }
+
+    private static func posteriorMetrics(
+        prior: CompanyProfitPrior,
+        observedRevenueUSD: Double,
+        observations: [CompanyProfitMetric: Double]
+    ) -> [CompanyProfitMetricPosterior] {
+        CompanyProfitMetric.allCases.map { metric in
+            let seeded = prior.effectiveMetricPriors[metric] ?? CompanyProfitMetricPrior(
+                metric: metric,
+                expectedValue: observedRevenueUSD,
+                lowerCredible: observedRevenueUSD * 0.5,
+                upperCredible: observedRevenueUSD * 1.5
+            )
+            let observed = observations[metric] ?? defaultObservation(metric: metric, revenueUSD: observedRevenueUSD)
+            let expected = (seeded.expectedValue * 0.4) + (observed * 0.6)
+            let spread = max(abs(seeded.upperCredible - seeded.lowerCredible) * 0.35, abs(expected) * 0.15)
+            return CompanyProfitMetricPosterior(
+                metric: metric,
+                expectedValue: expected,
+                lowerCredible: max(0, expected - spread),
+                upperCredible: expected + spread
+            )
+        }
+    }
+
+    private static func defaultObservation(metric: CompanyProfitMetric, revenueUSD: Double) -> Double {
+        switch metric {
+        case .mrr30: return revenueUSD * 0.5
+        case .mrr60: return revenueUSD
+        case .mrr90: return revenueUSD * 1.2
+        case .grossMargin: return revenueUSD > 0 ? 0.65 : 0.35
+        case .churn: return revenueUSD > 0 ? 0.06 : 0.20
+        case .cac: return revenueUSD > 0 ? max(10, revenueUSD * 0.15) : 75
+        case .paybackPeriodDays: return revenueUSD > 0 ? 45 : 120
+        case .timeToFirstRevenueDays: return revenueUSD > 0 ? 21 : 90
+        }
+    }
+
+    private static func probabilityMRRExceedsTarget(
+        expectedValueUSD: Double,
+        lowerCredibleUSD: Double,
+        upperCredibleUSD: Double,
+        targetMRRUSD: Double
+    ) -> Double {
+        if targetMRRUSD <= lowerCredibleUSD { return 0.90 }
+        if targetMRRUSD >= upperCredibleUSD { return 0.10 }
+        let range = max(1, upperCredibleUSD - lowerCredibleUSD)
+        return max(0.05, min(0.95, (upperCredibleUSD - targetMRRUSD) / range))
     }
 }

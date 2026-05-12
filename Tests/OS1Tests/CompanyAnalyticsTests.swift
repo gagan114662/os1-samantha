@@ -33,7 +33,7 @@ struct CompanyAnalyticsTests {
     func measurementsPersistAsJSONL() throws {
         let url = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("measurements-\(UUID().uuidString).jsonl")
-        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        defer { try? FileManager.default.removeItem(at: url) }
         let measurements = try CompanyAnalyticsAdapter.ga4(
             payload: Data(#"[{"postID":"x-1","impressions":100,"clicks":12,"conversions":2,"revenueUSD":50}]"#.utf8),
             companyID: "co",
