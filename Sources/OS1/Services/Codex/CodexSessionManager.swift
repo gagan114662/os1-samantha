@@ -291,6 +291,7 @@ final class CodexSessionManager: ObservableObject {
     private let queueRetryBaseSeconds: TimeInterval = 120
     private let heartbeatLeaseSeconds: TimeInterval = 7_200
     private var processes: [String: Process] = [:]
+    private var pendingFleetDispatchTasks: [String: Task<Void, Never>] = [:]
     private let logQueue = DispatchQueue(label: "com.elementsoftware.os1.codex-tasks", qos: .utility)
     /// Serializes git worktree mutations across companies to dodge .git/index.lock races.
     private let worktreeMutex = NSLock()
@@ -504,6 +505,20 @@ final class CodexSessionManager: ObservableObject {
 
     private var heartbeatTasks: [String: Task<Void, Never>] = [:]
 
+    nonisolated static func heartbeatFleetPlan(
+        sessions: [CodexSession],
+        now: Date,
+        runners: [CompanyRunner] = [.local],
+        maxConcurrentCompaniesPerVM: Int = 5
+    ) -> CompanyFleetPlan {
+        CompanyFleetScheduler.plan(
+            sessions: sessions,
+            now: now,
+            runners: runners,
+            maxConcurrentCompaniesPerVM: maxConcurrentCompaniesPerVM
+        )
+    }
+
     private func scheduleHeartbeat(id: String) {
         heartbeatTasks[id]?.cancel()
         guard let session = sessions.first(where: { $0.id == id }) else { return }
@@ -529,7 +544,70 @@ final class CodexSessionManager: ObservableObject {
         heartbeatTasks[id] = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             guard !Task.isCancelled else { return }
-            await self?.runHeartbeat(id: id)
+            self?.dispatchFleetHeartbeats(triggeredBy: id)
+        }
+    }
+
+    private func dispatchFleetHeartbeats(triggeredBy triggerID: String? = nil, now: Date = Date()) {
+        let plan = Self.heartbeatFleetPlan(
+            sessions: sessions,
+            now: now,
+            runners: [CompanyRunner(
+                id: CompanyScaleScheduler.localRunnerID,
+                label: "This Mac",
+                maxConcurrentHeartbeats: maxConcurrentHeartbeats,
+                isAvailable: true
+            )],
+            maxConcurrentCompaniesPerVM: maxConcurrentHeartbeats
+        )
+        repoolRemovedRunners(plan.removedRunnerIDs, fallbackRunnerID: CompanyScaleScheduler.localRunnerID)
+        guard !plan.assignments.isEmpty else { return }
+
+        for assignment in plan.assignments {
+            heartbeatTasks[assignment.companyID]?.cancel()
+            heartbeatTasks.removeValue(forKey: assignment.companyID)
+
+            if assignment.started {
+                if let idx = sessions.firstIndex(where: { $0.id == assignment.companyID }) {
+                    sessions[idx].assignedRunnerID = assignment.runnerID
+                }
+                pendingFleetDispatchTasks[assignment.companyID]?.cancel()
+                pendingFleetDispatchTasks[assignment.companyID] = Task { @MainActor [weak self] in
+                    defer { self?.pendingFleetDispatchTasks.removeValue(forKey: assignment.companyID) }
+                    await self?.runHeartbeat(id: assignment.companyID)
+                }
+            } else if assignment.queued {
+                deferHeartbeatForQueue(
+                    id: assignment.companyID,
+                    summary: "Heartbeat queued by fleet scheduler capacity",
+                    metadata: [
+                        "triggeredBy": triggerID ?? "",
+                        "runnerID": assignment.runnerID,
+                        "fleetCapacity": "\(plan.capacity)",
+                        "fleetQueueDepth": "\(plan.queueDepth)"
+                    ]
+                )
+            }
+        }
+        persistSessions()
+    }
+
+    private func repoolRemovedRunners(_ removedRunnerIDs: [String], fallbackRunnerID: String) {
+        guard !removedRunnerIDs.isEmpty else { return }
+        let removed = Set(removedRunnerIDs)
+        for idx in sessions.indices where removed.contains(sessions[idx].assignedRunnerID) {
+            let previous = sessions[idx].assignedRunnerID
+            sessions[idx].assignedRunnerID = fallbackRunnerID
+            appendEvent(
+                kind: .lifecycleChanged,
+                companyID: sessions[idx].id,
+                actor: "os1",
+                summary: "Company runner repooled from unavailable runner \(previous)",
+                metadata: [
+                    "fromRunnerID": previous,
+                    "toRunnerID": fallbackRunnerID
+                ]
+            )
         }
     }
 
@@ -540,7 +618,11 @@ final class CodexSessionManager: ObservableObject {
         guard sessions[idx].status == .idle || sessions[idx].status == .queued || sessions[idx].status == .blocked else { return }
 
         if activeHeartbeatCount(excluding: id) >= maxConcurrentHeartbeats {
-            deferHeartbeatForQueue(id: id)
+            deferHeartbeatForQueue(
+                id: id,
+                summary: "Heartbeat queued by legacy concurrency guard",
+                metadata: ["maxConcurrentHeartbeats": "\(maxConcurrentHeartbeats)"]
+            )
             return
         }
 
@@ -824,20 +906,23 @@ final class CodexSessionManager: ObservableObject {
         }.count
     }
 
-    private func deferHeartbeatForQueue(id: String) {
+    private func deferHeartbeatForQueue(
+        id: String,
+        summary: String = "Heartbeat queued by fleet concurrency limit",
+        metadata: [String: String] = [:]
+    ) {
         guard let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
         let jitter = Double.random(in: 0...maxJitterSeconds)
         sessions[idx].status = .queued
         sessions[idx].nextHeartbeatAt = Date(timeIntervalSinceNow: queueRetryBaseSeconds + jitter)
         persistSessions()
+        var eventMetadata = metadata
+        eventMetadata["retrySeconds"] = "\(Int(queueRetryBaseSeconds + jitter))"
         appendEvent(
             kind: .heartbeatQueued,
             companyID: id,
-            summary: "Heartbeat queued by fleet concurrency limit",
-            metadata: [
-                "maxConcurrentHeartbeats": "\(maxConcurrentHeartbeats)",
-                "retrySeconds": "\(Int(queueRetryBaseSeconds + jitter))"
-            ]
+            summary: summary,
+            metadata: eventMetadata
         )
         scheduleHeartbeat(id: id)
     }
@@ -1553,6 +1638,7 @@ final class CodexSessionManager: ObservableObject {
 
         if sessions[idx].status == .idle || sessions[idx].status == .queued {
             scheduleHeartbeat(id: id)
+            dispatchFleetHeartbeats(triggeredBy: id)
         }
     }
 
@@ -2057,6 +2143,7 @@ final class CodexSessionManager: ObservableObject {
         for s in sessions where s.status == .idle || s.status == .queued || s.status == .blocked {
             scheduleHeartbeat(id: s.id)
         }
+        dispatchFleetHeartbeats()
     }
 
     // MARK: - Read

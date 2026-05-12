@@ -50,7 +50,7 @@ enum CompanyFleetScheduler {
         }
 
         let ready = sessions
-            .filter { $0.status == .idle || $0.status == .queued }
+            .filter { $0.status == .idle || $0.status == .queued || $0.status == .blocked }
             .filter { ($0.nextHeartbeatAt ?? .distantPast) <= now }
             .sorted { lhs, rhs in
                 let lhsDate = lhs.nextHeartbeatAt ?? lhs.startedAt

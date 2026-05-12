@@ -548,6 +548,59 @@ struct CodexSessionManagerTests {
         #expect(auth.operatorAction.contains("credential"))
     }
 
+    @Test
+    func managerFleetPlanStartsMultipleDueCompaniesThroughScheduler() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let sessions = (0..<7).map { index in
+            dueSession(id: "co-\(index)", nextHeartbeatAt: now.addingTimeInterval(-Double(index + 1)))
+        }
+
+        let plan = CodexSessionManager.heartbeatFleetPlan(
+            sessions: sessions,
+            now: now,
+            runners: [CompanyRunner(id: CompanyScaleScheduler.localRunnerID, label: "Local", maxConcurrentHeartbeats: 10, isAvailable: true)],
+            maxConcurrentCompaniesPerVM: 5
+        )
+
+        #expect(plan.runningAssignments.count == 5)
+        #expect(plan.queueDepth == 2)
+        #expect(Set(plan.runningAssignments.map(\.runnerID)) == [CompanyScaleScheduler.localRunnerID])
+    }
+
+    @Test
+    func managerFleetPlanRepoolsRemovedRunnerToAvailableRunner() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        var session = dueSession(id: "company", nextHeartbeatAt: now.addingTimeInterval(-1))
+        session.assignedRunnerID = "removed-runner"
+
+        let plan = CodexSessionManager.heartbeatFleetPlan(
+            sessions: [session],
+            now: now,
+            runners: [CompanyRunner(id: CompanyScaleScheduler.localRunnerID, label: "Local", maxConcurrentHeartbeats: 5, isAvailable: true)],
+            maxConcurrentCompaniesPerVM: 5
+        )
+
+        #expect(plan.removedRunnerIDs == ["removed-runner"])
+        #expect(plan.runningAssignments.first?.companyID == "company")
+        #expect(plan.runningAssignments.first?.runnerID == CompanyScaleScheduler.localRunnerID)
+    }
+
+    @Test
+    func managerFleetPlanPreservesBlockedRetryEligibility() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        var session = dueSession(id: "blocked", nextHeartbeatAt: now.addingTimeInterval(-1))
+        session.status = .blocked
+
+        let plan = CodexSessionManager.heartbeatFleetPlan(
+            sessions: [session],
+            now: now,
+            runners: [.local],
+            maxConcurrentCompaniesPerVM: 5
+        )
+
+        #expect(plan.runningAssignments.first?.companyID == "blocked")
+    }
+
     // MARK: - Status colour mapping (lightweight UI invariant)
 
     @Test
@@ -571,5 +624,19 @@ struct CodexSessionManagerTests {
             session.status = status
             #expect(!session.statusColor.isEmpty, "status \(status) must have a colour name")
         }
+    }
+
+    private func dueSession(id: String, nextHeartbeatAt: Date) -> CodexSession {
+        var session = CodexSession(
+            id: id,
+            title: id,
+            task: "run \(id)",
+            worktreePath: "/tmp/\(id)",
+            branch: "company/\(id)",
+            status: .idle,
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        session.nextHeartbeatAt = nextHeartbeatAt
+        return session
     }
 }
