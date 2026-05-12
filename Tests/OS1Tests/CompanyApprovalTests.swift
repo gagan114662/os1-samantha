@@ -178,17 +178,134 @@ struct CompanyApprovalTests {
         )
     }
 
+    @Test
+    func approvalQueueBatchesRoutesExpiresAndAutoApprovesAtScale() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let fresh = (0..<99).map { index in
+            approvalRequest(
+                id: "req-\(index)",
+                companyID: index % 2 == 0 ? "validated-\(index)" : "experimental-\(index)",
+                riskTier: index % 3 == 0 ? .high : (index % 3 == 1 ? .medium : .low),
+                proposedAction: index % 3 == 0 ? "post_tweet launch update" : "Send customer email",
+                requestedAt: now.addingTimeInterval(-300)
+            )
+        }
+        let expired = approvalRequest(
+            id: "expired",
+            companyID: "validated-expired",
+            riskTier: .high,
+            proposedAction: "post_tweet stale launch update",
+            requestedAt: now.addingTimeInterval(-90_000)
+        )
+        let policy = CompanyApprovalQueueEngine.appendOnlyPolicy(
+            id: "policy-1",
+            createdBy: "owner",
+            companyPattern: "validated-*",
+            actionType: "post_tweet",
+            riskTier: .high,
+            createdAt: now
+        )
+
+        let plan = CompanyApprovalQueueEngine.plan(
+            requests: fresh + [expired],
+            policies: [policy],
+            now: now
+        )
+        let expiredItem = try #require(plan.items.first { $0.requestID == "expired" })
+        let autoItem = try #require(plan.items.first { $0.requestID == "req-0" })
+
+        #expect(plan.items.count == 100)
+        #expect(plan.estimatedClearSeconds <= 300)
+        #expect(plan.batches.keys.contains("outbound_message|medium"))
+        #expect(plan.items.contains { $0.route == "immediate" })
+        #expect(plan.items.contains { $0.route == "hourly_digest" })
+        #expect(plan.items.contains { $0.route == "daily_digest" })
+        #expect(expiredItem.status == .expired)
+        #expect(expiredItem.releasesLeaseBy == now.addingTimeInterval(60))
+        #expect(expiredItem.companyState == "paused_awaiting_review")
+        #expect(autoItem.status == .approved)
+        #expect(autoItem.event?.metadata["approval_mode"] == "auto")
+    }
+
+    @Test
+    func autoApprovePoliciesAreAppendOnlyRevocableAndEligibilityRequiresCleanHistory() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let request = approvalRequest(
+            id: "candidate",
+            companyID: "validated-1",
+            riskTier: .low,
+            proposedAction: "Send customer email",
+            requestedAt: now
+        )
+        let prior = (0..<3).map { index in
+            var approved = approvalRequest(
+                id: "prior-\(index)",
+                companyID: "validated-1",
+                riskTier: .low,
+                proposedAction: "Send customer email",
+                requestedAt: now.addingTimeInterval(Double(-index) * 86_400)
+            )
+            approved.status = .approved
+            return approved
+        }
+        let policy = CompanyApprovalQueueEngine.appendOnlyPolicy(
+            id: "policy-2",
+            createdBy: "owner",
+            companyPattern: "validated-*",
+            actionType: "outbound_message",
+            riskTier: .low,
+            createdAt: now
+        )
+        let revoked = CompanyApprovalQueueEngine.revoke(
+            policy,
+            at: now.addingTimeInterval(1),
+            reason: "Operator saw one bad send and stopped automation"
+        )
+        let activePlan = CompanyApprovalQueueEngine.plan(requests: [request], policies: [policy], now: now)
+        let revokedPlan = CompanyApprovalQueueEngine.plan(requests: [request], policies: [revoked], now: now.addingTimeInterval(2))
+
+        #expect(
+            CompanyApprovalQueueEngine.autoPolicyEligible(
+                request: request,
+                priorApprovals: prior,
+                revocationCount: 0,
+                threshold: 3,
+                since: now.addingTimeInterval(-14 * 86_400)
+            )
+        )
+        #expect(policy.createdBy == "owner")
+        #expect(policy.createdAt == now)
+        #expect(!policy.isRevoked)
+        #expect(revoked.isRevoked)
+        #expect(activePlan.items.first?.approvalMode == "auto")
+        #expect(revokedPlan.items.first?.approvalMode == "manual")
+        #expect(revokedPlan.items.first?.route == "daily_digest")
+        #expect(
+            !CompanyApprovalQueueEngine.autoPolicyEligible(
+                request: request,
+                priorApprovals: prior,
+                revocationCount: 1,
+                threshold: 3,
+                since: now.addingTimeInterval(-14 * 86_400)
+            )
+        )
+    }
+
     private func approvalRequest(
+        id: String? = nil,
+        companyID: String = "company-1",
+        riskTier: CompanyApprovalRequest.RiskTier = .high,
         proposedAction: String,
         estimatedCostUSD: Double? = nil,
-        destinationAccount: String? = nil
+        destinationAccount: String? = nil,
+        requestedAt: Date = Date(timeIntervalSince1970: 1_800_000_000)
     ) -> CompanyApprovalRequest {
         CompanyApprovalRequest(
-            id: "approval-\(CompanyApprovalPolicy.fingerprint(proposedAction).hashValue)",
-            companyID: "company-1",
-            requestedAt: Date(timeIntervalSince1970: 1_800_000_000),
+            id: id ?? "approval-\(CompanyApprovalPolicy.fingerprint(proposedAction).hashValue)",
+            companyID: companyID,
+            requestedAt: requestedAt,
             actor: "codex",
-            riskTier: .high,
+            riskTier: riskTier,
             proposedAction: proposedAction,
             expectedEffect: "Expected external effect",
             estimatedCostUSD: estimatedCostUSD,

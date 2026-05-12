@@ -287,3 +287,205 @@ enum CompanyApprovalGate {
             .first
     }
 }
+
+struct CompanyApprovalAutoPolicy: Codable, Hashable, Identifiable {
+    var id: String
+    var createdBy: String
+    var companyPattern: String
+    var actionType: String
+    var riskTier: CompanyApprovalRequest.RiskTier
+    var createdAt: Date
+    var thresholdCount: Int
+    var windowDays: Int
+    var revokedAt: Date?
+    var revocationReason: String?
+
+    var isRevoked: Bool { revokedAt != nil }
+
+    func matches(_ request: CompanyApprovalRequest, now: Date) -> Bool {
+        guard !isRevoked else { return false }
+        guard riskTier == request.riskTier else { return false }
+        guard actionType == CompanyApprovalQueueEngine.actionType(for: request.proposedAction) else { return false }
+        if companyPattern == "*" { return true }
+        if companyPattern.hasSuffix("*") {
+            return request.companyID.hasPrefix(String(companyPattern.dropLast()))
+        }
+        return request.companyID == companyPattern
+    }
+}
+
+struct CompanyApprovalQueueItem: Codable, Hashable, Identifiable {
+    var id: String { requestID }
+    var requestID: String
+    var companyID: String
+    var route: String
+    var batchKey: String
+    var status: CompanyApprovalRequest.Status
+    var approvalMode: String
+    var releasesLeaseBy: Date?
+    var companyState: String?
+    var event: CompanyEvent?
+}
+
+struct CompanyApprovalQueuePlan: Codable, Hashable {
+    var items: [CompanyApprovalQueueItem]
+    var batches: [String: [String]]
+    var estimatedClearSeconds: Int
+}
+
+enum CompanyApprovalQueueEngine {
+    static func actionType(for proposedAction: String) -> String {
+        let normalized = CompanyApprovalPolicy.fingerprint(proposedAction)
+        if normalized.contains("post tweet") || normalized.contains("post_tweet") { return "post_tweet" }
+        if normalized.contains("refund") { return "refund" }
+        if normalized.contains("publish") || normalized.contains("post ") { return "publish" }
+        if normalized.contains("email") || normalized.contains("message") || normalized.contains("dm ") { return "outbound_message" }
+        if normalized.contains("charge") || normalized.contains("checkout") || normalized.contains("payment") { return "payment" }
+        return normalized.split(separator: " ").prefix(2).joined(separator: "_")
+    }
+
+    static func appendOnlyPolicy(
+        id: String,
+        createdBy: String,
+        companyPattern: String,
+        actionType: String,
+        riskTier: CompanyApprovalRequest.RiskTier,
+        createdAt: Date,
+        thresholdCount: Int = 3,
+        windowDays: Int = 14
+    ) -> CompanyApprovalAutoPolicy {
+        CompanyApprovalAutoPolicy(
+            id: id,
+            createdBy: createdBy,
+            companyPattern: companyPattern,
+            actionType: actionType,
+            riskTier: riskTier,
+            createdAt: createdAt,
+            thresholdCount: thresholdCount,
+            windowDays: windowDays,
+            revokedAt: nil,
+            revocationReason: nil
+        )
+    }
+
+    static func revoke(
+        _ policy: CompanyApprovalAutoPolicy,
+        at date: Date,
+        reason: String
+    ) -> CompanyApprovalAutoPolicy {
+        var copy = policy
+        copy.revokedAt = date
+        copy.revocationReason = CompanyEvent.redact(reason)
+        return copy
+    }
+
+    static func plan(
+        requests: [CompanyApprovalRequest],
+        policies: [CompanyApprovalAutoPolicy],
+        now: Date,
+        expirySeconds: TimeInterval = 86_400
+    ) -> CompanyApprovalQueuePlan {
+        let items = requests.map { request in
+            item(for: request, policies: policies, now: now, expirySeconds: expirySeconds)
+        }
+        let pendingBatches = Dictionary(grouping: items.filter { $0.status == .pending }) { $0.batchKey }
+            .mapValues { $0.map(\.requestID).sorted() }
+        let estimated = min(300, pendingBatches.count * 20 + items.filter { $0.status == .pending }.count)
+        return CompanyApprovalQueuePlan(
+            items: items,
+            batches: pendingBatches,
+            estimatedClearSeconds: estimated
+        )
+    }
+
+    static func autoPolicyEligible(
+        request: CompanyApprovalRequest,
+        priorApprovals: [CompanyApprovalRequest],
+        revocationCount: Int,
+        threshold: Int,
+        since: Date
+    ) -> Bool {
+        guard revocationCount == 0 else { return false }
+        let action = actionType(for: request.proposedAction)
+        let matches = priorApprovals.filter {
+            $0.status == .approved &&
+                $0.requestedAt >= since &&
+                $0.riskTier == request.riskTier &&
+                actionType(for: $0.proposedAction) == action
+        }
+        return matches.count >= threshold
+    }
+
+    static func event(for request: CompanyApprovalRequest, approvalMode: String, now: Date) -> CompanyEvent {
+        CompanyEvent(
+            occurredAt: now,
+            companyID: request.companyID,
+            actor: "approval-queue",
+            kind: .approvalApproved,
+            summary: "Approval queue approved \(request.proposedAction)",
+            riskTier: request.riskTier.rawValue,
+            approvalState: "approved",
+            metadata: [
+                "approval_mode": approvalMode,
+                "requestID": request.id,
+                "actionType": actionType(for: request.proposedAction)
+            ]
+        )
+    }
+
+    private static func item(
+        for request: CompanyApprovalRequest,
+        policies: [CompanyApprovalAutoPolicy],
+        now: Date,
+        expirySeconds: TimeInterval
+    ) -> CompanyApprovalQueueItem {
+        let action = actionType(for: request.proposedAction)
+        let batchKey = "\(action)|\(request.riskTier.rawValue)"
+        let expiresAt = request.expiresAt ?? request.requestedAt.addingTimeInterval(expirySeconds)
+        if request.status == .pending && now >= expiresAt {
+            return CompanyApprovalQueueItem(
+                requestID: request.id,
+                companyID: request.companyID,
+                route: "expired",
+                batchKey: batchKey,
+                status: .expired,
+                approvalMode: "expired",
+                releasesLeaseBy: now.addingTimeInterval(60),
+                companyState: "paused_awaiting_review",
+                event: nil
+            )
+        }
+        if policies.contains(where: { $0.matches(request, now: now) }) {
+            return CompanyApprovalQueueItem(
+                requestID: request.id,
+                companyID: request.companyID,
+                route: "auto",
+                batchKey: batchKey,
+                status: .approved,
+                approvalMode: "auto",
+                releasesLeaseBy: nil,
+                companyState: nil,
+                event: event(for: request, approvalMode: "auto", now: now)
+            )
+        }
+        return CompanyApprovalQueueItem(
+            requestID: request.id,
+            companyID: request.companyID,
+            route: route(for: request.riskTier),
+            batchKey: batchKey,
+            status: request.status,
+            approvalMode: "manual",
+            releasesLeaseBy: nil,
+            companyState: nil,
+            event: nil
+        )
+    }
+
+    private static func route(for riskTier: CompanyApprovalRequest.RiskTier) -> String {
+        switch riskTier {
+        case .critical, .high: return "immediate"
+        case .medium: return "hourly_digest"
+        case .low: return "daily_digest"
+        }
+    }
+}
