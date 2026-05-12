@@ -197,9 +197,14 @@ struct RootView: View {
         .help(voiceDiagnosticText)
         .popover(isPresented: $showRealtimeVoicePanel, arrowEdge: .trailing) {
             RealtimeVoicePanelView(
+                isVoiceEnabled: appState.isRealtimeVoiceEnabled,
+                currentStatus: appState.realtimeVoiceStatus,
                 orgoAPIKey: appState.orgoCredentialStore.loadAPIKey(),
                 orgoDefaultComputerID: activeOrgoComputerID,
                 onClose: { showRealtimeVoicePanel = false },
+                onEnableVoice: {
+                    appState.setRealtimeVoiceMode(true)
+                },
                 onConfigureProviders: {
                     showRealtimeVoicePanel = false
                     appState.requestSectionSelection(.providers)
@@ -208,50 +213,32 @@ struct RootView: View {
         }
     }
 
+    private var voiceStatusDisplay: VoiceSidebarStatus {
+        VoiceSidebarStatus(
+            isEnabled: appState.isRealtimeVoiceEnabled,
+            bootAnimationFinished: bootAnimationFinished,
+            status: appState.realtimeVoiceStatus
+        )
+    }
+
     private var voiceStatusLabel: String {
-        guard appState.isRealtimeVoiceEnabled else { return "OFF" }
-        guard bootAnimationFinished else { return "..." }
-        let status = appState.realtimeVoiceStatus.lowercased()
-        if status.contains("listening") || status.contains("connected") {
-            return "ON"
-        }
-        if status.contains("error") || status.contains("failed") || status.contains("missing") {
-            return "ERR"
-        }
-        if status.contains("idle") || status.contains("stopped") || status.contains("off") {
-            return "..."
-        }
-        if status.contains("requesting") || status.contains("starting") || status.contains("ready") || status.contains("connecting") {
-            return "..."
-        }
-        return "..."
+        voiceStatusDisplay.label
     }
 
     private var voiceStatusColor: Color {
         guard appState.isRealtimeVoiceEnabled else { return theme.palette.onCoralMuted }
         guard bootAnimationFinished else { return theme.palette.warning }
-        let status = appState.realtimeVoiceStatus.lowercased()
-        if status.contains("error") || status.contains("failed") || status.contains("missing") {
+        if voiceStatusDisplay.isError {
             return theme.palette.danger
         }
-        if status.contains("listening") || status.contains("connected") {
+        if voiceStatusDisplay.isConnected {
             return theme.palette.success
         }
         return theme.palette.warning
     }
 
     private var voiceDiagnosticText: String {
-        guard appState.isRealtimeVoiceEnabled else {
-            return L10n.string("Voice mode is off.")
-        }
-        let status = appState.realtimeVoiceStatus.trimmingCharacters(in: .whitespacesAndNewlines)
-        if status.isEmpty {
-            return L10n.string("Voice status is not available yet.")
-        }
-        if voiceStatusLabel == "ERR" {
-            return status
-        }
-        return L10n.string("Voice status: %@", status)
+        voiceStatusDisplay.diagnosticText
     }
 
     private func sectionRow(_ section: AppSection) -> some View {
@@ -390,6 +377,57 @@ struct RootView: View {
                 }
             )
         }
+    }
+}
+
+struct VoiceSidebarStatus: Equatable {
+    let isEnabled: Bool
+    let bootAnimationFinished: Bool
+    let status: String
+
+    var label: String {
+        guard isEnabled else { return "OFF" }
+        guard bootAnimationFinished else { return "..." }
+        if isConnected {
+            return "ON"
+        }
+        if isError {
+            return "ERR"
+        }
+        return "..."
+    }
+
+    var isConnected: Bool {
+        guard isEnabled, bootAnimationFinished else { return false }
+        return normalizedStatus.contains("listening") || normalizedStatus.contains("connected")
+    }
+
+    var isError: Bool {
+        guard isEnabled, bootAnimationFinished else { return false }
+        return normalizedStatus.contains("error")
+            || normalizedStatus.contains("failed")
+            || normalizedStatus.contains("missing")
+    }
+
+    var diagnosticText: String {
+        guard isEnabled else {
+            return L10n.string("Voice mode is off. Click to open the Voice panel and turn it back on.")
+        }
+        guard !trimmedStatus.isEmpty else {
+            return L10n.string("Voice status is not available yet.")
+        }
+        if isError {
+            return trimmedStatus
+        }
+        return L10n.string("Voice status: %@", trimmedStatus)
+    }
+
+    private var trimmedStatus: String {
+        status.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var normalizedStatus: String {
+        trimmedStatus.lowercased()
     }
 }
 

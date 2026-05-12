@@ -433,17 +433,32 @@ private struct WorkspaceFileEditorPane: View {
         document?.hasLoaded == true
     }
 
+    private var hasError: Bool {
+        document?.errorMessage?.isEmpty == false
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             headerPanel
 
-            if let errorMessage = document?.errorMessage {
+            if let errorMessage = document?.userFacingErrorMessage {
                 HermesSurfacePanel {
-                    Text(errorMessage)
-                        .font(.os1Body)
-                        .foregroundStyle(.os1OnCoralPrimary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
+                    VStack(alignment: .leading, spacing: 10) {
+                        Label(L10n.string("File unavailable"), systemImage: "exclamationmark.triangle")
+                            .font(.os1TitlePanel)
+                            .foregroundStyle(.os1OnCoralPrimary)
+                        Text(errorMessage)
+                            .font(.os1Body)
+                            .foregroundStyle(.os1OnCoralSecondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled)
+                        Text(L10n.string("Choose a different file from the library, or reload after creating it on the active host."))
+                            .font(.os1SmallCaps)
+                            .foregroundStyle(.os1OnCoralMuted)
+                        Button(L10n.string("Reload"), action: onReload)
+                            .buttonStyle(.os1Secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
 
@@ -545,6 +560,13 @@ private struct WorkspaceFileEditorPane: View {
 
                 if isLoading {
                     HermesLoadingOverlay()
+                } else if hasError {
+                    ContentUnavailableView(
+                        L10n.string("File unavailable"),
+                        systemImage: "doc.badge.exclamationmark",
+                        description: Text(L10n.string("Resolve the error above before editing this file."))
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if !hasLoaded {
                     ContentUnavailableView(
                         L10n.string("Loading file"),

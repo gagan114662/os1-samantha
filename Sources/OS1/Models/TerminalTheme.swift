@@ -161,17 +161,15 @@ struct TerminalThemePreference: Codable, Equatable {
         quickPresets.first(where: { $0.style == style })
     }
 
-    /// The signature OS1 terminal — coral surface with cream text,
-    /// ANSI palette tuned to warm-leaning accents (coral red, sage
-    /// green, warm gold, soft warm blue). Uses `coral600` (the
-    /// palette's deepest coral) so the terminal stays in the same
-    /// hue family as the app surface instead of dropping into a
-    /// muddy terracotta brown.
+    /// The signature OS1 terminal — dark console surface with cream
+    /// text and warm ANSI accents. The shell pane intentionally does
+    /// not inherit the app's coral chrome; terminal text needs a
+    /// stable high-contrast backdrop.
     private static let os1Preset = TerminalThemePreset(
         style: .os1,
         name: "OS1",
-        summary: "Coral surface with cream text and warm ANSI accents — the canonical OS1 terminal.",
-        backgroundColor: TerminalThemeColor(hex: 0xA84832),  // matches palette.coral600
+        summary: "Dark console surface with cream text and warm ANSI accents — the canonical OS1 terminal.",
+        backgroundColor: TerminalThemeColor(hex: 0x141313),
         foregroundColor: TerminalThemeColor(hex: 0xF5EBE0),  // warm cream
         ansiPalette: palette([
             // Standard 0–7

@@ -6,15 +6,21 @@ struct RealtimeVoicePanelView: View {
     @StateObject private var server: RealtimeVoiceSessionServer
     @State private var pageStatus = "idle"
 
+    let isVoiceEnabled: Bool
+    let currentStatus: String
     let onClose: () -> Void
+    let onEnableVoice: () -> Void
     let onConfigureProviders: () -> Void
 
     init(
+        isVoiceEnabled: Bool = true,
+        currentStatus: String = "",
         elevenLabsAPIKey: String? = nil,
         elevenLabsAgentID: String? = nil,
         orgoAPIKey: String? = nil,
         orgoDefaultComputerID: String? = nil,
         onClose: @escaping () -> Void,
+        onEnableVoice: @escaping () -> Void = {},
         onConfigureProviders: @escaping () -> Void = {}
     ) {
         _server = StateObject(wrappedValue: RealtimeVoiceSessionServer(
@@ -23,7 +29,10 @@ struct RealtimeVoicePanelView: View {
             orgoAPIKeyProvider: { orgoAPIKey ?? ProcessInfo.processInfo.environment["ORGO_API_KEY"] },
             orgoDefaultComputerIDProvider: { orgoDefaultComputerID ?? ProcessInfo.processInfo.environment["ORGO_DEFAULT_COMPUTER_ID"] }
         ))
+        self.isVoiceEnabled = isVoiceEnabled
+        self.currentStatus = currentStatus
         self.onClose = onClose
+        self.onEnableVoice = onEnableVoice
         self.onConfigureProviders = onConfigureProviders
     }
 
@@ -35,7 +44,7 @@ struct RealtimeVoicePanelView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(L10n.string("Realtime Voice"))
                         .os1Style(theme.typography.titlePanel)
-                    Text(server.statusText)
+                    Text(panelStatusText)
                         .os1Style(theme.typography.label)
                         .foregroundStyle(theme.palette.onCoralSecondary)
                 }
@@ -52,7 +61,35 @@ struct RealtimeVoicePanelView: View {
             }
             .foregroundStyle(theme.palette.onCoralPrimary)
 
-            if let error = server.lastError {
+            if !isVoiceEnabled {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(L10n.string("Voice mode is off."))
+                        .os1Style(theme.typography.body)
+                        .foregroundStyle(theme.palette.onCoralSecondary)
+                    Text(L10n.string("Turn it back on here, or configure provider credentials if startup reports an error."))
+                        .os1Style(theme.typography.label)
+                        .foregroundStyle(theme.palette.onCoralMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 8) {
+                        Button {
+                            onEnableVoice()
+                        } label: {
+                            Label(L10n.string("Enable Voice"), systemImage: "mic.fill")
+                        }
+                        .buttonStyle(.os1Primary)
+
+                        Button {
+                            onConfigureProviders()
+                        } label: {
+                            Label(L10n.string("Configure in Providers"), systemImage: "key")
+                        }
+                        .buttonStyle(.os1Secondary)
+                    }
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .os1GlassSurface(cornerRadius: 8)
+            } else if let error = voiceErrorText {
                 VStack(alignment: .leading, spacing: 10) {
                     Text(error)
                         .os1Style(theme.typography.body)
@@ -96,11 +133,37 @@ struct RealtimeVoicePanelView: View {
         .os1GlassSurface(cornerRadius: 8)
         .shadow(color: .black.opacity(0.20), radius: 24, x: 0, y: 14)
         .task {
-            server.start()
+            if isVoiceEnabled {
+                server.start()
+            }
         }
         .onDisappear {
             server.stop()
         }
+        .onChange(of: isVoiceEnabled) { _, enabled in
+            if enabled {
+                server.start()
+            } else {
+                server.stop()
+            }
+        }
+    }
+
+    private var panelStatusText: String {
+        guard isVoiceEnabled else { return L10n.string("Off") }
+        if let lastError = server.lastError {
+            return lastError
+        }
+        let trimmedStatus = currentStatus.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedStatus.isEmpty ? server.statusText : trimmedStatus
+    }
+
+    private var voiceErrorText: String? {
+        if let lastError = server.lastError {
+            return lastError
+        }
+        let status = VoiceSidebarStatus(isEnabled: true, bootAnimationFinished: true, status: currentStatus)
+        return status.isError ? status.diagnosticText : nil
     }
 }
 

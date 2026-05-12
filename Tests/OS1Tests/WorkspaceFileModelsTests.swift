@@ -4,6 +4,20 @@ import Testing
 
 struct WorkspaceFileModelsTests {
     @Test
+    func fileEditorDocumentExtractsUserFacingJSONError() {
+        let message = #"{"ok":false,"error":"~/.hermes/memories/MEMORY.md does not exist on the active host."}"#
+
+        #expect(FileEditorDocument.userFacingErrorMessage(message) == "~/.hermes/memories/MEMORY.md does not exist on the active host.")
+    }
+
+    @Test
+    func fileEditorDocumentPreservesPlainErrorText() {
+        let message = "  Permission denied while reading ~/.hermes/MEMORY.md  "
+
+        #expect(FileEditorDocument.userFacingErrorMessage(message) == "Permission denied while reading ~/.hermes/MEMORY.md")
+    }
+
+    @Test
     func bookmarkUsesReadableTitleAndStableFileID() {
         let bookmark = WorkspaceFileBookmark(
             id: UUID(uuidString: "3C2E63A9-6A5B-4F10-8AF5-58434840904E")!,
