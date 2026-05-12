@@ -15,6 +15,9 @@ struct DoctorView: View {
                 if !viewModel.paymentsSnapshot.rows.isEmpty {
                     PaymentsHealthCard(snapshot: viewModel.paymentsSnapshot)
                 }
+                if !viewModel.fleetSnapshot.workers.isEmpty {
+                    DoctorFleetSummaryRows(snapshot: viewModel.fleetSnapshot)
+                }
                 if viewModel.checks.isEmpty {
                     placeholder
                 } else {
@@ -120,6 +123,29 @@ struct DoctorView: View {
         .overlay {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .strokeBorder(theme.palette.glassBorder, lineWidth: 1)
+        }
+    }
+}
+
+private struct DoctorFleetSummaryRows: View {
+    @Environment(\.os1Theme) private var theme
+    let snapshot: CompanyFleetHealthSnapshot
+
+    var body: some View {
+        HermesSurfacePanel {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(DoctorViewModel.fleetDoctorRows(snapshot: snapshot), id: \.self) { row in
+                    HStack(spacing: 8) {
+                        Image(systemName: "cpu")
+                            .foregroundStyle(theme.palette.onCoralMuted)
+                            .frame(width: 18)
+                        Text(row)
+                            .os1Style(theme.typography.body)
+                            .foregroundStyle(theme.palette.onCoralSecondary)
+                        Spacer()
+                    }
+                }
+            }
         }
     }
 }

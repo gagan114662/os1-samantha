@@ -1109,3 +1109,21 @@
 "Last event" = "Last event";
 "Reconciliation" = "Reconciliation";
 "Replay store size" = "Replay store size";
+
+// MARK: - Fleet scheduler surface
+"Fleet" = "Флот";
+"Queue depth %lld" = "Очередь %lld";
+"Drifting %lld" = "Дрейф %lld";
+"Kind" = "Тип";
+"Active companies" = "Активные компании";
+"No active companies" = "Нет активных компаний";
+"Last heartbeat" = "Последний heartbeat";
+"local" = "локальный";
+"orgo" = "orgo";
+"%lld/%lld" = "%lld/%lld";
+"n/a" = "н/д";
+"%llds" = "%lldс";
+"%lldm" = "%lldм";
+"%lldh" = "%lldч";
+"Fleet capacity: %lld workers × cap %lld = %lld concurrent" = "Емкость флота: %lld воркеров × лимит %lld = %lld одновременно";
+"Companies flagged as drifting: %lld" = "Компаний с отмеченным дрейфом: %lld";

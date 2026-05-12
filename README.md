@@ -69,6 +69,11 @@ A runner is not just a chat thread. It is a durable company record with
 a scoped worktree, a heartbeat lease, a log, a journal, a ledger,
 approval state, and a run timeline.
 
+OS1 dispatches heartbeats through `CompanyFleetScheduler` with a default
+per-VM cap of 5. Total concurrent companies = configured workers × cap. On
+a single-Orgo-VM setup that's 5; with N Orgo workers it's 5N. Tune via
+`~/.os1/portfolio/fleet.json`.
+
 Current foundations:
 
 - **Sandbox-first execution**: new companies default to sandbox mode.

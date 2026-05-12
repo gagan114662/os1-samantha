@@ -1109,3 +1109,21 @@
 "Last event" = "Last event";
 "Reconciliation" = "Reconciliation";
 "Replay store size" = "Replay store size";
+
+// MARK: - Fleet scheduler surface
+"Fleet" = "队列";
+"Queue depth %lld" = "队列深度 %lld";
+"Drifting %lld" = "漂移 %lld";
+"Kind" = "类型";
+"Active companies" = "活跃公司";
+"No active companies" = "没有活跃公司";
+"Last heartbeat" = "上次心跳";
+"local" = "本地";
+"orgo" = "orgo";
+"%lld/%lld" = "%lld/%lld";
+"n/a" = "不适用";
+"%llds" = "%lld秒";
+"%lldm" = "%lld分";
+"%lldh" = "%lld小时";
+"Fleet capacity: %lld workers × cap %lld = %lld concurrent" = "队列容量：%lld 个 worker × 上限 %lld = %lld 并发";
+"Companies flagged as drifting: %lld" = "标记为漂移的公司：%lld";

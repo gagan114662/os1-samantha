@@ -47,6 +47,7 @@ final class DoctorViewModel: ObservableObject {
 
     @Published private(set) var checks: [Check] = []
     @Published private(set) var paymentsSnapshot: PaymentsHealthSnapshot = .empty
+    @Published private(set) var fleetSnapshot: CompanyFleetHealthSnapshot = .empty
     @Published private(set) var isRefreshing = false
     @Published private(set) var actionInFlight: Action?
     @Published var actionError: String?
@@ -108,7 +109,13 @@ final class DoctorViewModel: ObservableObject {
         // being selected. These cover the moving parts that historically
         // failed silently (codex auth, claude CLI, WUPHF, launchd plists,
         // keychain credentials, voice-port freshness).
+        let now = Date()
         paymentsSnapshot = Self.paymentsHealthSnapshot()
+        fleetSnapshot = Self.fleetHealthSnapshot(
+            sessions: CodexSessionManager.shared.sessions,
+            events: CodexSessionManager.shared.recentEvents(limit: 10_000),
+            now: now
+        )
         let localChecks = await makeLocalStackChecks()
 
         guard let connection = currentConnection else {
@@ -120,7 +127,7 @@ final class DoctorViewModel: ObservableObject {
                 detail: nil,
                 actions: []
             )]
-            lastRefreshedAt = Date()
+            lastRefreshedAt = now
             return
         }
 
@@ -140,7 +147,7 @@ final class DoctorViewModel: ObservableObject {
                 detail: message,
                 actions: []
             )]
-            lastRefreshedAt = Date()
+            lastRefreshedAt = now
             return
         }
 
@@ -154,7 +161,7 @@ final class DoctorViewModel: ObservableObject {
         // touching the VM), then host-level (gateway, Hermes version,
         // Telegram downstream).
         checks = localChecks + [gatewayCheck, hermesCheck, telegramCheck]
-        lastRefreshedAt = Date()
+        lastRefreshedAt = now
     }
 
     // MARK: - Local stack checks
@@ -248,6 +255,32 @@ final class DoctorViewModel: ObservableObject {
             .init(provider: "App Store", endpoint: "sales.csv", lastEvent: "csv-ready", reconciliation: "ledger-ready", replayStoreSize: replayStoreSize),
             .init(provider: "Google Play", endpoint: "earnings.csv", lastEvent: "csv-ready", reconciliation: "ledger-ready", replayStoreSize: replayStoreSize)
         ])
+    }
+
+    static func fleetHealthSnapshot(
+        sessions: [CodexSession],
+        events: [CompanyEvent] = [],
+        runners: [CompanyRunner] = [.local],
+        now: Date = Date()
+    ) -> CompanyFleetHealthSnapshot {
+        CompanyFleetHealthSnapshot.make(
+            sessions: sessions,
+            runners: runners,
+            driftFlaggedCompanyIDs: CompanyFleetHealthSnapshot.driftFlaggedCompanyIDs(from: events),
+            now: now
+        )
+    }
+
+    static func fleetDoctorRows(snapshot: CompanyFleetHealthSnapshot) -> [String] {
+        [
+            L10n.string(
+                "Fleet capacity: %lld workers × cap %lld = %lld concurrent",
+                snapshot.activeWorkers,
+                snapshot.perWorkerCap,
+                snapshot.totalConcurrentCapacity
+            ),
+            L10n.string("Companies flagged as drifting: %lld", snapshot.driftingCompanyCount)
+        ]
     }
 
     private func makeStateBackupCheck() async -> Check {

@@ -1110,3 +1110,21 @@
 "Last event" = "Last event";
 "Reconciliation" = "Reconciliation";
 "Replay store size" = "Replay store size";
+
+// MARK: - Fleet scheduler surface
+"Fleet" = "Fleet";
+"Queue depth %lld" = "Queue depth %lld";
+"Drifting %lld" = "Drifting %lld";
+"Kind" = "Kind";
+"Active companies" = "Active companies";
+"No active companies" = "No active companies";
+"Last heartbeat" = "Last heartbeat";
+"local" = "local";
+"orgo" = "orgo";
+"%lld/%lld" = "%lld/%lld";
+"n/a" = "n/a";
+"%llds" = "%llds";
+"%lldm" = "%lldm";
+"%lldh" = "%lldh";
+"Fleet capacity: %lld workers × cap %lld = %lld concurrent" = "Fleet capacity: %lld workers × cap %lld = %lld concurrent";
+"Companies flagged as drifting: %lld" = "Companies flagged as drifting: %lld";

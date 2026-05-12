@@ -287,7 +287,7 @@ final class CodexSessionManager: ObservableObject {
     /// Global active-runner cap. This is the first fleet backpressure layer:
     /// big template batches can create 100 companies, but only this many
     /// heartbeat processes may run at once.
-    private let maxConcurrentHeartbeats = 3
+    private let maxConcurrentHeartbeats = CompanyFleetHealthSnapshot.defaultPerWorkerCap
     private let queueRetryBaseSeconds: TimeInterval = 120
     private let heartbeatLeaseSeconds: TimeInterval = 7_200
     private var processes: [String: Process] = [:]
