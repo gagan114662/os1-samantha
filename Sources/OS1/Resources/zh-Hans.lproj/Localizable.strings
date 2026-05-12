@@ -287,10 +287,12 @@
 "Browse the active host." = "浏览当前主机。";
 "Canonical" = "核心";
 "Choose a file from the library." = "从库中选择一个文件。";
+"Choose a different file from the library, or reload after creating it on the active host." = "请从库中选择其他文件，或在活动主机上创建后重新加载。";
 "Content" = "内容";
 "Done" = "完成";
 "Enter a remote path to browse files over SSH." = "输入远端路径，通过 SSH 浏览文件。";
 "Folder" = "文件夹";
+"File unavailable" = "文件不可用";
 "Go" = "前往";
 "Hermes Home" = "Hermes 主目录";
 "Home" = "主目录";
@@ -310,6 +312,7 @@
 "Reading over SSH." = "正在通过 SSH 读取。";
 "Reload the file before saving." = "保存前请重新加载文件。";
 "Remove Bookmark" = "移除书签";
+"Resolve the error above before editing this file." = "请先解决上方错误，然后再编辑此文件。";
 "Remove this bookmark?" = "移除此书签？";
 "Showing %@ of %@ items" = "显示 %@ / %@ 项";
 "The remote file stays untouched." = "远端文件不会被更改。";
@@ -1001,8 +1004,12 @@
 "Toggle Voice Mode" = "Toggle Voice Mode";
 "Voice" = "Voice";
 "Voice mode is off." = "语音模式已关闭。";
+"Voice mode is off. Click to open the Voice panel and turn it back on." = "语音模式已关闭。点击打开语音面板并重新开启。";
 "Voice status is not available yet." = "语音状态尚不可用。";
 "Voice status: %@" = "语音状态：%@";
+"Turn it back on here, or configure provider credentials if startup reports an error." = "可在这里重新开启；如果启动时报错，请配置提供商凭据。";
+"Enable Voice" = "启用语音";
+"Off" = "关闭";
 "Configure in Providers" = "在 Providers 中配置";
 
 // MARK: - Pass 2 additions: Tasks / Tiles / Doctor (auto-appended)

@@ -287,10 +287,12 @@
 "Browse the active host." = "Просмотр активного хоста.";
 "Canonical" = "Основные";
 "Choose a file from the library." = "Выберите файл из библиотеки.";
+"Choose a different file from the library, or reload after creating it on the active host." = "Выберите другой файл в библиотеке или перезагрузите его после создания на активном хосте.";
 "Content" = "Содержимое";
 "Done" = "Готово";
 "Enter a remote path to browse files over SSH." = "Введите удаленный путь для просмотра файлов через SSH.";
 "Folder" = "Папка";
+"File unavailable" = "Файл недоступен";
 "Go" = "Перейти";
 "Hermes Home" = "Домашняя папка Hermes";
 "Home" = "Домой";
@@ -310,6 +312,7 @@
 "Reading over SSH." = "Чтение через SSH.";
 "Reload the file before saving." = "Перезагрузите файл перед сохранением.";
 "Remove Bookmark" = "Удалить закладку";
+"Resolve the error above before editing this file." = "Устраните ошибку выше перед редактированием этого файла.";
 "Remove this bookmark?" = "Удалить эту закладку?";
 "Showing %@ of %@ items" = "Показано %@ из %@ элементов";
 "The remote file stays untouched." = "Удаленный файл не изменится.";
@@ -1001,8 +1004,12 @@
 "Toggle Voice Mode" = "Toggle Voice Mode";
 "Voice" = "Voice";
 "Voice mode is off." = "Режим Voice выключен.";
+"Voice mode is off. Click to open the Voice panel and turn it back on." = "Режим Voice выключен. Нажмите, чтобы открыть панель Voice и снова включить его.";
 "Voice status is not available yet." = "Статус Voice пока недоступен.";
 "Voice status: %@" = "Статус Voice: %@";
+"Turn it back on here, or configure provider credentials if startup reports an error." = "Включите его здесь или настройте учетные данные провайдера, если при запуске появляется ошибка.";
+"Enable Voice" = "Включить Voice";
+"Off" = "Выключено";
 "Configure in Providers" = "Настроить в Providers";
 
 // MARK: - Pass 2 additions: Tasks / Tiles / Doctor (auto-appended)

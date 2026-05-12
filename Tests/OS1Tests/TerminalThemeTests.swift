@@ -3,6 +3,19 @@ import Testing
 
 struct TerminalThemeTests {
     @Test
+    func defaultOS1TerminalUsesDarkHighContrastBackground() {
+        let appearance = TerminalThemePreference.defaultValue.resolvedAppearance
+
+        #expect(appearance.style == .os1)
+        #expect(appearance.backgroundColor.red < 0.12)
+        #expect(appearance.backgroundColor.green < 0.12)
+        #expect(appearance.backgroundColor.blue < 0.12)
+        #expect(appearance.foregroundColor.red > 0.9)
+        #expect(appearance.foregroundColor.green > 0.85)
+        #expect(appearance.foregroundColor.blue > 0.8)
+    }
+
+    @Test
     func presetSelectionProducesStablePresetAppearance() {
         let preference = TerminalThemePreference().selectingPreset(.dusk)
         let appearance = preference.resolvedAppearance

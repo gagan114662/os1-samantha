@@ -497,6 +497,11 @@ final class AppState: ObservableObject {
         realtimeVoiceStatus = isRealtimeVoiceEnabled ? "starting" : "off"
     }
 
+    func setRealtimeVoiceMode(_ isEnabled: Bool) {
+        isRealtimeVoiceEnabled = isEnabled
+        realtimeVoiceStatus = isEnabled ? "starting" : "off"
+    }
+
     func updateRealtimeVoiceStatus(_ status: String) {
         realtimeVoiceStatus = status
     }
