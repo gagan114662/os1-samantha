@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 struct CompanyMeasurement: Codable, Hashable, Identifiable {
@@ -312,6 +313,19 @@ enum CompanyPaymentCheckout {
 }
 
 enum PaymentWebhookReceiver {
+    enum Error: Swift.Error, Equatable {
+        case missingSignatureHeader
+        case invalidSignatureHeader
+        case timestampOutsideTolerance
+        case signatureMismatch
+        case replayedEvent(String)
+    }
+
+    struct StripeSignature: Equatable {
+        var timestamp: Int
+        var signatures: [String]
+    }
+
     static func stripe(payload: Data, receivedAt: Date = Date()) throws -> CompanyPaymentConversionEvent {
         struct StripeFixture: Decodable {
             let id: String
@@ -349,6 +363,53 @@ enum PaymentWebhookReceiver {
         )
     }
 
+    static func verifiedStripe(
+        payload: Data,
+        signatureHeader: String?,
+        endpointSecret: String,
+        seenEventIDs: Set<String>,
+        now: Date = Date(),
+        toleranceSeconds: TimeInterval = 300
+    ) throws -> CompanyPaymentConversionEvent {
+        try verifyStripeSignature(
+            payload: payload,
+            signatureHeader: signatureHeader,
+            endpointSecret: endpointSecret,
+            now: now,
+            toleranceSeconds: toleranceSeconds
+        )
+        let event = try stripe(payload: payload, receivedAt: now)
+        guard !seenEventIDs.contains(event.id) else {
+            throw Error.replayedEvent(event.id)
+        }
+        return event
+    }
+
+    static func verifyStripeSignature(
+        payload: Data,
+        signatureHeader: String?,
+        endpointSecret: String,
+        now: Date = Date(),
+        toleranceSeconds: TimeInterval = 300
+    ) throws {
+        guard let signatureHeader, !signatureHeader.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw Error.missingSignatureHeader
+        }
+        let parsed = try parseStripeSignatureHeader(signatureHeader)
+        let age = abs(now.timeIntervalSince1970 - TimeInterval(parsed.timestamp))
+        guard age <= toleranceSeconds else {
+            throw Error.timestampOutsideTolerance
+        }
+        let expected = stripeSignature(payload: payload, timestamp: parsed.timestamp, endpointSecret: endpointSecret)
+        guard parsed.signatures.contains(where: { constantTimeEqualHex($0, expected) }) else {
+            throw Error.signatureMismatch
+        }
+    }
+
+    static func stripeSignatureHeader(payload: Data, timestamp: Int, endpointSecret: String) -> String {
+        "t=\(timestamp),v1=\(stripeSignature(payload: payload, timestamp: timestamp, endpointSecret: endpointSecret))"
+    }
+
     static func ledgerEntry(for event: CompanyPaymentConversionEvent) -> CompanyLedgerEntry {
         let kind: CompanyLedgerEntry.Kind = event.kind == .refundCreated || event.kind == .chargebackOpened ? .refund : .revenue
         return CompanyLedgerEntry(
@@ -363,6 +424,45 @@ enum PaymentWebhookReceiver {
             confidence: .verified,
             note: "payment_webhook=\(event.id) kind=\(event.kind.rawValue)"
         )
+    }
+
+    private static func parseStripeSignatureHeader(_ header: String) throws -> StripeSignature {
+        var timestamp: Int?
+        var signatures: [String] = []
+        for component in header.split(separator: ",") {
+            let pair = component.split(separator: "=", maxSplits: 1).map {
+                String($0).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            guard pair.count == 2 else { continue }
+            if pair[0] == "t" {
+                timestamp = Int(pair[1])
+            } else if pair[0] == "v1" {
+                signatures.append(pair[1])
+            }
+        }
+        guard let timestamp, !signatures.isEmpty else {
+            throw Error.invalidSignatureHeader
+        }
+        return StripeSignature(timestamp: timestamp, signatures: signatures)
+    }
+
+    private static func stripeSignature(payload: Data, timestamp: Int, endpointSecret: String) -> String {
+        var signedPayload = Data("\(timestamp).".utf8)
+        signedPayload.append(payload)
+        let key = SymmetricKey(data: Data(endpointSecret.utf8))
+        let digest = HMAC<SHA256>.authenticationCode(for: signedPayload, using: key)
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func constantTimeEqualHex(_ lhs: String, _ rhs: String) -> Bool {
+        let left = Array(lhs.lowercased().utf8)
+        let right = Array(rhs.lowercased().utf8)
+        guard left.count == right.count else { return false }
+        var diff: UInt8 = 0
+        for index in left.indices {
+            diff |= left[index] ^ right[index]
+        }
+        return diff == 0
     }
 }
 

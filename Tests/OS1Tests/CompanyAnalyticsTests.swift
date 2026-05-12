@@ -101,6 +101,89 @@ struct CompanyAnalyticsTests {
     }
 
     @Test
+    func signedStripeWebhookVerifiesAndBlocksReplay() throws {
+        let payload = Data(#"{"id":"evt_signed","type":"checkout.session.completed","amount_total":2900,"currency":"usd","payment_intent":"pi_signed","metadata":{"company_id":"co","utm_campaign":"co","utm_content":"post-1"}}"#.utf8)
+        let timestamp = 1_800_000_000
+        let header = PaymentWebhookReceiver.stripeSignatureHeader(
+            payload: payload,
+            timestamp: timestamp,
+            endpointSecret: "whsec_test"
+        )
+
+        let event = try PaymentWebhookReceiver.verifiedStripe(
+            payload: payload,
+            signatureHeader: header,
+            endpointSecret: "whsec_test",
+            seenEventIDs: [],
+            now: Date(timeIntervalSince1970: TimeInterval(timestamp + 10)),
+            toleranceSeconds: 300
+        )
+
+        #expect(event.id == "evt_signed")
+        #expect(event.kind == .checkoutCompleted)
+        #expect(event.providerReference == "pi_signed")
+        #expect(throws: PaymentWebhookReceiver.Error.replayedEvent("evt_signed")) {
+            _ = try PaymentWebhookReceiver.verifiedStripe(
+                payload: payload,
+                signatureHeader: header,
+                endpointSecret: "whsec_test",
+                seenEventIDs: ["evt_signed"],
+                now: Date(timeIntervalSince1970: TimeInterval(timestamp + 10)),
+                toleranceSeconds: 300
+            )
+        }
+    }
+
+    @Test
+    func stripeWebhookRejectsTamperedStaleMissingAndMalformedSignatures() throws {
+        let payload = Data(#"{"id":"evt_signed","type":"checkout.session.completed","amount_total":2900,"currency":"usd","payment_intent":"pi_signed","metadata":{"company_id":"co","utm_campaign":"co","utm_content":"post-1"}}"#.utf8)
+        let tamperedPayload = Data(#"{"id":"evt_signed","type":"checkout.session.completed","amount_total":9900,"currency":"usd","payment_intent":"pi_signed","metadata":{"company_id":"co","utm_campaign":"co","utm_content":"post-1"}}"#.utf8)
+        let timestamp = 1_800_000_000
+        let header = PaymentWebhookReceiver.stripeSignatureHeader(
+            payload: payload,
+            timestamp: timestamp,
+            endpointSecret: "whsec_test"
+        )
+
+        #expect(throws: PaymentWebhookReceiver.Error.signatureMismatch) {
+            try PaymentWebhookReceiver.verifyStripeSignature(
+                payload: tamperedPayload,
+                signatureHeader: header,
+                endpointSecret: "whsec_test",
+                now: Date(timeIntervalSince1970: TimeInterval(timestamp + 10)),
+                toleranceSeconds: 300
+            )
+        }
+        #expect(throws: PaymentWebhookReceiver.Error.timestampOutsideTolerance) {
+            try PaymentWebhookReceiver.verifyStripeSignature(
+                payload: payload,
+                signatureHeader: header,
+                endpointSecret: "whsec_test",
+                now: Date(timeIntervalSince1970: TimeInterval(timestamp + 301)),
+                toleranceSeconds: 300
+            )
+        }
+        #expect(throws: PaymentWebhookReceiver.Error.missingSignatureHeader) {
+            try PaymentWebhookReceiver.verifyStripeSignature(
+                payload: payload,
+                signatureHeader: nil,
+                endpointSecret: "whsec_test",
+                now: Date(timeIntervalSince1970: TimeInterval(timestamp + 10)),
+                toleranceSeconds: 300
+            )
+        }
+        #expect(throws: PaymentWebhookReceiver.Error.invalidSignatureHeader) {
+            try PaymentWebhookReceiver.verifyStripeSignature(
+                payload: payload,
+                signatureHeader: "v0=legacy",
+                endpointSecret: "whsec_test",
+                now: Date(timeIntervalSince1970: TimeInterval(timestamp + 10)),
+                toleranceSeconds: 300
+            )
+        }
+    }
+
+    @Test
     func killScaleRecommendationRefusesOnlyInferredMeasurements() {
         let inferred = CompanyMeasurement(
             id: "m1",
