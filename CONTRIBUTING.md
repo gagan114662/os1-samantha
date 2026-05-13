@@ -20,10 +20,24 @@ swift test
 
 The app bundle is written to `dist/OS1.app`.
 
+For parallel SwiftPM work, install the local guard hooks once per checkout:
+
+```sh
+./scripts/install-hooks.sh
+```
+
+Use a per-process scratch path when focusing a test so concurrent agents do not
+share `.build` state:
+
+```sh
+make test-focus FILTER=CompanySandboxProfileTests
+```
+
 ## Development Rules
 
 - Do not commit secrets, local machine paths, `.env` files, signing
-  certificates, release zips, or build output.
+  certificates, release zips, or build output. SwiftPM `.build/` and
+  `.build-*/` directories must never be staged.
 - Prefer Keychain-backed credential flows over environment-only setup.
 - Keep public defaults conservative. Anything that gives the voice model
   shell/admin power must be explicit opt-in.
