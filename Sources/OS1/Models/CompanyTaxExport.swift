@@ -56,10 +56,19 @@ extension TaxLedgerLine {
         currency: String = "USD",
         jurisdiction: String? = nil
     ) -> TaxLedgerLine? {
-        guard let entity = registry.entity(forCompany: entry.companyID) else { return nil }
+        // Prefer the entry's own `entityID` if the source-of-truth event was
+        // already tagged (AC2). Fall back to the registry's company → entity
+        // mapping for legacy rows that haven't been backfilled yet.
+        let resolvedEntityID: String?
+        if let tagged = entry.entityID {
+            resolvedEntityID = tagged
+        } else {
+            resolvedEntityID = registry.entity(forCompany: entry.companyID)?.id
+        }
+        guard let entityID = resolvedEntityID else { return nil }
         return TaxLedgerLine(
             id: entry.id,
-            entityID: entity.id,
+            entityID: entityID,
             occurredAt: entry.occurredAt ?? Date(timeIntervalSince1970: 0),
             kind: entry.kind,
             category: entry.category,
@@ -68,6 +77,49 @@ extension TaxLedgerLine {
             jurisdiction: jurisdiction,
             counterparty: nil,
             memo: entry.note
+        )
+    }
+
+    /// Bridge helper for AC2: convert a verified payment-provider event into a
+    /// `TaxLedgerLine`. Preserves the event's own `entityID` if populated;
+    /// otherwise consults the registry. Returns nil if neither path resolves
+    /// to a known entity.
+    static func from(
+        paymentEvent event: CompanyPaymentProviderEvent,
+        registry: TaxEntityRegistry,
+        currency: String = "USD",
+        jurisdiction: String? = nil
+    ) -> TaxLedgerLine? {
+        let entityID = event.entityID
+            ?? registry.entity(forCompany: event.companyID)?.id
+        guard let entityID else { return nil }
+        let kind: CompanyLedgerEntry.Kind
+        let category: CompanyLedgerEntry.Category
+        switch event.kind {
+        case .charge, .payout:
+            kind = .revenue
+            category = .sales
+        case .refund:
+            kind = .refund
+            category = .refund
+        case .fee:
+            kind = .cost
+            category = .paymentFees
+        case .tax, .transfer:
+            kind = .cost
+            category = .other
+        }
+        return TaxLedgerLine(
+            id: "payment-\(event.id)",
+            entityID: entityID,
+            occurredAt: event.occurredAt ?? Date(timeIntervalSince1970: 0),
+            kind: kind,
+            category: category,
+            amount: event.amountUSD,
+            currency: currency,
+            jurisdiction: jurisdiction,
+            counterparty: event.sourceReference,
+            memo: "Provider event \(event.id)"
         )
     }
 }

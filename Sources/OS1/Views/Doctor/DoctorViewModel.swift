@@ -676,8 +676,122 @@ final class DoctorViewModel: ObservableObject {
             CheckDefinition(id: "portfolio-p&l", title: "Portfolio P&L") { [weak self] in
                 guard let self else { throw DoctorCheckError.deallocated }
                 return self.makePortfolioPnLCheck()
+            },
+            CheckDefinition(id: "tax-pipeline", title: "Tax pipeline") { [weak self] in
+                guard let self else { throw DoctorCheckError.deallocated }
+                return self.makeTaxPipelineCheck(recentEvents: recentEvents)
             }
         ]
+    }
+
+    /// Drives the Doctor `tax-pipeline` row. Loads the entity registry from
+    /// `~/.os1/entities.json` (when present), then folds in the recent ledger
+    /// signal from `CodexSessionManager` to compute unclassified-cost +
+    /// missing-entity-mapping counts. Sales-tax accrual goes through
+    /// `TaxLedgerLine.from(paymentEvent:registry:)` so the verified provider
+    /// events the rest of the app already records feed the calculation.
+    nonisolated func makeTaxPipelineCheck(recentEvents: [CompanyEvent]) -> Check {
+        let registry = Self.loadEntityRegistry() ?? TaxEntityRegistry()
+        let ledger = Self.recentLedgerEntries(from: recentEvents)
+        let taxLines = Self.taxLedgerLines(from: ledger, registry: registry)
+        let row = TaxPipelineDoctorRow.compute(
+            ledger: ledger,
+            registry: registry,
+            now: Date(),
+            taxLedgerLines: taxLines
+        )
+        return Self.taxPipelineDoctorRow(row: row, registryIsEmpty: registry.entities.isEmpty)
+    }
+
+    /// Pure rendering of the Doctor row. Static + nonisolated so tests can
+    /// drive it with synthetic `TaxPipelineDoctorRow` payloads.
+    nonisolated static func taxPipelineDoctorRow(
+        row: TaxPipelineDoctorRow,
+        registryIsEmpty: Bool = false
+    ) -> Check {
+        if registryIsEmpty {
+            return Check(
+                id: "tax-pipeline",
+                title: "Tax pipeline",
+                severity: .warn,
+                summary: "No tax entities registered yet.",
+                detail: "Populate ~/.os1/entities.json (or use the Tax tab) so the pipeline can attribute ledger lines and emit filing-ready exports.",
+                actions: []
+            )
+        }
+        let severity: Severity
+        let summary: String
+        let detailParts = [
+            row.unclassifiedCostCount > 0 ? "\(row.unclassifiedCostCount) unclassified cost line(s)" : nil,
+            row.missingEntityMappingCount > 0 ? "\(row.missingEntityMappingCount) ledger entries with no entity tag" : nil,
+            row.salesTaxAccruedSinceLastFilingUSD > 0
+                ? String(format: "CA sales-tax accrual since filing start: $%.2f", row.salesTaxAccruedSinceLastFilingUSD)
+                : nil,
+            row.nextQuarterlyEstimateDeadline.map { "Next quarterly deadline: \($0)" }
+        ].compactMap { $0 }
+        if row.missingEntityMappingCount > 0 || row.unclassifiedCostCount > 5 {
+            severity = .error
+            summary = "Backfill needed: \(row.missingEntityMappingCount) untagged ledger entries, \(row.unclassifiedCostCount) unclassified costs."
+        } else if row.unclassifiedCostCount > 0 {
+            severity = .warn
+            summary = "\(row.unclassifiedCostCount) cost line(s) need operator categorization before filing."
+        } else if let days = row.daysUntilNextDeadline, days <= 14 {
+            severity = .warn
+            summary = "Quarterly estimate due in \(days) day(s) — review and submit."
+        } else {
+            severity = .ok
+            summary = "All ledger entries are entity-tagged and classified."
+        }
+        return Check(
+            id: "tax-pipeline",
+            title: "Tax pipeline",
+            severity: severity,
+            summary: summary,
+            detail: detailParts.isEmpty ? nil : detailParts.joined(separator: "; "),
+            actions: []
+        )
+    }
+
+    private nonisolated static func loadEntityRegistry() -> TaxEntityRegistry? {
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".os1", isDirectory: true)
+            .appendingPathComponent(TaxEntityRegistry.fileName)
+        guard FileManager.default.fileExists(atPath: url.path),
+              let data = try? Data(contentsOf: url) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(TaxEntityRegistry.self, from: data)
+    }
+
+    private nonisolated static func recentLedgerEntries(from events: [CompanyEvent]) -> [CompanyLedgerEntry] {
+        events.compactMap { event -> CompanyLedgerEntry? in
+            guard event.kind == .ledgerEntryRecorded,
+                  let amountString = event.metadata["amountUSD"],
+                  let amount = Double(amountString),
+                  let kindRaw = event.metadata["kind"],
+                  let kind = CompanyLedgerEntry.Kind(rawValue: kindRaw)
+            else { return nil }
+            let category = event.metadata["category"].flatMap(CompanyLedgerEntry.Category.init(rawValue:))
+            return CompanyLedgerEntry(
+                id: event.id.uuidString,
+                companyID: event.companyID,
+                occurredAt: event.occurredAt,
+                kind: kind,
+                category: category,
+                amountUSD: amount,
+                source: event.actor,
+                confidence: .manual,
+                note: event.summary,
+                entityID: event.metadata["entityID"]
+            )
+        }
+    }
+
+    private nonisolated static func taxLedgerLines(
+        from entries: [CompanyLedgerEntry],
+        registry: TaxEntityRegistry
+    ) -> [TaxLedgerLine] {
+        entries.compactMap { TaxLedgerLine.from(entry: $0, registry: registry) }
     }
 
     /// Builds the `portfolio-p&l` Doctor row. Reads the most recent persisted

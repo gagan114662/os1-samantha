@@ -22,7 +22,8 @@ struct Issue167PolishTests {
             .messaging: "Messaging",
             .connectors: "Connectors",
             .providers: "Providers",
-            .doctor: "Doctor"
+            .doctor: "Doctor",
+            .tax: "Tax"
         ]
 
         #expect(Set(expectedTitleKeys.keys) == Set(AppSection.allCases))

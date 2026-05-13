@@ -19,6 +19,7 @@ enum AppSection: String, CaseIterable, Identifiable {
     case connectors
     case providers
     case doctor
+    case tax
 
     var id: String { rawValue }
 
@@ -64,6 +65,8 @@ enum AppSection: String, CaseIterable, Identifiable {
             "Providers"
         case .doctor:
             "Doctor"
+        case .tax:
+            "Tax"
         }
     }
 
@@ -105,6 +108,8 @@ enum AppSection: String, CaseIterable, Identifiable {
             "cpu"
         case .doctor:
             "stethoscope"
+        case .tax:
+            "doc.text.magnifyingglass"
         }
     }
 }

@@ -119,6 +119,23 @@ struct CompanyPaymentProviderEvent: Codable, Hashable, Identifiable {
     var kind: Kind
     var amountUSD: Double
     var sourceReference: String
+    /// Tax entity this event belongs to. Filled either at construction time or
+    /// via `withEntityID(from:)` once the operator's `TaxEntityRegistry` is
+    /// available. Optional for backward-compatibility with existing on-disk
+    /// `PAYMENT_PROVIDER_EVENTS.json` files (legacy rows decode to nil and the
+    /// Doctor `tax-pipeline` row surfaces the gap for backfill).
+    var entityID: String? = nil
+
+    /// Returns a copy with `entityID` populated by looking up `companyID` in
+    /// the registry. If the registry has no mapping for the company, the
+    /// `entityID` is left nil — Doctor's missing-entity-mapping count picks it
+    /// up so the operator knows to register the entity.
+    func withEntityID(from registry: TaxEntityRegistry) -> CompanyPaymentProviderEvent {
+        guard let mapped = registry.companyToEntity[companyID] else { return self }
+        var copy = self
+        copy.entityID = mapped
+        return copy
+    }
 }
 
 extension CompanyPaymentProviderEvent {

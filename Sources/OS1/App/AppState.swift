@@ -432,7 +432,7 @@ final class AppState: ObservableObject {
             return !isLoadingSkills && !isRefreshingSkills
         case .knowledgeBase:
             return !isLoadingKnowledgeBase && !isRefreshingKnowledgeBase
-        case .connections, .files, .terminal, .desktop, .tiles, .codexTasks, .mail, .messaging, .connectors, .providers, .doctor:
+        case .connections, .files, .terminal, .desktop, .tiles, .codexTasks, .mail, .messaging, .connectors, .providers, .doctor, .tax:
             return false
         }
     }
@@ -529,7 +529,7 @@ final class AppState: ObservableObject {
             await refreshSkills()
         case .knowledgeBase:
             await refreshKnowledgeBase()
-        case .connections, .files, .terminal, .desktop, .tiles, .codexTasks, .mail, .messaging, .connectors, .providers, .doctor:
+        case .connections, .files, .terminal, .desktop, .tiles, .codexTasks, .mail, .messaging, .connectors, .providers, .doctor, .tax:
             break
         }
     }
@@ -2203,7 +2203,7 @@ final class AppState: ObservableObject {
             Task { await loadKnowledgeBase() }
         case .terminal:
             ensureTerminalSession()
-        case .connections, .desktop, .tiles, .codexTasks, .mail, .messaging, .connectors, .providers, .doctor:
+        case .connections, .desktop, .tiles, .codexTasks, .mail, .messaging, .connectors, .providers, .doctor, .tax:
             // .desktop and .tiles manage their own VNC lifecycle inside their views.
             // .codexTasks observes CodexSessionManager.shared and doesn't need section-entry hooks.
             // .mail manages its own AgentMail setup state inside MailView.
@@ -2246,7 +2246,7 @@ final class AppState: ObservableObject {
 
     private func reloadSectionAfterScopeChange(_ section: AppSection) async {
         switch section {
-        case .connections, .overview, .desktop, .tiles, .codexTasks, .mail, .messaging, .connectors, .providers, .doctor:
+        case .connections, .overview, .desktop, .tiles, .codexTasks, .mail, .messaging, .connectors, .providers, .doctor, .tax:
             // Desktop reconnects on its own when the active connection changes.
             // Mail and Connectors re-evaluate setup state on their own.
             break
