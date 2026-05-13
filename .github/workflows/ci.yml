@@ -52,4 +52,4 @@ jobs:
         run: swift test
 
       - name: Build app bundle
-        run: HERMES_MAC_ARCHS=arm64 ./scripts/build-macos-app.sh
+        run: OS1_SKIP_LAUNCH_AGENTS=1 HERMES_MAC_ARCHS=arm64 ./scripts/build-macos-app.sh

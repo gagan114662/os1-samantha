@@ -46,6 +46,10 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install ruff
 
+      - name: Check LaunchAgent templates
+        run: |
+          python scripts/check-launchd-templates.py
+
       - name: Ruff check
         run: |
           ruff check --output-format=github --exclude Vendor --exclude .venv .

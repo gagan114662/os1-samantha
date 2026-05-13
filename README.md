@@ -184,8 +184,10 @@ the app, choose Open, and confirm.
 
 The WUPHF LaunchAgent runs WUPHF behind the OS1 localhost proxy so OS1 can
 own native payment webhook routes while the WUPHF UI still listens on
-`localhost:7891`. Set `STRIPE_WEBHOOK_SECRET` in the LaunchAgent environment,
-or save the webhook secret in OS1 Payments, then forward Stripe events to:
+`localhost:7891`. Run `make install` after cloning or pulling to render the
+LaunchAgent templates for your local checkout and reload them. Save the Stripe
+webhook secret in OS1 Payments or set `STRIPE_WEBHOOK_SECRET`, then forward
+Stripe events to:
 
 ```sh
 stripe listen --forward-to localhost:7891/webhooks/stripe
@@ -195,7 +197,9 @@ OS1 exposes `POST /webhooks/stripe` for signed events and
 `GET /api/stripe/status` to report whether the webhook secret is configured.
 Accepted Stripe events are verified with the `Stripe-Signature` header,
 deduplicated, logged through `~/.os1/wuphf.log`, and appended to the company
-ledger when the event metadata includes `company_id`.
+ledger when the event metadata includes `company_id`. ElevenLabs credentials
+are only required for voice conversations; Stripe webhook ingestion uses the
+same local HTTP server but does not require voice configuration.
 
 ### SSH
 
@@ -205,8 +209,13 @@ host, optional user/port, optional Hermes profile.
 ## Build from source
 
 ```sh
-./scripts/build-macos-app.sh
+make install
 ```
+
+`make install` builds `dist/OS1.app`, renders `launchd/*.plist.template` into
+`~/Library/LaunchAgents`, and reloads changed agents. Use
+`OS1_SKIP_LAUNCH_AGENTS=1 ./scripts/build-macos-app.sh` when you only want a
+bundle build without installing LaunchAgents.
 
 The bundle lands at `dist/OS1.app`.
 
