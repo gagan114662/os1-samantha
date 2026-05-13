@@ -1226,3 +1226,16 @@
 "update available, %@" = "update available, %@";
 "What's new" = "What's new";
 "Hermes update banner dismissed." = "Hermes update banner dismissed.";
+
+/* Portfolio dashboard (#184) */
+"PORTFOLIO" = "投资组合";
+"Portfolio" = "投资组合";
+"Aggregate revenue, cost, and margin across every live company." = "汇总所有在运营公司的收入、成本和利润。";
+"No companies yet" = "暂无公司";
+"Once Samantha launches its first company, its revenue, cost, and margin will roll up here." = "Samantha 启动第一家公司后,其收入、成本和利润将汇总至此。";
+"Some companies are missing financial data" = "部分公司缺少财务数据";
+"%d of %d companies have no dated ledger entries; their totals are excluded from the time-series chart." = "%1$d/%2$d 家公司没有带日期的账目记录,这些公司的数据将从时间序列图表中排除。";
+"Revenue" = "收入";
+"Cost" = "成本";
+"Margin" = "利润";
+"Bucket" = "时段";

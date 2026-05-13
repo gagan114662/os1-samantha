@@ -29,6 +29,7 @@ struct RootView: View {
         defaultPrimaryWidth: workbenchPrimaryColumnWidth
     )
     @State private var showRealtimeVoicePanel = false
+    @State private var showPortfolioDashboard = false
 
     var body: some View {
         OS1HSplitView {
@@ -137,6 +138,16 @@ struct RootView: View {
                     }
 
                     VStack(alignment: .leading, spacing: 14) {
+                        if appState.activeConnection != nil {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(L10n.string("PORTFOLIO"))
+                                    .os1Style(theme.typography.smallCaps)
+                                    .foregroundStyle(theme.palette.onCoralMuted)
+                                    .padding(.horizontal, 12)
+                                    .padding(.bottom, 2)
+                                portfolioSidebarRow
+                            }
+                        }
                         ForEach(groupedSections, id: \.title) { group in
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(group.title)
@@ -241,9 +252,42 @@ struct RootView: View {
         voiceStatusDisplay.diagnosticText
     }
 
-    private func sectionRow(_ section: AppSection) -> some View {
-        let isSelected = appState.selectedSection == section
+    private var portfolioSidebarRow: some View {
+        let isSelected = showPortfolioDashboard
         return Button {
+            showPortfolioDashboard = true
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "chart.line.uptrend.xyaxis")
+                    .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
+                    .frame(width: 18)
+                Text(L10n.string("Portfolio"))
+                    .os1Style(theme.typography.body)
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(isSelected
+                             ? theme.palette.onCoralPrimary
+                             : theme.palette.onCoralSecondary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(isSelected ? theme.palette.glassFill : Color.clear)
+            )
+            .overlay {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(theme.palette.glassBorder, lineWidth: 1)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func sectionRow(_ section: AppSection) -> some View {
+        let isSelected = !showPortfolioDashboard && appState.selectedSection == section
+        return Button {
+            showPortfolioDashboard = false
             appState.requestSectionSelection(section)
         } label: {
             HStack(spacing: 10) {
@@ -319,8 +363,32 @@ struct RootView: View {
 
     @ViewBuilder
     private var detailView: some View {
-        activeDetailContent
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        Group {
+            if showPortfolioDashboard {
+                PortfolioDashboardView(snapshots: portfolioCompanySnapshots())
+            } else {
+                activeDetailContent
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// Pulls the current `CodexSession` fleet from the shared manager and
+    /// maps each session to a `PortfolioCompanySnapshot`. Ledger entries
+    /// from per-company ledger files are not wired through `AppState` yet,
+    /// so we surface lifecycle + identity only — the aggregator handles the
+    /// "missing financial data" state gracefully for us.
+    private func portfolioCompanySnapshots() -> [PortfolioCompanySnapshot] {
+        CodexSessionManager.shared.sessions.map { session in
+            PortfolioCompanySnapshot(
+                companyID: session.id,
+                displayName: session.title,
+                lifecycleStage: session.lifecycleStage,
+                templateID: session.templateID,
+                entries: [],
+                lastUpdatedAt: session.lastHeartbeatAt
+            )
+        }
     }
 
     @ViewBuilder
