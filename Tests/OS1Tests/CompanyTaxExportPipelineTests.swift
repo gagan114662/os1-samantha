@@ -274,6 +274,20 @@ struct CompanyTaxExportPipelineTests {
         #expect(map["US-CA"]?.manifest.totals.revenueUSD == 500)
     }
 
+    // MARK: - Duplicate jurisdiction override
+
+    @Test
+    func duplicateJurisdictionOverrideIsDedupedNotCrashed() throws {
+        let req = request(
+            entity: entity(),
+            lines: [line("rev-1", date: date(2025, 5, 5), kind: .revenue, category: .sales, amount: 100)],
+            jurisdictionsOverride: ["US-FED", "US-FED", "US-CA", "US-CA"]
+        )
+        let bundles = try TaxExportPipeline.generate(req)
+        let codes = bundles.map(\.jurisdiction).sorted()
+        #expect(codes == ["US-CA", "US-FED"])
+    }
+
     // MARK: - Mixed currencies w/ FX fixture
 
     @Test

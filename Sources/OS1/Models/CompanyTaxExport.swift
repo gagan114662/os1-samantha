@@ -275,7 +275,7 @@ enum TaxExportPipeline {
     static func generate(_ request: TaxExportRequest) throws -> [TaxExportBundle] {
         let jurisdictions = request.jurisdictionsOverride.isEmpty
             ? request.entity.allJurisdictions
-            : request.jurisdictionsOverride.sorted()
+            : Array(Set(request.jurisdictionsOverride)).sorted()
 
         guard jurisdictions.isEmpty == false else { return [] }
 
