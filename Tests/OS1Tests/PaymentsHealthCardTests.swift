@@ -19,4 +19,27 @@ struct PaymentsHealthCardTests {
         ])
         #expect(DoctorViewModel.paymentsHealthSnapshot(replayStoreSize: 3).rows.first?.replayStoreSize == 3)
     }
+
+    @Test
+    @MainActor
+    func paymentsHealthSnapshotReportsLatestProviderEventTimestamp() {
+        let older = CompanyEvent(
+            occurredAt: Date(timeIntervalSince1970: 1_800_000_000),
+            companyID: "co",
+            kind: .ledgerEntryRecorded,
+            summary: "Verified stripe payment ledger entry recorded",
+            metadata: ["provider": "stripe", "eventID": "evt_old"]
+        )
+        let newer = CompanyEvent(
+            occurredAt: Date(timeIntervalSince1970: 1_800_000_060),
+            companyID: "co",
+            kind: .ledgerEntryRecorded,
+            summary: "Verified stripe payment ledger entry recorded",
+            metadata: ["provider": "stripe", "eventID": "evt_new"]
+        )
+
+        let snapshot = DoctorViewModel.paymentsHealthSnapshot(recentEvents: [older, newer])
+
+        #expect(snapshot.rows.first?.lastEvent.contains("evt_new @") == true)
+    }
 }

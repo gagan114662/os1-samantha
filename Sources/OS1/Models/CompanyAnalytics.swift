@@ -295,6 +295,32 @@ struct CompanyCheckoutLink: Codable, Hashable, Identifiable {
     var metadata: [String: String]
 }
 
+struct CompanyCheckoutSession: Codable, Hashable, Identifiable {
+    var id: String
+    var companyID: String
+    var productID: String
+    var provider: CompanyPaymentConversionEvent.Provider
+    var productName: String
+    var amountUSD: Double
+    var checkoutURL: URL?
+    var successURL: URL
+    var createdAt: Date
+    var metadata: [String: String]
+
+    init(link: CompanyCheckoutLink, productID: String, createdAt: Date = Date()) {
+        self.id = link.id
+        self.companyID = link.companyID
+        self.productID = productID
+        self.provider = link.provider
+        self.productName = link.productName
+        self.amountUSD = link.amountUSD
+        self.checkoutURL = link.checkoutURL
+        self.successURL = link.successURL
+        self.createdAt = createdAt
+        self.metadata = link.metadata
+    }
+}
+
 enum CompanyPaymentCheckout {
     static func createTestCheckoutLink(
         companyID: String,

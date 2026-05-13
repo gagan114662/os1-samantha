@@ -1213,11 +1213,13 @@ final class CodexSessionManager: ObservableObject {
             seenEventStore: seenEventStore ?? paymentWebhookSeenEventStore(),
             now: now
         )
+        let providerEvent = try appendPaymentProviderEvent(event, to: session)
         return try appendVerifiedPaymentLedgerEntry(
             PaymentWebhookReceiver.ledgerEntry(for: event),
             to: session,
             provider: "stripe",
-            eventID: event.id
+            eventID: event.id,
+            providerEventID: providerEvent.id
         )
     }
 
@@ -1245,11 +1247,13 @@ final class CodexSessionManager: ObservableObject {
             seenEventStore: seenEventStore ?? paymentWebhookSeenEventStore(),
             now: now
         )
+        let providerEvent = try appendPaymentProviderEvent(event, to: session)
         return try appendVerifiedPaymentLedgerEntry(
             PaymentWebhookReceiver.ledgerEntry(for: event),
             to: session,
             provider: "gumroad",
-            eventID: event.id
+            eventID: event.id,
+            providerEventID: providerEvent.id
         )
     }
 
@@ -1335,12 +1339,23 @@ final class CodexSessionManager: ObservableObject {
         guard let session = sessions.first(where: { $0.id == event.companyID }) else {
             return PaymentWebhookReceiver.ledgerEntry(for: event)
         }
+        let providerEvent = try appendPaymentProviderEvent(event, to: session)
         return try appendVerifiedPaymentLedgerEntry(
             PaymentWebhookReceiver.ledgerEntry(for: event),
             to: session,
             provider: event.provider.rawValue,
-            eventID: event.id
+            eventID: event.id,
+            providerEventID: providerEvent.id
         )
+    }
+
+    @discardableResult
+    private func appendPaymentProviderEvent(
+        _ event: CompanyPaymentConversionEvent,
+        to session: CodexSession
+    ) throws -> CompanyPaymentProviderEvent {
+        try CompanyPaymentProviderEventStore(url: paymentProviderEventsURL(for: session))
+            .appendIfNew(CompanyPaymentProviderEvent(conversionEvent: event))
     }
 
     @discardableResult
@@ -1348,7 +1363,8 @@ final class CodexSessionManager: ObservableObject {
         _ entry: CompanyLedgerEntry,
         to session: CodexSession,
         provider: String,
-        eventID: String
+        eventID: String,
+        providerEventID: String
     ) throws -> CompanyLedgerEntry {
         if let existing = CompanyLedgerParser.decodeJSONEntries(
             (try? String(contentsOfFile: session.ledgerPath, encoding: .utf8)) ?? ""
@@ -1364,6 +1380,7 @@ final class CodexSessionManager: ObservableObject {
             metadata: [
                 "provider": provider,
                 "eventID": eventID,
+                "providerEventID": providerEventID,
                 "ledgerEntryID": entry.id,
                 "amountUSD": String(format: "%.2f", entry.amountUSD),
                 "sourceReference": entry.sourceReference ?? ""
@@ -1396,6 +1413,11 @@ final class CodexSessionManager: ObservableObject {
         PaymentWebhookSeenEventStore(
             url: sessionsDir.appendingPathComponent("payment-webhook-seen-events.sqlite")
         )
+    }
+
+    private func paymentProviderEventsURL(for session: CodexSession) -> URL {
+        URL(fileURLWithPath: session.worktreePath)
+            .appendingPathComponent(CompanyPaymentProviderEventStore.fileName)
     }
 
     private func enforceProfitabilityPolicy(id: String) {
