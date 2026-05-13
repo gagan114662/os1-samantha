@@ -1240,3 +1240,26 @@
 "Cost" = "Cost";
 "Margin" = "Margin";
 "Bucket" = "Bucket";
+
+// MARK: - Doctor check timeouts
+"%@ timed out after %.0f seconds." = "%@ timed out after %.0f seconds.";
+"Check failed. Open logs or retry." = "Check failed. Open logs or retry.";
+"Checks complete: %lld need attention, %lld warning(s)." = "Checks complete: %lld need attention, %lld warning(s).";
+"Checks complete: %lld warning(s), no failures." = "Checks complete: %lld warning(s), no failures.";
+"Checks complete: all rows resolved." = "Checks complete: all rows resolved.";
+"Click Retry to run this check again." = "Click Retry to run this check again.";
+"Doctor check timed out." = "Doctor check timed out.";
+"Doctor harness alert: no checks completed within %.0f seconds. Open logs and retry the run." = "Doctor harness alert: no checks completed within %.0f seconds. Open logs and retry the run.";
+"Doctor view model was released before the check completed." = "Doctor view model was released before the check completed.";
+"Fail" = "Fail";
+"No checks have run yet." = "No checks have run yet.";
+"Open logs" = "Open logs";
+"Pass" = "Pass";
+"Pending" = "Pending";
+"Running checks: %lld/%lld complete, %lld active." = "Running checks: %lld/%lld complete, %lld active.";
+"Running…" = "Running…";
+"Skipped" = "Skipped";
+"Timed out. Click Retry to run this check again." = "Timed out. Click Retry to run this check again.";
+"Timeout" = "Timeout";
+"Waiting to run." = "Waiting to run.";
+"Warn" = "Warn";
