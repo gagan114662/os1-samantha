@@ -525,34 +525,37 @@ struct OverviewView: View {
         case .failed(let message, let logTail):
             updateFailedBanner(message: message, logTail: logTail)
         case .idle:
-            if case .behind(let versionLabel, let commits) = appState.hermesUpdateAvailability {
-                updateAvailableBanner(versionLabel: versionLabel, commits: commits)
+            if case .behind(_, let offer) = appState.hermesUpdateAvailability,
+               let snapshot = appState.hermesUpdateBannerSnapshot {
+                updateAvailableBanner(offer: offer, snapshot: snapshot)
             }
         }
     }
 
-    private func updateAvailableBanner(versionLabel: String, commits: Int?) -> some View {
-        let subtitle: String = {
-            if let commits, commits > 0 {
-                return String(
-                    format: L10n.string(commits == 1
-                        ? "%@ — %d commit behind main."
-                        : "%@ — %d commits behind main."),
-                    versionLabel,
-                    commits
-                )
-            }
-            return String(format: L10n.string("%@ — update available."), versionLabel)
-        }()
-        return HermesSurfacePanel(
-            title: "Hermes update available",
-            subtitle: subtitle
+    private func updateAvailableBanner(
+        offer: HermesUpdateOffer,
+        snapshot: HermesUpdateBannerSnapshot
+    ) -> some View {
+        HermesSurfacePanel(
+            title: snapshot.title,
+            subtitle: snapshot.subtitle
         ) {
             VStack(alignment: .leading, spacing: 12) {
-                Text(L10n.string("Runs hermes update --backup on this host. The gateway restarts automatically; the previous state is restorable via hermes backup restore --state pre-update."))
+                Text(snapshot.detail)
                     .font(.os1Body)
                     .foregroundStyle(.os1OnCoralSecondary)
                     .fixedSize(horizontal: false, vertical: true)
+
+                if !snapshot.breakingChangeNotes.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(snapshot.breakingChangeNotes, id: \.self) { note in
+                            Label(note, systemImage: "exclamationmark.triangle.fill")
+                                .font(.os1Label)
+                                .foregroundStyle(.orange)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
 
                 HStack(spacing: 10) {
                     Button {
@@ -562,13 +565,32 @@ struct OverviewView: View {
                     }
                     .buttonStyle(.os1Primary)
 
-                    Link(destination: URL(string: "https://github.com/NousResearch/hermes-agent/commits/main")!) {
-                        Label(L10n.string("View changelog"), systemImage: "list.bullet.rectangle")
+                    if offer.changelogURL != nil {
+                        Button {
+                            appState.openHermesUpdateChangelog()
+                        } label: {
+                            Label(L10n.string("What's new"), systemImage: "doc.text.magnifyingglass")
+                        }
+                        .buttonStyle(.os1Secondary)
                     }
-                    .buttonStyle(.os1Secondary)
                 }
             }
         }
+        .overlay(alignment: .topTrailing) {
+            Button {
+                appState.dismissHermesUpdateBanner()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .buttonStyle(.os1Icon)
+            .accessibilityLabel(L10n.string("Dismiss"))
+            .help(L10n.string("Dismiss"))
+            .padding(10)
+        }
+        .focusable(true)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(snapshot.accessibilityLabel)
     }
 
     private var updateRunningBanner: some View {

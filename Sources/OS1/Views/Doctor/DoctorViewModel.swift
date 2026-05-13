@@ -1612,19 +1612,7 @@ final class DoctorViewModel: ObservableObject {
     private func probeHermesAvailability(on connection: ConnectionProfile) async -> HermesUpdateAvailability {
         do {
             let result = try await hermesUpdater.checkAvailability(on: connection)
-            if !result.installed { return .notInstalled }
-            let label = result.version_label ?? L10n.string("Hermes Agent")
-            switch result.behind {
-            case .some(0):
-                return .upToDate(versionLabel: label)
-            case .some(let n) where n > 0:
-                return .behind(versionLabel: label, commits: n)
-            case .some(-1):
-                return .behind(versionLabel: label, commits: nil)
-            default:
-                // Probe couldn't determine — don't nag the user.
-                return .upToDate(versionLabel: label)
-            }
+            return .make(from: result, fallbackLabel: L10n.string("Hermes Agent"))
         } catch {
             return .unknown
         }
@@ -1659,9 +1647,9 @@ final class DoctorViewModel: ObservableObject {
                 detail: L10n.string("Up to date with origin/main."),
                 actions: [.updateHermes]
             )
-        case .behind(let versionLabel, let commits):
+        case .behind(let versionLabel, let offer):
             let summary: String
-            if let commits, commits > 0 {
+            if let commits = offer.commits, commits > 0 {
                 summary = String(
                     format: L10n.string(commits == 1
                         ? "%@ — %d commit behind main."
