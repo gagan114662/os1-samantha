@@ -514,6 +514,7 @@
 "Hermes profile must be a profile name, not a path." = "Hermes 配置必须是配置名称，不能是路径。";
 "Hermes profile contains unsupported control characters." = "Hermes 配置包含不支持的控制字符。";
 "Connection failed" = "连接失败";
+"Connection failed — re-enter key" = "Connection failed — re-enter key";
 "SSH and python3 are available for this Hermes host." = "此 Hermes 主机可使用 SSH 和 python3。";
 "Remote HOME: %@" = "远端 HOME：%@";
 "Save or discard Workspace Files edits before switching the Hermes profile for the active host." = "切换当前主机的 Hermes 配置前，请保存或放弃工作区文件编辑。";
@@ -729,6 +730,7 @@
 "Cc: %@" = "Cc: %@";
 "Checking AgentMail setup…" = "Checking AgentMail setup…";
 "Checking Composio setup…" = "Checking Composio setup…";
+"Checking Composio…" = "Checking Composio…";
 "Checking VM…" = "Checking VM…";
 "Compose" = "Compose";
 "Compose a new message" = "Compose a new message";
@@ -771,6 +773,7 @@
 "New inbox: %@@agentmail.to" = "New inbox: %@@agentmail.to";
 "New message" = "New message";
 "No AgentMail install detected on %@." = "No AgentMail install detected on %@.";
+"No Composio API key on this Mac." = "No Composio API key on this Mac.";
 "No Composio install detected on %@." = "No Composio install detected on %@.";
 "No Orgo VM selected" = "No Orgo VM selected";
 "No connection selected." = "No connection selected.";
@@ -806,6 +809,7 @@
 "Retry" = "Retry";
 "Save as draft" = "Save as draft";
 "Save key" = "Save key";
+"Save new key" = "Save new key";
 "Save this message to your Drafts folder without sending." = "Save this message to your Drafts folder without sending.";
 "Saved or scheduled drafts in this inbox will appear here." = "Saved or scheduled drafts in this inbox will appear here.";
 "Saving…" = "Saving…";

@@ -266,16 +266,7 @@ struct ConnectorsView: View {
                     subtitle: "Composio Connect is set up on this Mac. Install it on each VM where you want the Hermes agent to use connectors."
                 )
 
-                HermesSurfacePanel(title: "Account") {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HermesLabeledValue(label: "Composio API key", value: "Stored in Keychain")
-                        HStack {
-                            Spacer()
-                            Button(L10n.string("Disconnect")) { viewModel.disconnect() }
-                                .buttonStyle(.os1Secondary)
-                        }
-                    }
-                }
+                accountPanel
 
                 paymentsPanel
 
@@ -293,7 +284,111 @@ struct ConnectorsView: View {
             }
         }
         .onAppear {
+            // refreshToolkits drives both the toolkit list AND the
+            // validationState transitions, so the Account panel reflects
+            // the live result every time the tab is opened.
             viewModel.refreshToolkits()
+        }
+    }
+
+    // MARK: - Account panel (validation-aware)
+
+    @ViewBuilder
+    private var accountPanel: some View {
+        HermesSurfacePanel(title: "Account") {
+            VStack(alignment: .leading, spacing: 12) {
+                accountStateRow
+
+                if case .rejected(let message) = viewModel.accountDisplay {
+                    Text(message)
+                        .os1Style(theme.typography.body)
+                        .foregroundStyle(theme.palette.onCoralPrimary)
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(theme.palette.onCoralPrimary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                }
+
+                if viewModel.isReentryFormVisible {
+                    reentryForm
+                }
+
+                accountActionRow
+            }
+        }
+    }
+
+    private var accountStateRow: some View {
+        HStack(spacing: 10) {
+            switch viewModel.accountDisplay {
+            case .loading, .storedUnknown:
+                ProgressView().controlSize(.small).tint(theme.palette.onCoralPrimary)
+                Text(L10n.string("Checking Composio…"))
+                    .os1Style(theme.typography.body)
+                    .foregroundStyle(theme.palette.onCoralSecondary)
+            case .unconfigured:
+                Text(L10n.string("No Composio API key on this Mac."))
+                    .os1Style(theme.typography.body)
+                    .foregroundStyle(theme.palette.onCoralSecondary)
+            case .validating:
+                ProgressView().controlSize(.small).tint(theme.palette.onCoralPrimary)
+                Text(L10n.string("Validating…"))
+                    .os1Style(theme.typography.body)
+                    .foregroundStyle(theme.palette.onCoralSecondary)
+                    .accessibilityIdentifier("connectors.account.validating")
+            case .connected:
+                HermesBadge(text: "Connected", tint: .os1OnCoralPrimary, systemImage: "checkmark.seal.fill")
+                    .accessibilityIdentifier("connectors.account.connected")
+                HermesLabeledValue(label: "Composio API key", value: "Stored in Keychain")
+            case .rejected:
+                HermesBadge(text: "Connection failed — re-enter key", tint: .os1OnCoralPrimary, systemImage: "exclamationmark.triangle.fill")
+                    .accessibilityIdentifier("connectors.account.rejected")
+            }
+            Spacer()
+        }
+    }
+
+    @ViewBuilder
+    private var accountActionRow: some View {
+        switch viewModel.accountDisplay {
+        case .loading, .unconfigured, .storedUnknown, .validating:
+            EmptyView()
+        case .connected:
+            HStack {
+                Spacer()
+                Button(L10n.string("Disconnect")) { viewModel.disconnect() }
+                    .buttonStyle(.os1Secondary)
+            }
+        case .rejected:
+            HStack {
+                Spacer()
+                if !viewModel.isReentryFormVisible {
+                    Button(L10n.string("Reconnect")) { viewModel.beginReentry() }
+                        .buttonStyle(.os1Primary)
+                        .accessibilityIdentifier("connectors.account.reconnect")
+                }
+                Button(L10n.string("Disconnect")) { viewModel.disconnect() }
+                    .buttonStyle(.os1Secondary)
+                    .accessibilityIdentifier("connectors.account.disconnect")
+            }
+        }
+    }
+
+    private var reentryForm: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SecureField(L10n.string("ck_..."), text: $viewModel.apiKeyDraft)
+                .os1Underlined()
+                .disabled(viewModel.isBusy)
+            if let error = viewModel.formError {
+                errorBanner(error)
+            }
+            HStack(spacing: 10) {
+                Spacer()
+                Button(L10n.string("Cancel")) { viewModel.cancelReentry() }
+                    .buttonStyle(.os1Secondary)
+                Button(L10n.string("Save new key")) { viewModel.saveAPIKey() }
+                    .buttonStyle(.os1Primary)
+                    .disabled(viewModel.apiKeyDraft.isEmpty || viewModel.isBusy)
+            }
         }
     }
 
