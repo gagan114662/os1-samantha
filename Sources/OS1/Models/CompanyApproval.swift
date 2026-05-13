@@ -481,11 +481,272 @@ enum CompanyApprovalQueueEngine {
         )
     }
 
-    private static func route(for riskTier: CompanyApprovalRequest.RiskTier) -> String {
+    static func route(for riskTier: CompanyApprovalRequest.RiskTier) -> String {
         switch riskTier {
         case .critical, .high: return "immediate"
         case .medium: return "hourly_digest"
         case .low: return "daily_digest"
         }
+    }
+
+    // MARK: - Auto-create policies once threshold is reached (AC2)
+
+    /// Returns a new auto-approve policy IFF the operator has approved the same
+    /// `(company-pattern, action-type, risk-tier)` triple at least `threshold`
+    /// times since `since`, with zero revocations. Returns nil otherwise. The
+    /// caller is responsible for appending the returned policy to the store —
+    /// this function never mutates state.
+    static func autoCreatePolicyIfEligible(
+        request: CompanyApprovalRequest,
+        priorApprovals: [CompanyApprovalRequest],
+        revocationCount: Int,
+        threshold: Int = 3,
+        windowDays: Int = 14,
+        since: Date,
+        createdBy: String,
+        now: Date,
+        policyID: String = UUID().uuidString
+    ) -> CompanyApprovalAutoPolicy? {
+        guard autoPolicyEligible(
+            request: request,
+            priorApprovals: priorApprovals,
+            revocationCount: revocationCount,
+            threshold: threshold,
+            since: since
+        ) else { return nil }
+        return appendOnlyPolicy(
+            id: policyID,
+            createdBy: createdBy,
+            companyPattern: companyPattern(for: request.companyID),
+            actionType: actionType(for: request.proposedAction),
+            riskTier: request.riskTier,
+            createdAt: now,
+            thresholdCount: threshold,
+            windowDays: windowDays
+        )
+    }
+
+    /// Heuristic: collapse `validated-foo` / `experimental-bar` into the family
+    /// prefix `validated-*` so a single learned policy covers the cohort. Plain
+    /// company IDs stay exact-match.
+    static func companyPattern(for companyID: String) -> String {
+        if let dash = companyID.firstIndex(of: "-") {
+            return "\(companyID[..<dash])-*"
+        }
+        return companyID
+    }
+
+    // MARK: - Batch decision (AC3)
+
+    enum BatchDecision: String { case approve, deny }
+
+    struct BatchOutcome: Equatable {
+        var resolvedRequestIDs: [String]
+        var events: [CompanyEvent]
+        var batchKey: String
+        var decision: BatchDecision
+    }
+
+    /// Single-click batch resolver. Apply `decision` to every pending item in
+    /// the plan whose `batchKey` matches. Auto-approved items in the batch are
+    /// left alone (they already emitted their event). Returns the resolved IDs
+    /// and the event log entries to append.
+    static func applyBatchDecision(
+        plan: CompanyApprovalQueuePlan,
+        batchKey: String,
+        decision: BatchDecision,
+        decidedBy: String,
+        now: Date
+    ) -> BatchOutcome {
+        var ids: [String] = []
+        var events: [CompanyEvent] = []
+        let kind: CompanyEvent.Kind = decision == .approve ? .approvalApproved : .approvalDenied
+        let mode = "batch_\(decision.rawValue)"
+        for item in plan.items where item.batchKey == batchKey && item.status == .pending {
+            ids.append(item.requestID)
+            events.append(
+                CompanyEvent(
+                    occurredAt: now,
+                    companyID: item.companyID,
+                    actor: decidedBy,
+                    kind: kind,
+                    summary: "Batch \(decision.rawValue) on \(item.companyID) (\(batchKey))",
+                    approvalState: decision == .approve ? "approved" : "denied",
+                    metadata: [
+                        "approval_mode": mode,
+                        "requestID": item.requestID,
+                        "batch_key": batchKey
+                    ]
+                )
+            )
+        }
+        return BatchOutcome(
+            resolvedRequestIDs: ids.sorted(),
+            events: events,
+            batchKey: batchKey,
+            decision: decision
+        )
+    }
+
+    // MARK: - Stale-request expiry (AC4)
+
+    struct ExpiryOutcome: Equatable {
+        var expiredRequest: CompanyApprovalRequest
+        var leaseReleaseDeadline: Date
+        var pausedCompanyState: String
+        var event: CompanyEvent
+    }
+
+    /// Apply expiry side effects to every pending request whose age exceeds
+    /// `expirySeconds`. The request is marked `.expired`, a lease-release
+    /// deadline 60s in the future is recorded, and the owning company
+    /// transitions to `paused_awaiting_review`. An `approvalDenied` event with
+    /// `approval_mode=expired` is emitted so downstream consumers can persist
+    /// the transition.
+    static func expireStale(
+        requests: [CompanyApprovalRequest],
+        now: Date,
+        expirySeconds: TimeInterval = 86_400,
+        leaseReleaseSeconds: TimeInterval = 60
+    ) -> [ExpiryOutcome] {
+        requests.compactMap { request in
+            guard request.status == .pending else { return nil }
+            let expiresAt = request.expiresAt ?? request.requestedAt.addingTimeInterval(expirySeconds)
+            guard now >= expiresAt else { return nil }
+            var copy = request
+            copy.status = .expired
+            copy.decidedAt = now
+            copy.decisionNote = "Auto-expired after \(Int(expirySeconds))s with no operator decision."
+            copy.expiresAt = expiresAt
+            let event = CompanyEvent(
+                occurredAt: now,
+                companyID: request.companyID,
+                actor: "approval-queue",
+                kind: .approvalDenied,
+                summary: "Approval \(request.id) auto-expired",
+                riskTier: request.riskTier.rawValue,
+                approvalState: "expired",
+                metadata: [
+                    "approval_mode": "expired",
+                    "requestID": request.id,
+                    "company_state": "paused_awaiting_review"
+                ]
+            )
+            return ExpiryOutcome(
+                expiredRequest: copy,
+                leaseReleaseDeadline: now.addingTimeInterval(leaseReleaseSeconds),
+                pausedCompanyState: "paused_awaiting_review",
+                event: event
+            )
+        }
+    }
+
+    // MARK: - Notification dispatch (AC5)
+
+    enum NotificationChannel: String, Codable, Hashable { case immediate, hourlyDigest, dailyDigest }
+
+    struct Notification: Codable, Hashable, Identifiable {
+        var id: String
+        var channel: NotificationChannel
+        var requestID: String
+        var companyID: String
+        var riskTier: CompanyApprovalRequest.RiskTier
+        var summary: String
+        var scheduledFor: Date
+    }
+
+    /// Produce a notification payload for every pending item in the plan. High/
+    /// critical-risk fire immediately; medium gets bucketed into an hourly
+    /// digest; low into a daily digest. `scheduledFor` carries the dispatch
+    /// time so the downstream notifier (Telegram, SES, etc.) can defer.
+    static func dispatchNotifications(
+        plan: CompanyApprovalQueuePlan,
+        requests: [CompanyApprovalRequest],
+        now: Date
+    ) -> [Notification] {
+        let byID = Dictionary(uniqueKeysWithValues: requests.map { ($0.id, $0) })
+        return plan.items.compactMap { item -> Notification? in
+            guard item.status == .pending, let request = byID[item.requestID] else { return nil }
+            let channel: NotificationChannel
+            let scheduled: Date
+            switch item.route {
+            case "immediate":
+                channel = .immediate
+                scheduled = now
+            case "hourly_digest":
+                channel = .hourlyDigest
+                scheduled = nextDigestTick(after: now, intervalSeconds: 3_600)
+            case "daily_digest":
+                channel = .dailyDigest
+                scheduled = nextDigestTick(after: now, intervalSeconds: 86_400)
+            default:
+                return nil
+            }
+            return Notification(
+                id: "notify-\(item.requestID)",
+                channel: channel,
+                requestID: item.requestID,
+                companyID: item.companyID,
+                riskTier: request.riskTier,
+                summary: "[\(request.riskTier.rawValue.uppercased())] \(request.proposedAction)",
+                scheduledFor: scheduled
+            )
+        }
+        .sorted { $0.id < $1.id }
+    }
+
+    private static func nextDigestTick(after now: Date, intervalSeconds: TimeInterval) -> Date {
+        let bucket = floor(now.timeIntervalSince1970 / intervalSeconds)
+        return Date(timeIntervalSince1970: (bucket + 1) * intervalSeconds)
+    }
+}
+
+// MARK: - Append-only policy store
+
+/// File-backed append-only store for `CompanyApprovalAutoPolicy`. Revocation
+/// rewrites the same record (preserves identity) so the audit trail of
+/// `createdBy / createdAt / revokedAt / revocationReason` is intact.
+struct CompanyApprovalPolicyStore {
+    static let fileName = "APPROVAL_AUTO_POLICIES.json"
+    var url: URL
+
+    func load() throws -> [CompanyApprovalAutoPolicy] {
+        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode([CompanyApprovalAutoPolicy].self, from: Data(contentsOf: url))
+    }
+
+    @discardableResult
+    func append(_ policy: CompanyApprovalAutoPolicy) throws -> CompanyApprovalAutoPolicy {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        var policies = try load()
+        if !policies.contains(where: { $0.id == policy.id }) {
+            policies.append(policy)
+        }
+        policies.sort { $0.createdAt == $1.createdAt ? $0.id < $1.id : $0.createdAt < $1.createdAt }
+        try write(policies)
+        return policy
+    }
+
+    /// Replace the policy with the revoked variant (same id). Revocation is
+    /// effective the moment this call returns. Returns the updated policy.
+    @discardableResult
+    func revoke(id: String, at date: Date, reason: String) throws -> CompanyApprovalAutoPolicy? {
+        var policies = try load()
+        guard let index = policies.firstIndex(where: { $0.id == id }) else { return nil }
+        policies[index] = CompanyApprovalQueueEngine.revoke(policies[index], at: date, reason: reason)
+        try write(policies)
+        return policies[index]
+    }
+
+    private func write(_ policies: [CompanyApprovalAutoPolicy]) throws {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(policies).write(to: url, options: .atomic)
     }
 }
