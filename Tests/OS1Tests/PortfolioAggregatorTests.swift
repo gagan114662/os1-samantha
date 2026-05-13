@@ -299,6 +299,83 @@ struct PortfolioAggregatorTests {
     }
 
     @Test
+    func monthlyBucketsAttributeAcrossCalendarBoundariesIncludingLeapDay() {
+        // Regression for the calendar-month bucketing fix. A naive
+        // 30-day-wide bucket misattributes transactions near month
+        // boundaries (e.g. a Feb 29 sale would land in the Jan bucket).
+        // This test pins each boundary date to its expected calendar
+        // month bucket using a UTC Gregorian calendar.
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+
+        func date(_ year: Int, _ month: Int, _ day: Int, _ hour: Int = 12) -> Date {
+            calendar.date(from: DateComponents(
+                year: year, month: month, day: day, hour: hour
+            ))!
+        }
+
+        let jan31 = date(2024, 1, 31, 23) // last second of January
+        let feb01 = date(2024, 2, 1, 0)   // first second of February
+        let feb29 = date(2024, 2, 29, 12) // leap day
+        let mar01 = date(2024, 3, 1, 0)   // first second of March
+        let nowDate = date(2024, 3, 15, 0)
+
+        func entry(id: String, at when: Date, amount: Double) -> CompanyLedgerEntry {
+            CompanyLedgerEntry(
+                id: id,
+                companyID: "co-cal",
+                occurredAt: when,
+                kind: .revenue,
+                amountUSD: amount,
+                source: "stripe",
+                confidence: .verified,
+                note: "boundary"
+            )
+        }
+
+        let snapshot = PortfolioCompanySnapshot(
+            companyID: "co-cal",
+            displayName: "Boundary Co",
+            lifecycleStage: .launched,
+            entries: [
+                entry(id: "jan31", at: jan31, amount: 11),
+                entry(id: "feb01", at: feb01, amount: 22),
+                entry(id: "feb29", at: feb29, amount: 33),
+                entry(id: "mar01", at: mar01, amount: 44)
+            ]
+        )
+
+        let report = PortfolioAggregator.aggregate(
+            snapshots: [snapshot],
+            granularity: .monthly,
+            now: nowDate,
+            bucketCount: 6
+        )
+
+        #expect(report.buckets.count == 6)
+
+        func bucket(forMonth month: Int, year: Int) -> PortfolioBucket {
+            let target = calendar.date(from: DateComponents(year: year, month: month, day: 1))!
+            return report.buckets.first(where: { $0.start == target })!
+        }
+
+        // Jan 31 23:00 → January bucket.
+        #expect(bucket(forMonth: 1, year: 2024).revenueUSD == 11)
+        // Feb 1 00:00 + Feb 29 leap day → February bucket.
+        #expect(bucket(forMonth: 2, year: 2024).revenueUSD == 55)
+        // Mar 1 00:00 → March bucket (does NOT bleed into February).
+        #expect(bucket(forMonth: 3, year: 2024).revenueUSD == 44)
+        // Earlier buckets (Oct/Nov/Dec 2023) carry no revenue.
+        #expect(bucket(forMonth: 10, year: 2023).revenueUSD == 0)
+        #expect(bucket(forMonth: 11, year: 2023).revenueUSD == 0)
+        #expect(bucket(forMonth: 12, year: 2023).revenueUSD == 0)
+
+        // Total revenue across the window must equal the sum of every
+        // boundary entry, proving none were dropped.
+        #expect(report.totalRevenueUSD == 110)
+    }
+
+    @Test
     func reportRoundtripsThroughJSONExport() throws {
         let snapshot = PortfolioCompanySnapshot(
             companyID: "co-export",
