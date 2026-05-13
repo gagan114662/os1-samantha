@@ -109,6 +109,9 @@ Run the Doctor tab to see what's missing.
 ## Setup (broad strokes)
 
 1. `npm install -g wuphf` and run `wuphf --no-open --no-nex --pack starter` once to seed the office.
+   LaunchAgent runs WUPHF behind the OS1 proxy so Stripe can forward to
+   `stripe listen --forward-to localhost:7891/webhooks/stripe`. Set
+   `STRIPE_WEBHOOK_SECRET` or save the Stripe webhook secret in OS1 Payments.
 2. Install Claude Code CLI + Codex CLI (Mac and/or VM).
 3. Put your keys in Keychain (use the `Providers` and `Connectors` tabs in OS1).
 4. `swift build` + `./scripts/build-macos-app.sh` to produce `dist/OS1.app`.

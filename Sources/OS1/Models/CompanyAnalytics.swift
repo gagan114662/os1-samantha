@@ -551,41 +551,58 @@ enum PaymentWebhookReceiver {
     }
 
     static func stripe(payload: Data, receivedAt: Date = Date()) throws -> CompanyPaymentConversionEvent {
-        struct StripeFixture: Decodable {
-            let id: String
-            let type: String
-            let amount_total: Double?
-            let amount_refunded: Double?
-            let currency: String
-            let payment_intent: String?
-            let metadata: [String: String]
+        let raw = try JSONSerialization.jsonObject(with: payload)
+        guard let event = raw as? [String: Any] else {
+            throw DecodingError.typeMismatch(
+                [String: Any].self,
+                DecodingError.Context(codingPath: [], debugDescription: "Stripe payload must be a JSON object")
+            )
         }
-        let fixture = try JSONDecoder().decode(StripeFixture.self, from: payload)
+        let object = ((event["data"] as? [String: Any])?["object"] as? [String: Any]) ?? event
+        let eventID = stringValue(event["id"]) ?? stringValue(object["id"]) ?? ""
+        let eventType = stringValue(event["type"]) ?? ""
+        let metadata = stringDictionary(object["metadata"] ?? event["metadata"])
+        let amountTotal = doubleValue(object["amount_total"])
+            ?? doubleValue(object["amount_paid"])
+            ?? doubleValue(object["amount_received"])
+            ?? doubleValue(object["amount"])
+            ?? doubleValue(object["total"])
+        let amountRefunded = doubleValue(object["amount_refunded"])
+        let currency = stringValue(object["currency"] ?? event["currency"]) ?? "usd"
+        let paymentIntent = stringValue(object["payment_intent"] ?? event["payment_intent"])
+            ?? stringValue((object["payment_intent"] as? [String: Any])?["id"])
+            ?? stringValue(object["id"])
+            ?? eventID
+        let companyID = metadata["company_id"]
+            ?? metadata["utm_campaign"]
+            ?? stringValue(object["client_reference_id"])
+            ?? ""
         let kind: CompanyPaymentConversionEvent.Kind
         let amount: Double
-        if fixture.type.contains("refund") {
+        if eventType.contains("refund") {
             kind = .refundCreated
-            amount = fixture.amount_refunded ?? fixture.amount_total ?? 0
-        } else if fixture.type.contains("chargeback") || fixture.type.contains("dispute") {
+            amount = amountRefunded ?? amountTotal ?? 0
+        } else if eventType.contains("chargeback") || eventType.contains("dispute") {
             kind = .chargebackOpened
-            amount = fixture.amount_total ?? 0
+            amount = amountTotal ?? 0
         } else {
             kind = .checkoutCompleted
-            amount = fixture.amount_total ?? 0
+            amount = amountTotal ?? 0
         }
         return CompanyPaymentConversionEvent(
-            id: fixture.id,
-            companyID: fixture.metadata["company_id"] ?? fixture.metadata["utm_campaign"] ?? "",
+            id: eventID,
+            companyID: companyID,
             provider: .stripe,
             kind: kind,
             amountUSD: amount / 100,
-            currency: fixture.currency.uppercased(),
-            utmCampaign: fixture.metadata["utm_campaign"],
-            utmContent: fixture.metadata["utm_content"],
-            providerReference: fixture.payment_intent ?? fixture.id,
+            currency: currency.uppercased(),
+            utmCampaign: metadata["utm_campaign"],
+            utmContent: metadata["utm_content"],
+            providerReference: paymentIntent,
             occurredAt: receivedAt,
-            metadata: fixture.metadata.merging([
-                "payment_intent": fixture.payment_intent ?? fixture.id,
+            metadata: metadata.merging([
+                "stripe_event_type": eventType,
+                "payment_intent": paymentIntent,
                 "amount_total": "\(Int(amount))"
             ]) { current, _ in current }
         )
@@ -759,6 +776,41 @@ enum PaymentWebhookReceiver {
             occurredAt: receivedAt,
             metadata: ["company_id": companyID, "payment_intent": id, "amount_total": "\(Int((amount * 100).rounded()))"]
         )
+    }
+
+    private static func stringValue(_ value: Any?) -> String? {
+        switch value {
+        case let string as String:
+            return string
+        case let number as NSNumber:
+            return number.stringValue
+        default:
+            return nil
+        }
+    }
+
+    private static func doubleValue(_ value: Any?) -> Double? {
+        switch value {
+        case let double as Double:
+            return double
+        case let int as Int:
+            return Double(int)
+        case let number as NSNumber:
+            return number.doubleValue
+        case let string as String:
+            return Double(string)
+        default:
+            return nil
+        }
+    }
+
+    private static func stringDictionary(_ value: Any?) -> [String: String] {
+        guard let dict = value as? [String: Any] else { return [:] }
+        return dict.reduce(into: [:]) { result, pair in
+            if let string = stringValue(pair.value) {
+                result[pair.key] = string
+            }
+        }
     }
 
     private static func parseStripeSignatureHeader(_ header: String) throws -> StripeSignature {
