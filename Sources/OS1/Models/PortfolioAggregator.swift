@@ -50,11 +50,14 @@ enum PortfolioGranularity: String, Codable, CaseIterable, Hashable {
     case weekly
     case monthly
 
-    var bucketSeconds: TimeInterval {
+    /// Fixed-width granularities (daily, weekly) use this to size their
+    /// buckets. Monthly is calendar-driven and ignores this value; see
+    /// `PortfolioAggregator.bucketRanges`.
+    var bucketSeconds: TimeInterval? {
         switch self {
         case .daily: return 86_400
         case .weekly: return 86_400 * 7
-        case .monthly: return 86_400 * 30
+        case .monthly: return nil
         }
     }
 
@@ -140,9 +143,16 @@ enum PortfolioAggregator {
         topN: Int = 5
     ) -> PortfolioAggregateReport {
         let bucketsToShow = max(1, bucketCount ?? granularity.defaultBucketCount)
-        let bucketSize = granularity.bucketSeconds
-        let windowEnd = now
-        let windowStart = windowEnd.addingTimeInterval(-bucketSize * Double(bucketsToShow))
+        let ranges = bucketRanges(
+            granularity: granularity,
+            now: now,
+            bucketCount: bucketsToShow
+        )
+        // Window spans the earliest bucket start through the latest bucket
+        // end. For monthly granularity that means it extends to the start
+        // of the month after `now`, so end-of-month entries don't drop.
+        let windowStart = ranges.first?.start ?? now
+        let windowEnd = ranges.last?.end ?? now
 
         var bucketRevenue = [Double](repeating: 0, count: bucketsToShow)
         var bucketCost = [Double](repeating: 0, count: bucketsToShow)
@@ -170,7 +180,7 @@ enum PortfolioAggregator {
             for entry in snapshot.entries {
                 let inWindow: Bool
                 if let occurred = entry.occurredAt {
-                    inWindow = occurred >= windowStart && occurred <= windowEnd
+                    inWindow = occurred >= windowStart && occurred < windowEnd
                 } else {
                     // Undated entries count toward the company total but not
                     // toward any time-series bucket. This keeps "current
@@ -189,12 +199,7 @@ enum PortfolioAggregator {
                     if inWindow {
                         companyRevenue += entry.amountUSD
                         totalRevenue += entry.amountUSD
-                        if let bucketIndex = bucketIndex(
-                            for: entry.occurredAt,
-                            windowStart: windowStart,
-                            bucketSize: bucketSize,
-                            count: bucketsToShow
-                        ) {
+                        if let bucketIndex = bucketIndex(for: entry.occurredAt, ranges: ranges) {
                             bucketRevenue[bucketIndex] += entry.amountUSD
                         }
                     }
@@ -202,12 +207,7 @@ enum PortfolioAggregator {
                     if inWindow {
                         companyCost += entry.amountUSD
                         totalCost += entry.amountUSD
-                        if let bucketIndex = bucketIndex(
-                            for: entry.occurredAt,
-                            windowStart: windowStart,
-                            bucketSize: bucketSize,
-                            count: bucketsToShow
-                        ) {
+                        if let bucketIndex = bucketIndex(for: entry.occurredAt, ranges: ranges) {
                             bucketCost[bucketIndex] += entry.amountUSD
                         }
                     }
@@ -216,12 +216,7 @@ enum PortfolioAggregator {
                         // Refunds reduce revenue and never count as cost.
                         companyRevenue -= entry.amountUSD
                         totalRevenue -= entry.amountUSD
-                        if let bucketIndex = bucketIndex(
-                            for: entry.occurredAt,
-                            windowStart: windowStart,
-                            bucketSize: bucketSize,
-                            count: bucketsToShow
-                        ) {
+                        if let bucketIndex = bucketIndex(for: entry.occurredAt, ranges: ranges) {
                             bucketRevenue[bucketIndex] -= entry.amountUSD
                         }
                     }
@@ -241,12 +236,10 @@ enum PortfolioAggregator {
             )
         }
 
-        let buckets = (0..<bucketsToShow).map { index -> PortfolioBucket in
-            let start = windowStart.addingTimeInterval(bucketSize * Double(index))
-            let end = start.addingTimeInterval(bucketSize)
-            return PortfolioBucket(
-                start: start,
-                end: end,
+        let buckets = ranges.enumerated().map { index, range -> PortfolioBucket in
+            PortfolioBucket(
+                start: range.start,
+                end: range.end,
                 revenueUSD: roundCurrency(bucketRevenue[index]),
                 costUSD: roundCurrency(bucketCost[index])
             )
@@ -275,18 +268,49 @@ enum PortfolioAggregator {
         )
     }
 
+    /// Returns the inclusive-start / exclusive-end ranges that buckets cover
+    /// for a given granularity. Daily / weekly use a fixed `TimeInterval`;
+    /// monthly is calendar-driven so months with 28–31 days don't silently
+    /// misattribute transactions near month boundaries.
+    static func bucketRanges(
+        granularity: PortfolioGranularity,
+        now: Date,
+        bucketCount: Int
+    ) -> [(start: Date, end: Date)] {
+        switch granularity {
+        case .daily, .weekly:
+            guard let size = granularity.bucketSeconds else { return [] }
+            let windowStart = now.addingTimeInterval(-size * Double(bucketCount))
+            return (0..<bucketCount).map { index in
+                let start = windowStart.addingTimeInterval(size * Double(index))
+                return (start, start.addingTimeInterval(size))
+            }
+        case .monthly:
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(identifier: "UTC") ?? .current
+            let currentMonthStart = calendar.dateInterval(of: .month, for: now)?.start ?? now
+            // Build `bucketCount` calendar-month ranges ending with the month
+            // that contains `now`. Each range is [first-of-month,
+            // first-of-next-month), so 28/29/30/31-day months get their
+            // entries attributed correctly.
+            var ranges: [(Date, Date)] = []
+            var monthStart = currentMonthStart
+            for _ in 0..<bucketCount {
+                let nextMonth = calendar.date(byAdding: .month, value: 1, to: monthStart) ?? monthStart
+                ranges.append((monthStart, nextMonth))
+                guard let earlier = calendar.date(byAdding: .month, value: -1, to: monthStart) else { break }
+                monthStart = earlier
+            }
+            return ranges.reversed()
+        }
+    }
+
     private static func bucketIndex(
         for date: Date?,
-        windowStart: Date,
-        bucketSize: TimeInterval,
-        count: Int
+        ranges: [(start: Date, end: Date)]
     ) -> Int? {
         guard let date else { return nil }
-        let offset = date.timeIntervalSince(windowStart)
-        guard offset >= 0 else { return nil }
-        let raw = Int(floor(offset / bucketSize))
-        guard raw >= 0 && raw < count else { return nil }
-        return raw
+        return ranges.firstIndex { date >= $0.start && date < $0.end }
     }
 
     /// Rounds to two decimal places to keep aggregate outputs deterministic

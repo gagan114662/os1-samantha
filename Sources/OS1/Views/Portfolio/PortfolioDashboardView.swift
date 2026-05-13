@@ -218,10 +218,13 @@ struct PortfolioDashboardView: View {
 
     // MARK: - Formatting helpers (also exposed for tests)
 
-    static let lifecycleOrder: [String] = [
-        "idea", "validating", "building", "launched",
-        "revenuePositive", "scaling", "paused", "killed", "pivoting", "unknown"
-    ]
+    /// Display order for the lifecycle distribution row, derived from
+    /// `CodexSession.LifecycleStage.allCases` so adding a new stage to the
+    /// enum automatically surfaces it here. A trailing "unknown" bucket
+    /// catches snapshots with a `nil` lifecycle stage.
+    static var lifecycleOrder: [String] {
+        CodexSession.LifecycleStage.allCases.map(\.rawValue) + ["unknown"]
+    }
 
     static func formatCurrency(_ amount: Double) -> String {
         // Locale-independent rendering so tests and JSON exports stay
