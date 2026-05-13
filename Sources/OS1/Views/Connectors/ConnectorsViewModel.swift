@@ -1,5 +1,50 @@
 import Foundation
 import SwiftUI
+import os.log
+
+/// Outcome of validating the stored Composio API key against the live
+/// MCP server. Decouples "rejected upstream" (4xx, definitive — key is
+/// bad) from "couldn't reach" (transport, indeterminate — leave the
+/// display alone so a network blip doesn't make us claim the key is bad).
+enum ConnectorsValidationOutcome: Equatable, Sendable {
+    case validated
+    case rejected(message: String)
+    case unreachable(message: String)
+}
+
+/// Validates the Composio API key currently resolvable from the
+/// credential store. Abstracted as a protocol so tests can drive each
+/// of the four `ValidationState` transitions deterministically.
+protocol ConnectorsKeyValidating: Sendable {
+    func validate() async -> ConnectorsValidationOutcome
+}
+
+/// Production validator: piggybacks on `MANAGE_CONNECTIONS list` —
+/// cheapest tool call that exercises the key end-to-end (auth header,
+/// MCP envelope, response decoding). 401/403/4xx → rejected. Transport
+/// / RPC / decoding errors → unreachable.
+struct ComposioToolkitValidator: ConnectorsKeyValidating {
+    let service: ComposioToolkitService
+
+    func validate() async -> ConnectorsValidationOutcome {
+        do {
+            _ = try await service.listConnections(slugs: [ComposioToolkitService.curatedToolkits.first?.slug ?? "gmail"])
+            return .validated
+        } catch let err as ComposioMCPError {
+            switch err {
+            case .invalidAPIKey:
+                return .rejected(message: err.errorDescription ?? "Composio rejected the API key.")
+            case .rpc(let code, let message) where (400..<500).contains(code):
+                let prefix = "Composio rejected the API key (HTTP \(code))."
+                return .rejected(message: message.isEmpty ? prefix : "\(prefix) Server said: \(message)")
+            default:
+                return .unreachable(message: err.errorDescription ?? "Composio unreachable.")
+            }
+        } catch {
+            return .unreachable(message: error.localizedDescription)
+        }
+    }
+}
 
 /// Drives the Connectors tab. Three responsibilities:
 ///   1. Manage the user's Composio API key (Keychain-backed, BYOK only).
@@ -17,6 +62,29 @@ final class ConnectorsViewModel: ObservableObject {
         case loading                  // initial keychain check
         case unconfigured             // no key stored — show paste form
         case configured               // key present
+    }
+
+    /// Single source of truth for whether the stored key is good. Kept
+    /// separate from `SetupStep` so a transient validation failure does
+    /// not clobber the stored credential — the user gets to keep the
+    /// key in Keychain while we surface that Composio is rejecting it.
+    enum ValidationState: Equatable {
+        case unknown                                  // never run, or transport error
+        case validating                               // request in flight
+        case validated                                // 2xx from Composio
+        case rejected(message: String)                // 4xx from Composio
+    }
+
+    /// What the Account panel should render. Computed from
+    /// `step` + `validationState` so the view never has to reconcile
+    /// two source-of-truth flags itself.
+    enum AccountDisplayState: Equatable {
+        case loading                                  // initial keychain check
+        case unconfigured                             // no key — show paste form
+        case storedUnknown                            // key stored, validation hasn't run yet
+        case validating                               // key stored, validating
+        case connected                                // key stored + validated
+        case rejected(message: String)                // key stored + rejected
     }
 
     enum VMInstallState: Equatable {
@@ -60,6 +128,12 @@ final class ConnectorsViewModel: ObservableObject {
     }
 
     @Published private(set) var step: SetupStep = .loading
+    @Published private(set) var validationState: ValidationState = .unknown
+    /// Set by the user clicking "Reconnect" on a rejected row. While
+    /// true, the Account panel shows a paste form inline so the user
+    /// can replace the key without first DISCONNECTing (which would
+    /// also wipe the stored credential).
+    @Published var isReentryFormVisible: Bool = false
     @Published var apiKeyDraft: String = ""
     @Published var formError: String?
     @Published var isBusy = false
@@ -107,22 +181,30 @@ final class ConnectorsViewModel: ObservableObject {
     private let paymentCredentialStore: PaymentCredentialStore
     private let installer: ComposioVMInstaller
     private let toolkitService: ComposioToolkitService?
+    private let keyValidator: ConnectorsKeyValidating?
     private let urlOpener: @Sendable (URL) -> Void
     private var refreshTask: Task<Void, Never>?
+    private var validationTask: Task<Void, Never>?
     private var authTask: Task<Void, Never>?
     private var currentProfileId: String?
+    private static let logger = Logger(subsystem: "dev.os1.connectors", category: "validation")
 
     init(
         credentialStore: ComposioCredentialStore = ComposioCredentialStore(),
         paymentCredentialStore: PaymentCredentialStore = .shared,
         installer: ComposioVMInstaller,
         toolkitService: ComposioToolkitService? = nil,
+        keyValidator: ConnectorsKeyValidating? = nil,
         urlOpener: @escaping @Sendable (URL) -> Void = { _ in }
     ) {
         self.credentialStore = credentialStore
         self.paymentCredentialStore = paymentCredentialStore
         self.installer = installer
         self.toolkitService = toolkitService
+        // Default validator: piggy-back on the same toolkit service the
+        // view model uses for listing connections. Tests can inject a
+        // stub to drive every ValidationState branch deterministically.
+        self.keyValidator = keyValidator ?? toolkitService.map(ComposioToolkitValidator.init)
         self.urlOpener = urlOpener
         self.refreshFromStorage()
         self.refreshPaymentCredentials()
@@ -145,6 +227,13 @@ final class ConnectorsViewModel: ObservableObject {
         lastScanResult = .notRun
         formError = nil
         paymentCredentialMessage = nil
+        // Cached validation belongs to the prior profile's key — drop
+        // it so the new profile can't read a stale "validated" badge
+        // while its own validation is still in flight.
+        validationTask?.cancel()
+        validationTask = nil
+        transition(to: .unknown, cause: "profile-change")
+        isReentryFormVisible = false
         refreshFromStorage()
         refreshPaymentCredentials()
         if step == .configured {
@@ -154,6 +243,23 @@ final class ConnectorsViewModel: ObservableObject {
 
     func refreshFromStorage() {
         step = credentialStore.hasAPIKey(forProfileId: currentProfileId) ? .configured : .unconfigured
+    }
+
+    /// Derived display state. The view layer reads this — never `step`
+    /// + `validationState` separately — so it's impossible to render
+    /// "stored / DISCONNECT" alongside "rejected" simultaneously.
+    var accountDisplay: AccountDisplayState {
+        switch step {
+        case .loading: return .loading
+        case .unconfigured: return .unconfigured
+        case .configured:
+            switch validationState {
+            case .unknown: return .storedUnknown
+            case .validating: return .validating
+            case .validated: return .connected
+            case .rejected(let message): return .rejected(message: message)
+            }
+        }
     }
 
     // MARK: - Auth
@@ -169,10 +275,16 @@ final class ConnectorsViewModel: ObservableObject {
             apiKeyDraft = ""
             formError = nil
             step = .configured
+            isReentryFormVisible = false
+            // Reset cached validation so the panel shows a "Validating…"
+            // spinner — not the stale "rejected" badge from the previous
+            // key — while the fresh request goes out.
+            transition(to: .unknown, cause: "key-saved")
             // Force a fresh status check so the VM-install card reflects
             // the new key right away.
             vmInstallState = .unknown
-            // Hydrate the toolkit list so it appears immediately.
+            // Hydrate the toolkit list (which also runs validation in
+            // the same call) so the panel updates immediately.
             refreshToolkits()
         } catch {
             formError = error.localizedDescription
@@ -186,9 +298,32 @@ final class ConnectorsViewModel: ObservableObject {
         vmInstallState = .unknown
         vmInstallError = nil
         refreshTask?.cancel()
+        validationTask?.cancel()
+        validationTask = nil
         toolkits = []
         toolkitListState = .idle
+        // Disconnect explicitly clears the cached validation result so a
+        // re-add walks the full validate → stored → validated path
+        // (rather than briefly showing a stale "connected" or "rejected"
+        // badge from the prior key).
+        transition(to: .unknown, cause: "disconnect")
+        isReentryFormVisible = false
         step = .unconfigured
+    }
+
+    /// User clicked "Reconnect" on a rejected row. Reveals an inline
+    /// paste form without touching the stored key (DISCONNECT is still
+    /// available separately if they want to wipe Keychain).
+    func beginReentry() {
+        isReentryFormVisible = true
+        apiKeyDraft = ""
+        formError = nil
+    }
+
+    func cancelReentry() {
+        isReentryFormVisible = false
+        apiKeyDraft = ""
+        formError = nil
     }
 
     /// Writes the key to the active profile's slot if a connection is
@@ -242,12 +377,21 @@ final class ConnectorsViewModel: ObservableObject {
     /// connection status. Called automatically when entering the
     /// `.configured` step and on user-initiated refresh. Cancels any
     /// in-flight refresh before starting a new one.
+    ///
+    /// This call is also the system of record for `validationState` —
+    /// success → `.validated`, 4xx → `.rejected`, transport/RPC error
+    /// → leaves the prior validation result untouched (we can't tell
+    /// whether the key is bad if we never reached Composio).
     func refreshToolkits() {
         guard let toolkitService else { return }
         guard step == .configured else { return }
 
         refreshTask?.cancel()
-        refreshTask = Task { [weak self] in
+        // Capture the prior verdict so a transport blip during refresh
+        // doesn't collapse a known-good (or known-bad) cached result.
+        let priorValidationState = validationState
+        transition(to: .validating, cause: "refresh-toolkits")
+        refreshTask = Task { [weak self, priorValidationState] in
             guard let self else { return }
             self.toolkitListState = .loading
             do {
@@ -281,14 +425,93 @@ final class ConnectorsViewModel: ObservableObject {
 
                 self.toolkits = displays
                 self.toolkitListState = .loaded
+                self.transition(to: .validated, cause: "refresh-toolkits.success")
             } catch is CancellationError {
                 return
             } catch {
-                self.toolkitListState = .failed(message: (error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+                let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                self.toolkitListState = .failed(message: message)
                 // Keep prior toolkits visible so a transient error
                 // doesn't blank the panel out.
+                self.reflectError(error, message: message, cause: "refresh-toolkits", priorState: priorValidationState)
             }
         }
+    }
+
+    /// Lightweight validation path — used on tab-open and on app launch
+    /// to confirm the stored key is still good without requiring a full
+    /// toolkit-list rebuild. When a `ComposioToolkitService` is wired
+    /// up, `refreshToolkits()` does this implicitly (single round-trip);
+    /// this is the seam for the no-toolkit-service case and for tests.
+    func validateAPIKey() async {
+        guard step == .configured else { return }
+        guard let keyValidator else {
+            transition(to: .unknown, cause: "validate.no-validator")
+            return
+        }
+        validationTask?.cancel()
+        // Capture the prior result before flipping to .validating so we
+        // can restore it on a transport failure — a network blip must
+        // not flip a known-good (or known-bad) cached result.
+        let priorState = validationState
+        transition(to: .validating, cause: "validate")
+        let task = Task { [weak self] in
+            let outcome = await keyValidator.validate()
+            guard let self else { return }
+            if Task.isCancelled { return }
+            switch outcome {
+            case .validated:
+                self.transition(to: .validated, cause: "validate.success")
+            case .rejected(let message):
+                self.transition(to: .rejected(message: message), cause: "validate.rejected")
+            case .unreachable(let message):
+                Self.logger.warning("Composio validation unreachable: \(message, privacy: .public)")
+                // Restore the prior cached verdict (validated / rejected
+                // / unknown) so transient errors don't paint a stored
+                // key as rejected — or worse, as freshly validated.
+                self.transition(to: priorState, cause: "validate.unreachable")
+            }
+        }
+        validationTask = task
+        await task.value
+    }
+
+    /// Translates a thrown error from the toolkit-list path into a
+    /// validation-state update. Mirrors `ComposioToolkitValidator`'s
+    /// classification so the two paths agree on which outcomes mean
+    /// "the key is bad" vs. "we couldn't tell."
+    private func reflectError(_ error: Error, message: String, cause: String, priorState: ValidationState) {
+        guard let mcpError = error as? ComposioMCPError else {
+            // Anything that isn't an MCP error is by definition not a
+            // Composio rejection (could be JSON, networking, etc.) —
+            // restore the prior verdict so a transient blip doesn't
+            // wipe a cached result.
+            transition(to: priorState, cause: "\(cause).unclassified")
+            return
+        }
+        switch mcpError {
+        case .invalidAPIKey:
+            transition(to: .rejected(message: mcpError.errorDescription ?? message), cause: "\(cause).invalid-key")
+        case .rpc(let code, _) where (400..<500).contains(code):
+            transition(to: .rejected(message: mcpError.errorDescription ?? message), cause: "\(cause).http-\(code)")
+        default:
+            transition(to: priorState, cause: "\(cause).unreachable")
+        }
+    }
+
+    /// Single mutator for `validationState`. Emits a structured event
+    /// log line so support can correlate "panel flipped" with a cause
+    /// (key-saved / disconnect / refresh-toolkits.success / etc.).
+    private func transition(to next: ValidationState, cause: String) {
+        let previous = validationState
+        if previous == next { return }
+        let startNS = DispatchTime.now().uptimeNanoseconds
+        validationState = next
+        let endNS = DispatchTime.now().uptimeNanoseconds
+        let latencyMs = Double(endNS &- startNS) / 1_000_000
+        Self.logger.info(
+            "connector.validation from=\(String(describing: previous), privacy: .public) to=\(String(describing: next), privacy: .public) cause=\(cause, privacy: .public) latencyMs=\(latencyMs, privacy: .public)"
+        )
     }
 
     var groupedToolkits: [(tag: ComposioToolkitMeta.Tag, toolkits: [ToolkitDisplay])] {
@@ -350,6 +573,8 @@ final class ConnectorsViewModel: ObservableObject {
             apiKeyDraft = ""
             formError = nil
             step = .configured
+            isReentryFormVisible = false
+            transition(to: .unknown, cause: "import-discovered-key")
             vmInstallState = .unknown
             discoveredVMKey = nil
             refreshToolkits()

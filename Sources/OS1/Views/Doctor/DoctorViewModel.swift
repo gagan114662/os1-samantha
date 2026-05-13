@@ -494,7 +494,8 @@ final class DoctorViewModel: ObservableObject {
     }
 
     private func makeStateBackupCheck() async -> Check {
-        guard let latest = Self.latestStateBackupManifest() else {
+        let inventory = Self.stateBackupInventory()
+        guard let latest = inventory.latest else {
             return Check(
                 id: "company-state-backups",
                 title: "Company state backups",
@@ -505,19 +506,32 @@ final class DoctorViewModel: ObservableObject {
             )
         }
 
-        let integrity = CompanyStateBackupBuilder.verifyManifest(latest.manifest, backupRoot: latest.root)
+        let integrity = latest.encryptedBackup.map {
+            Self.encryptedBundleDoctorIntegrityReport($0)
+        } ?? CompanyStateBackupBuilder.verifyManifest(latest.manifest, backupRoot: latest.root)
         let problems = Self.stateBackupProblems(
             latestManifest: latest.manifest,
             integrityReport: integrity,
-            now: Date()
+            now: Date(),
+            oldestManifest: inventory.oldest?.manifest,
+            staleThresholdHours: inventory.staleThresholdHours,
+            unreadableBackupCount: inventory.unreadableCount
+        )
+        let detailRows = Self.stateBackupDoctorRows(
+            latestManifest: latest.manifest,
+            oldestManifest: inventory.oldest?.manifest,
+            integrityReport: integrity,
+            now: Date(),
+            staleThresholdHours: inventory.staleThresholdHours,
+            unreadableBackupCount: inventory.unreadableCount
         )
         if problems.isEmpty {
             return Check(
                 id: "company-state-backups",
                 title: "Company state backups",
                 severity: .ok,
-                summary: "Latest backup is current and integrity-checked",
-                detail: "Backup \(latest.manifest.backupID) has \(integrity.verifiedEntryCount) verified entries.",
+                summary: "Latest backup is current; oldest retained backup is tracked",
+                detail: detailRows.joined(separator: "\n"),
                 actions: []
             )
         }
@@ -527,7 +541,7 @@ final class DoctorViewModel: ObservableObject {
             title: "Company state backups",
             severity: integrity.isPassing ? .warn : .error,
             summary: "Backup needs attention",
-            detail: problems.joined(separator: "\n"),
+            detail: (detailRows + problems).joined(separator: "\n"),
             actions: []
         )
     }
@@ -776,19 +790,35 @@ final class DoctorViewModel: ObservableObject {
     nonisolated static func stateBackupProblems(
         latestManifest: CompanyStateBackupManifest?,
         integrityReport: CompanyBackupIntegrityReport?,
-        now: Date
+        now: Date,
+        oldestManifest: CompanyStateBackupManifest? = nil,
+        staleThresholdHours: Int? = nil,
+        unreadableBackupCount: Int = 0
     ) -> [String] {
         guard let latestManifest else { return ["No state backup manifest found."] }
         var problems: [String] = []
         let ageHours = now.timeIntervalSince(latestManifest.createdAt) / 3_600
-        if ageHours > Double(latestManifest.recoveryPointObjectiveHours) {
+        let threshold = staleThresholdHours ?? latestManifest.recoveryPointObjectiveHours
+        if ageHours > Double(threshold) {
             problems.append(
-                "Latest backup is \(Int(ageHours))h old; RPO is \(latestManifest.recoveryPointObjectiveHours)h."
+                "Latest successful backup is \(Int(ageHours))h old; stale threshold is \(threshold)h."
             )
+        }
+        if let oldestManifest {
+            let retentionHours = oldestManifest.createdAt.timeIntervalSince(latestManifest.createdAt) / 3_600
+            if retentionHours > Double(latestManifest.retentionDays * 24) {
+                problems.append("Oldest retained backup exceeds retention policy of \(latestManifest.retentionDays)d.")
+            }
+        }
+        if unreadableBackupCount > 0 {
+            problems.append("\(unreadableBackupCount) backup bundle(s) could not be decoded or failed manifest-hash validation.")
         }
         guard let integrityReport else {
             problems.append("Backup integrity has not been checked.")
             return problems
+        }
+        if let mismatch = integrityReport.manifestHashMismatch {
+            problems.append("Manifest hash mismatch: \(mismatch).")
         }
         if !integrityReport.missingPaths.isEmpty {
             problems.append("Missing backup paths: \(integrityReport.missingPaths.joined(separator: ", ")).")
@@ -801,31 +831,111 @@ final class DoctorViewModel: ObservableObject {
         return problems
     }
 
-    private nonisolated static func latestStateBackupManifest()
-        -> (manifest: CompanyStateBackupManifest, root: URL)? {
-        let root = FileManager.default.homeDirectoryForCurrentUser
+    nonisolated static func stateBackupDoctorRows(
+        latestManifest: CompanyStateBackupManifest,
+        oldestManifest: CompanyStateBackupManifest?,
+        integrityReport: CompanyBackupIntegrityReport?,
+        now: Date,
+        staleThresholdHours: Int,
+        unreadableBackupCount: Int = 0
+    ) -> [String] {
+        let latestAge = Int(now.timeIntervalSince(latestManifest.createdAt) / 3_600)
+        let oldest = oldestManifest ?? latestManifest
+        let oldestAge = Int(now.timeIntervalSince(oldest.createdAt) / 3_600)
+        let integrity = integrityReport?.isPassing == true ? "passed" : "needs attention"
+        return [
+            "Last successful backup age: \(latestAge)h (threshold \(staleThresholdHours)h)",
+            "Oldest backup age: \(oldestAge)h",
+            "Latest backup ID: \(latestManifest.backupID)",
+            "Integrity: \(integrity); unreadable bundles: \(unreadableBackupCount)",
+        ]
+    }
+
+    private nonisolated static func encryptedBundleDoctorIntegrityReport(
+        _ backup: CompanyEncryptedStateBackup,
+        checkedAt: Date = Date()
+    ) -> CompanyBackupIntegrityReport {
+        if let mismatch = CompanyStateBackupBuilder.manifestHashMismatch(in: backup) {
+            return CompanyBackupIntegrityReport(
+                status: .failed,
+                checkedAt: checkedAt,
+                verifiedEntryCount: 0,
+                missingPaths: [],
+                checksumMismatches: [],
+                manifestHashMismatch: mismatch
+            )
+        }
+        return CompanyBackupIntegrityReport(
+            status: .passed,
+            checkedAt: checkedAt,
+            verifiedEntryCount: backup.manifest.entries.count,
+            missingPaths: [],
+            checksumMismatches: [],
+            manifestHashMismatch: nil
+        )
+    }
+
+    struct StateBackupInventory: Equatable, Sendable {
+        struct Item: Equatable, Sendable {
+            let manifest: CompanyStateBackupManifest
+            let root: URL
+            let encryptedBackup: CompanyEncryptedStateBackup?
+        }
+
+        let latest: Item?
+        let oldest: Item?
+        let staleThresholdHours: Int
+        let unreadableCount: Int
+    }
+
+    nonisolated static func configuredStateBackupStaleThresholdHours(environment: [String: String] = ProcessInfo.processInfo.environment) -> Int? {
+        environment["OS1_BACKUP_STALE_THRESHOLD_HOURS"].flatMap(Int.init).flatMap { $0 > 0 ? $0 : nil }
+    }
+
+    private nonisolated static func stateBackupInventory(
+        root: URL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".os1/codex-tasks/backups", isDirectory: true)
+    ) -> StateBackupInventory {
         guard let children = try? FileManager.default.contentsOfDirectory(
             at: root,
             includingPropertiesForKeys: [.contentModificationDateKey],
             options: [.skipsHiddenFiles]
-        ) else { return nil }
+        ) else {
+            return StateBackupInventory(
+                latest: nil,
+                oldest: nil,
+                staleThresholdHours: configuredStateBackupStaleThresholdHours() ?? 24,
+                unreadableCount: 0
+            )
+        }
 
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return children
-            .compactMap { backupRoot -> (CompanyStateBackupManifest, URL, Date)? in
+        let decoder = CompanyStateBackupCodec.decoder()
+        var unreadable = 0
+        let items = children
+            .compactMap { backupRoot -> StateBackupInventory.Item? in
+                if let bundleData = try? Data(contentsOf: backupRoot.appendingPathComponent(CompanyEncryptedBackupBundleStore.bundleFilename)),
+                   let bundle = try? decoder.decode(CompanyEncryptedStateBackup.self, from: bundleData),
+                   (try? CompanyStateBackupBuilder.validateEncryptedBackupBundle(bundle)) != nil {
+                    return StateBackupInventory.Item(manifest: bundle.manifest, root: backupRoot, encryptedBackup: bundle)
+                }
                 let manifestURL = backupRoot.appendingPathComponent("manifest.json")
                 guard let data = try? Data(contentsOf: manifestURL),
                       let manifest = try? decoder.decode(CompanyStateBackupManifest.self, from: data)
-                else { return nil }
-                let values = try? manifestURL.resourceValues(forKeys: [.contentModificationDateKey])
-                let modified = values?.contentModificationDate ?? manifest.createdAt
-                return (manifest, backupRoot, modified)
+                else {
+                    unreadable += 1
+                    return nil
+                }
+                return StateBackupInventory.Item(manifest: manifest, root: backupRoot, encryptedBackup: nil)
             }
-            .sorted { $0.2 > $1.2 }
-            .first
-            .map { ($0.0, $0.1) }
+            .sorted { $0.manifest.createdAt > $1.manifest.createdAt }
+        let latest = items.first
+        let threshold = configuredStateBackupStaleThresholdHours() ?? latest?.manifest.recoveryPointObjectiveHours ?? 24
+        return StateBackupInventory(
+            latest: latest,
+            oldest: items.last,
+            staleThresholdHours: threshold,
+            unreadableCount: unreadable
+        )
     }
 
     /// Reports whether the built OS1.app bundle is Developer-ID-signed +
@@ -1612,19 +1722,7 @@ final class DoctorViewModel: ObservableObject {
     private func probeHermesAvailability(on connection: ConnectionProfile) async -> HermesUpdateAvailability {
         do {
             let result = try await hermesUpdater.checkAvailability(on: connection)
-            if !result.installed { return .notInstalled }
-            let label = result.version_label ?? L10n.string("Hermes Agent")
-            switch result.behind {
-            case .some(0):
-                return .upToDate(versionLabel: label)
-            case .some(let n) where n > 0:
-                return .behind(versionLabel: label, commits: n)
-            case .some(-1):
-                return .behind(versionLabel: label, commits: nil)
-            default:
-                // Probe couldn't determine — don't nag the user.
-                return .upToDate(versionLabel: label)
-            }
+            return .make(from: result, fallbackLabel: L10n.string("Hermes Agent"))
         } catch {
             return .unknown
         }
@@ -1659,9 +1757,9 @@ final class DoctorViewModel: ObservableObject {
                 detail: L10n.string("Up to date with origin/main."),
                 actions: [.updateHermes]
             )
-        case .behind(let versionLabel, let commits):
+        case .behind(let versionLabel, let offer):
             let summary: String
-            if let commits, commits > 0 {
+            if let commits = offer.commits, commits > 0 {
                 summary = String(
                     format: L10n.string(commits == 1
                         ? "%@ — %d commit behind main."

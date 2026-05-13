@@ -36,5 +36,14 @@ struct OS1App: App {
         .commands {
             OS1Commands(appState: appState)
         }
+
+        Settings {
+            HermesSettingsView()
+                .environmentObject(appState)
+                .os1Theme()
+                .foregroundStyle(.os1OnCoralPrimary)
+                .tint(.os1OnCoralPrimary)
+                .preferredColorScheme(.dark)
+        }
     }
 }

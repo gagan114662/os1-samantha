@@ -34,6 +34,8 @@ final class AppState: ObservableObject {
     @Published var hermesInstallStatus: HermesInstallStatus = .idle
     @Published var hermesUpdateAvailability: HermesUpdateAvailability = .unknown
     @Published var hermesUpdateStatus: HermesUpdateStatus = .idle
+    @Published var hermesUpdateBannerSnapshot: HermesUpdateBannerSnapshot?
+    @Published var checkForHermesUpdatesAutomatically = HermesUpdatePreferencesStore.defaultCheckAutomatically
     @Published var activeConnectionID: UUID?
     @Published var selectedSessionID: String?
     @Published var sessions: [SessionSummary] = []
@@ -153,6 +155,8 @@ final class AppState: ObservableObject {
     private var statusTask: Task<Void, Never>?
     private var sessionTranscriptPollingTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
+    private let hermesUpdatePreferences = HermesUpdatePreferencesStore()
+    private var hermesUpdateBannerSession = HermesUpdateBannerSession()
 
     init() {
         let paths = AppPaths()
@@ -169,6 +173,7 @@ final class AppState: ObservableObject {
         let orgoHermesInstaller = OrgoHermesInstaller(transport: orgoTransport)
         let transport = MultiplexedRemoteTransport(ssh: sshTransport, orgo: orgoTransport)
         let hermesUpdater = HermesUpdater(orgoTransport: orgoTransport, multiplexed: transport)
+        self.checkForHermesUpdatesAutomatically = hermesUpdatePreferences.checkAutomatically
 
         self.connectionStore = connectionStore
         self.sshTransport = sshTransport
@@ -306,7 +311,7 @@ final class AppState: ObservableObject {
                 await self?.performHermesUpdate()
             },
             publishAvailability: { [weak self] availability in
-                self?.hermesUpdateAvailability = availability
+                self?.publishHermesUpdateAvailability(availability)
             }
         )
 
@@ -694,7 +699,9 @@ final class AppState: ObservableObject {
             // moment to learn the host's Hermes state, and Overview is
             // where the "update available" banner shows up. Cheap (reads
             // ~/.hermes/.update_check), so safe to do here.
-            Task { await refreshHermesUpdateAvailability() }
+            if checkForHermesUpdatesAutomatically {
+                Task { await refreshHermesUpdateAvailability() }
+            }
         } catch {
             guard isActiveWorkspace(profile) else { return }
             isBusy = false
@@ -778,26 +785,9 @@ final class AppState: ObservableObject {
         do {
             let result = try await hermesUpdater.checkAvailability(on: profile)
             guard isActiveWorkspace(profile) else { return }
-            if !result.installed {
-                hermesUpdateAvailability = .notInstalled
-                return
-            }
-            let label = result.version_label ?? L10n.string("Hermes Agent")
-            switch result.behind {
-            case .some(0):
-                hermesUpdateAvailability = .upToDate(versionLabel: label)
-            case .some(let n) where n > 0:
-                hermesUpdateAvailability = .behind(versionLabel: label, commits: n)
-            case .some(-1):
-                // Behind, count unknown — `hermes update --check` exited 1
-                // but we didn't parse stdout for an exact number.
-                hermesUpdateAvailability = .behind(versionLabel: label, commits: nil)
-            default:
-                // Probe couldn't determine state (no git repo, network
-                // failure on Nix builds, etc.). We still know hermes is
-                // installed; treat as up-to-date so the UI doesn't nag.
-                hermesUpdateAvailability = .upToDate(versionLabel: label)
-            }
+            publishHermesUpdateAvailability(
+                .make(from: result, fallbackLabel: L10n.string("Hermes Agent"))
+            )
         } catch {
             // Don't surface transport errors here — the Doctor tab's
             // gateway check handles host-unreachable. Leave availability
@@ -853,6 +843,38 @@ final class AppState: ObservableObject {
         if case .failed = hermesUpdateStatus {
             hermesUpdateStatus = .idle
         }
+    }
+
+    @MainActor
+    func dismissHermesUpdateBanner() {
+        guard case .behind(_, let offer) = hermesUpdateAvailability else { return }
+        hermesUpdateBannerSession.dismiss(offer: offer)
+        hermesUpdateBannerSnapshot = nil
+        setStatusMessage(L10n.string("Hermes update banner dismissed."))
+    }
+
+    @MainActor
+    func openHermesUpdateChangelog() {
+        guard case .behind(_, let offer) = hermesUpdateAvailability,
+              let url = offer.changelogURL else {
+            return
+        }
+        NSWorkspace.shared.open(url)
+    }
+
+    @MainActor
+    func setCheckForHermesUpdatesAutomatically(_ isEnabled: Bool) {
+        checkForHermesUpdatesAutomatically = isEnabled
+        hermesUpdatePreferences.checkAutomatically = isEnabled
+        publishHermesUpdateAvailability(hermesUpdateAvailability)
+    }
+
+    private func publishHermesUpdateAvailability(_ availability: HermesUpdateAvailability) {
+        hermesUpdateAvailability = availability
+        hermesUpdateBannerSnapshot = hermesUpdateBannerSession.snapshot(
+            for: availability,
+            checkAutomatically: checkForHermesUpdatesAutomatically
+        )
     }
 
     func refreshSessions(query: String? = nil) async {
@@ -2555,6 +2577,7 @@ final class AppState: ObservableObject {
         resetDocuments()
         hermesUpdateAvailability = .unknown
         hermesUpdateStatus = .idle
+        hermesUpdateBannerSnapshot = nil
         if closeTerminalTabs {
             terminalWorkspace.closeAllTabs()
         }
