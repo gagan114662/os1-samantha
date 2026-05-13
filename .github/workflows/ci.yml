@@ -29,10 +29,7 @@ jobs:
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Run non-live agent evals
-        run: |
-          python3 scripts/run-evals.py \
-            --json-report artifacts/evals/non-live-report.json \
-            --markdown-report artifacts/evals/non-live-report.md
+        run: make evals
 
       - name: Publish eval report summary
         if: always()

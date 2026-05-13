@@ -18,6 +18,12 @@ struct CompanyEvaluationHarnessTests {
         #expect(categories.contains(.secretRedaction))
         #expect(categories.contains(.errorRecovery))
         #expect(categories.contains(.toolContract))
+        #expect(categories.contains(.heartbeatDynamism))
+        #expect(categories.contains(.approvalGate))
+        #expect(categories.contains(.validationEvidence))
+        #expect(categories.contains(.driftDetection))
+        #expect(categories.contains(.restartRecovery))
+        #expect(report.blockingPassed)
         #expect(report.averageScore == 100)
     }
 
@@ -42,9 +48,10 @@ struct CompanyEvaluationHarnessTests {
         let markdown = report.markdown
 
         #expect(markdown.contains("# OS1 evaluation report"))
-        #expect(markdown.contains("company-agent-non-live"))
-        #expect(markdown.contains("| Scenario | Category | Status | Score | Findings |"))
+        #expect(markdown.contains("os1-agent-non-live-blocking"))
+        #expect(markdown.contains("| Scenario | Category | Blocking | Status | Score | Findings |"))
         #expect(markdown.contains("Tool calls include safety contracts"))
+        #expect(markdown.contains("Heartbeat 1 invokes Codex with the mission"))
     }
 
     @Test

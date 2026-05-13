@@ -1126,7 +1126,7 @@
 "Agent eval harness" = "Agent eval harness";
 "No non-live eval report found" = "No non-live eval report found";
 "Eval suite %@: %lld/%lld passed, score %.1f" = "Eval suite %@: %lld/%lld passed, score %.1f";
-"Run `python3 scripts/run-evals.py` to create artifacts/evals/non-live-report.json. CI runs this on every PR and uploads the report artifact." = "Run `python3 scripts/run-evals.py` to create artifacts/evals/non-live-report.json. CI runs this on every PR and uploads the report artifact.";
+"Run `make evals` to create artifacts/evals/non-live-report.json. CI runs this on every PR and uploads the report artifact." = "Run `make evals` to create artifacts/evals/non-live-report.json. CI runs this on every PR and uploads the report artifact.";
 
 // MARK: - Payments doctor card
 "Payments" = "Payments";

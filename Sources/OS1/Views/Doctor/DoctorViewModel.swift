@@ -731,7 +731,7 @@ final class DoctorViewModel: ObservableObject {
                 title: L10n.string("Agent eval harness"),
                 severity: .warn,
                 summary: L10n.string("No non-live eval report found"),
-                detail: L10n.string("Run `python3 scripts/run-evals.py` to create artifacts/evals/non-live-report.json. CI runs this on every PR and uploads the report artifact."),
+                detail: L10n.string("Run `make evals` to create artifacts/evals/non-live-report.json. CI runs this on every PR and uploads the report artifact."),
                 actions: []
             )
         }

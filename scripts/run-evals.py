@@ -22,6 +22,23 @@ NON_LIVE_SCENARIOS = [
     ("secret-redaction", "secretRedaction", "Secrets are redacted"),
     ("error-recovery", "errorRecovery", "Audit corrections override worker claims"),
     ("tool-contracts", "toolContract", "Tool calls include safety contracts"),
+    ("heartbeat-1-dynamism", "heartbeatDynamism", "Heartbeat 1 invokes Codex with the mission"),
+    (
+        "approval-gate-public-publish",
+        "approvalGate",
+        "Public publishing blocks until approval grant exists",
+    ),
+    (
+        "validation-evidence-threshold",
+        "validationEvidence",
+        "Building transition requires validation evidence",
+    ),
+    ("drift-no-progress-auto-pause", "driftDetection", "No-progress chains auto-pause"),
+    (
+        "restart-recovery-heartbeat-lease",
+        "restartRecovery",
+        "Restart recovery preserves heartbeat leases",
+    ),
 ]
 
 
@@ -36,20 +53,37 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def run_non_live(swift: str) -> tuple[bool, list[dict[str, object]], str]:
+def run_non_live(
+    swift: str, json_report: Path, markdown_report: Path
+) -> tuple[bool, list[dict[str, object]], str, dict[str, object] | None]:
+    env = os.environ.copy()
+    env["OS1_EVAL_JSON_REPORT"] = str(json_report)
+    env["OS1_EVAL_MARKDOWN_REPORT"] = str(markdown_report)
     proc = subprocess.run(
-        [swift, "test", "--filter", "CompanyEvaluationHarnessTests"],
+        [swift, "test", "--filter", "OS1EvalHarnessTests"],
+        env=env,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         check=False,
     )
+    if json_report.exists():
+        with json_report.open(encoding="utf-8") as handle:
+            report = json.load(handle)
+        return (
+            bool(report.get("passed")) and proc.returncode == 0,
+            list(report["results"]),
+            proc.stdout,
+            report,
+        )
+
     passed = proc.returncode == 0
     results = [
         {
             "id": scenario_id,
             "category": category,
             "title": title,
+            "blocking": True,
             "status": "pass" if passed else "fail",
             "score": 100 if passed else 0,
             "findings": ["Swift eval scenario passed"]
@@ -58,7 +92,7 @@ def run_non_live(swift: str) -> tuple[bool, list[dict[str, object]], str]:
         }
         for scenario_id, category, title in NON_LIVE_SCENARIOS
     ]
-    return passed, results, proc.stdout
+    return passed, results, proc.stdout, None
 
 
 def run_live_sandbox() -> tuple[bool, list[dict[str, object]], str]:
@@ -118,16 +152,18 @@ def markdown(report: dict[str, object]) -> str:
         f"- Suite: {report['suite']}",
         f"- Mode: {'live-sandbox' if report['live'] else 'non-live'}",
         f"- Status: {'pass' if report['passed'] else 'fail'}",
+        f"- Blocking status: {'pass' if report.get('blockingPassed', report['passed']) else 'fail'}",
         f"- Passed: {report['passedCount']}/{report['totalCount']}",
+        f"- Blocking failures: {report.get('blockingFailedCount', 0)}",
         f"- Average score: {report['averageScore']:.1f}/100",
         "",
-        "| Scenario | Category | Status | Score | Findings |",
-        "| --- | --- | --- | ---: | --- |",
+        "| Scenario | Category | Blocking | Status | Score | Findings |",
+        "| --- | --- | --- | --- | ---: | --- |",
     ]
     for result in report["results"]:
         findings = "; ".join(result["findings"])
         lines.append(
-            f"| {result['title']} | {result['category']} | {result['status']} | {result['score']} | {findings} |"
+            f"| {result['title']} | {result['category']} | {'yes' if result.get('blocking', True) else 'no'} | {result['status']} | {result['score']} | {findings} |"
         )
     lines.append("")
     return "\n".join(lines)
@@ -139,17 +175,34 @@ def main() -> int:
         passed, results, output = run_live_sandbox()
         suite = "company-agent-live-sandbox"
     else:
-        passed, results, output = run_non_live(args.swift_test)
-        suite = "company-agent-non-live"
+        passed, results, output, swift_report = run_non_live(
+            args.swift_test, Path(args.json_report), Path(args.markdown_report)
+        )
+        if swift_report is not None:
+            if not Path(args.markdown_report).exists():
+                Path(args.markdown_report).write_text(markdown(swift_report), encoding="utf-8")
+            print(Path(args.markdown_report).read_text(encoding="utf-8"))
+            if output:
+                print("## Raw output tail")
+                print(output[-4000:])
+            return 0 if passed else 1
+        suite = "os1-agent-non-live-blocking"
 
     average = sum(int(result["score"]) for result in results) / max(1, len(results))
     report = {
         "generatedAt": datetime.now(UTC).isoformat(),
+        "schemaVersion": 1,
         "suite": suite,
         "live": args.live,
         "passed": passed,
         "passedCount": sum(1 for result in results if result["status"] == "pass"),
         "totalCount": len(results),
+        "blockingPassed": all(
+            result["status"] == "pass" for result in results if result.get("blocking", True)
+        ),
+        "blockingFailedCount": sum(
+            1 for result in results if result.get("blocking", True) and result["status"] != "pass"
+        ),
         "averageScore": average,
         "results": results,
         "outputTail": output[-4000:],
