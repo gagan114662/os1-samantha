@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import AppKit
 import SwiftUI
 
 /// Drives the Doctor tab. Phase 1 surfaces two checks per active host:
@@ -16,6 +17,8 @@ import SwiftUI
 /// they'll click Refresh.
 @MainActor
 final class DoctorViewModel: ObservableObject {
+    nonisolated static let defaultCheckTimeoutSeconds: TimeInterval = 30
+    private nonisolated static let harnessNoCompletionAlertSeconds: TimeInterval = 60
 
     enum Severity: Equatable, Sendable {
         case unknown   // not yet checked
@@ -30,15 +33,191 @@ final class DoctorViewModel: ObservableObject {
         case updateHermes
         case reinstallLaunchAgents
         case migrateSchema
+        case retryCheck(String)
+        case openLogs(String)
+    }
+
+    enum CheckState: String, CaseIterable, Equatable, Sendable {
+        case pending
+        case running
+        case pass
+        case warn
+        case fail
+        case timeout
+        case skipped
+
+        var isTerminal: Bool {
+            switch self {
+            case .pending, .running: false
+            case .pass, .warn, .fail, .timeout, .skipped: true
+            }
+        }
     }
 
     struct Check: Identifiable, Equatable, Sendable {
         let id: String
         let title: String
+        let state: CheckState
         let severity: Severity
         let summary: String
         let detail: String?
         let actions: [Action]
+        let timeoutSeconds: TimeInterval
+        let logPath: String?
+        let errorMessage: String?
+
+        init(
+            id: String,
+            title: String,
+            severity: Severity,
+            summary: String,
+            detail: String?,
+            actions: [Action],
+            state: CheckState? = nil,
+            timeoutSeconds: TimeInterval = DoctorViewModel.defaultCheckTimeoutSeconds,
+            logPath: String? = nil,
+            errorMessage: String? = nil
+        ) {
+            self.id = id
+            self.title = title
+            self.state = state ?? Self.terminalState(for: severity)
+            self.severity = severity
+            self.summary = summary
+            self.detail = detail
+            self.actions = actions
+            self.timeoutSeconds = timeoutSeconds
+            self.logPath = logPath
+            self.errorMessage = errorMessage
+        }
+
+        static func pending(id: String, title: String, timeoutSeconds: TimeInterval, logPath: String?) -> Check {
+            Check(
+                id: id,
+                title: title,
+                severity: .unknown,
+                summary: L10n.string("Waiting to run."),
+                detail: nil,
+                actions: [],
+                state: .pending,
+                timeoutSeconds: timeoutSeconds,
+                logPath: logPath
+            )
+        }
+
+        func replacing(
+            state: CheckState? = nil,
+            severity: Severity? = nil,
+            summary: String? = nil,
+            detail: String?? = nil,
+            actions: [Action]? = nil,
+            timeoutSeconds: TimeInterval? = nil,
+            logPath: String?? = nil,
+            errorMessage: String?? = nil
+        ) -> Check {
+            Check(
+                id: id,
+                title: title,
+                severity: severity ?? self.severity,
+                summary: summary ?? self.summary,
+                detail: detail ?? self.detail,
+                actions: actions ?? self.actions,
+                state: state ?? self.state,
+                timeoutSeconds: timeoutSeconds ?? self.timeoutSeconds,
+                logPath: logPath ?? self.logPath,
+                errorMessage: errorMessage ?? self.errorMessage
+            )
+        }
+
+        static func terminalState(for severity: Severity) -> CheckState {
+            switch severity {
+            case .ok: return .pass
+            case .warn: return .warn
+            case .error: return .fail
+            case .unknown: return .skipped
+            }
+        }
+    }
+
+    private enum DoctorCheckError: LocalizedError, Sendable {
+        case deallocated
+
+        var errorDescription: String? {
+            switch self {
+            case .deallocated: return L10n.string("Doctor view model was released before the check completed.")
+            }
+        }
+    }
+
+    private struct DoctorCheckTimeoutError: LocalizedError, Sendable {
+        let title: String
+        let timeoutSeconds: TimeInterval
+
+        var errorDescription: String? {
+            L10n.string(
+                "%@ timed out after %.0f seconds.",
+                title,
+                timeoutSeconds
+            )
+        }
+    }
+
+    struct ResolvedCheck: Sendable {
+        let check: Check
+        let startedAt: Date
+        let endedAt: Date
+        let latencyMS: Int
+        let errorMessage: String?
+    }
+
+    private final class CheckResultGate: @unchecked Sendable {
+        private let lock = NSLock()
+        private var didResume = false
+
+        func resume(
+            _ continuation: CheckedContinuation<Result<Check, Error>, Never>,
+            returning result: Result<Check, Error>
+        ) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !didResume else { return false }
+            didResume = true
+            continuation.resume(returning: result)
+            return true
+        }
+    }
+
+    private nonisolated static var gatewayLogPath: String {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".hermes/logs/gateway.log")
+            .path
+    }
+
+    private nonisolated static var doctorEventLogPath: String {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".os1/codex-tasks/events.jsonl")
+            .path
+    }
+
+    struct CheckDefinition: Sendable {
+        let id: String
+        let title: String
+        let timeoutSeconds: TimeInterval
+        let logPath: String?
+        let run: @MainActor @Sendable () async throws -> Check
+
+        init(
+            id: String,
+            title: String,
+            timeoutSeconds: TimeInterval = DoctorViewModel.defaultCheckTimeoutSeconds,
+            logPath: String? = nil,
+            run: @escaping @MainActor @Sendable () async throws -> Check
+        ) {
+            self.id = id
+            self.title = title
+            self.timeoutSeconds = timeoutSeconds
+            self.logPath = logPath
+            self.run = run
+        }
     }
 
     struct CodexHeartbeatSandboxRuntime: Equatable, Sendable {
@@ -79,6 +258,33 @@ final class DoctorViewModel: ObservableObject {
     @Published var actionError: String?
     @Published private(set) var lastRefreshedAt: Date?
 
+    var checksSummary: String {
+        guard !checks.isEmpty else { return L10n.string("No checks have run yet.") }
+        let completed = checks.filter(\.state.isTerminal).count
+        let running = checks.filter { $0.state == .running }.count
+        let failed = checks.filter { $0.state == .fail || $0.state == .timeout }.count
+        let warned = checks.filter { $0.state == .warn }.count
+        if completed < checks.count {
+            return L10n.string(
+                "Running checks: %lld/%lld complete, %lld active.",
+                completed,
+                checks.count,
+                running
+            )
+        }
+        if failed > 0 {
+            return L10n.string("Checks complete: %lld need attention, %lld warning(s).", failed, warned)
+        }
+        if warned > 0 {
+            return L10n.string("Checks complete: %lld warning(s), no failures.", warned)
+        }
+        return L10n.string("Checks complete: all rows resolved.")
+    }
+
+    var hasUnresolvedChecks: Bool {
+        checks.contains { !$0.state.isTerminal }
+    }
+
     private let credentialStore: TelegramCredentialStore
     private let providerCredentialStore: ProviderCredentialStore
     private let providerCallHealthStore: ProviderCallHealthStore
@@ -94,6 +300,10 @@ final class DoctorViewModel: ObservableObject {
     private var publishHermesAvailability: @MainActor (HermesUpdateAvailability) -> Void = { _ in }
     private var currentConnection: ConnectionProfile?
     private var currentProfileId: String?
+    private var currentRunID: String?
+    private var currentDefinitions: [String: CheckDefinition] = [:]
+    private var harnessSelfCheckTask: Task<Void, Never>?
+    private let checkDefinitionsForTesting: [CheckDefinition]?
 
     init(
         credentialStore: TelegramCredentialStore,
@@ -101,7 +311,8 @@ final class DoctorViewModel: ObservableObject {
         providerCallHealthStore: ProviderCallHealthStore = ProviderCallHealthStore(),
         telegramAPI: TelegramAPIClient = TelegramAPIClient(),
         telegramInstaller: TelegramVMInstaller,
-        hermesUpdater: HermesUpdater
+        hermesUpdater: HermesUpdater,
+        checkDefinitionsForTesting: [CheckDefinition]? = nil
     ) {
         self.credentialStore = credentialStore
         self.providerCredentialStore = providerCredentialStore
@@ -109,6 +320,7 @@ final class DoctorViewModel: ObservableObject {
         self.telegramAPI = telegramAPI
         self.telegramInstaller = telegramInstaller
         self.hermesUpdater = hermesUpdater
+        self.checkDefinitionsForTesting = checkDefinitionsForTesting
     }
 
     func bindHermesUpdateBridge(
@@ -133,8 +345,17 @@ final class DoctorViewModel: ObservableObject {
 
     func refresh() async {
         guard !isRefreshing else { return }
+        let runID = UUID().uuidString
+        currentRunID = runID
         isRefreshing = true
-        defer { isRefreshing = false }
+        defer {
+            if currentRunID == runID {
+                isRefreshing = false
+                lastRefreshedAt = Date()
+                harnessSelfCheckTask?.cancel()
+                harnessSelfCheckTask = nil
+            }
+        }
         actionError = nil
 
         // Local stack checks always run — they don't depend on a host
@@ -149,96 +370,309 @@ final class DoctorViewModel: ObservableObject {
             events: recentEvents,
             now: now
         )
-        let localChecks = await makeLocalStackChecks(recentEvents: recentEvents)
+        let definitions = checkDefinitionsForTesting ?? makeCheckDefinitions(
+            recentEvents: recentEvents,
+            connection: currentConnection
+        )
+        await runCheckDefinitions(definitions, runID: runID)
+    }
 
-        guard let connection = currentConnection else {
-            checks = localChecks + [Check(
+    private func makeCheckDefinitions(
+        recentEvents: [CompanyEvent],
+        connection: ConnectionProfile?
+    ) -> [CheckDefinition] {
+        var definitions = makeLocalStackCheckDefinitions(recentEvents: recentEvents)
+        guard let connection else {
+            definitions.append(CheckDefinition(
                 id: "no-connection",
                 title: L10n.string("No host selected"),
-                severity: .unknown,
-                summary: L10n.string("Pick a host on the Host tab to run host-level checks (gateway, Hermes, Telegram)."),
-                detail: nil,
-                actions: []
-            )]
-            lastRefreshedAt = now
-            return
+                timeoutSeconds: 1
+            ) {
+                Check(
+                    id: "no-connection",
+                    title: L10n.string("No host selected"),
+                    severity: .unknown,
+                    summary: L10n.string("Pick a host on the Host tab to run host-level checks (gateway, Hermes, Telegram)."),
+                    detail: nil,
+                    actions: [],
+                    state: .skipped,
+                    timeoutSeconds: 1
+                )
+            })
+            return definitions
         }
 
-        // Probe the host. If this fails, host-level checks are moot — but
-        // local stack checks still matter (in fact more so, because a
-        // local stack issue may be the reason the host is unreachable).
-        let statusResult: TelegramVMResult
-        do {
-            statusResult = try await telegramInstaller.checkStatus(on: connection)
-        } catch {
+        definitions.append(contentsOf: [
+            CheckDefinition(
+                id: "gateway",
+                title: L10n.string("Hermes gateway"),
+                logPath: Self.gatewayLogPath
+            ) { [weak self] in
+                guard let self else { throw DoctorCheckError.deallocated }
+                let statusResult = try await self.telegramInstaller.checkStatus(on: connection)
+                let snapshot = GatewayStateSnapshot.decode(from: statusResult.gateway_state_json)
+                return self.makeGatewayCheck(result: statusResult, snapshot: snapshot)
+            },
+            CheckDefinition(
+                id: "hermes-version",
+                title: L10n.string("Hermes version"),
+                logPath: Self.gatewayLogPath
+            ) { [weak self] in
+                guard let self else { throw DoctorCheckError.deallocated }
+                let availability = await self.probeHermesAvailability(on: connection)
+                if !Task.isCancelled {
+                    self.publishHermesAvailability(availability)
+                }
+                return self.makeHermesCheck(availability: availability)
+            },
+            CheckDefinition(
+                id: "telegram",
+                title: L10n.string("Telegram bot"),
+                logPath: Self.gatewayLogPath
+            ) { [weak self] in
+                guard let self else { throw DoctorCheckError.deallocated }
+                return await self.makeTelegramCheck(snapshot: nil)
+            }
+        ])
+        return definitions
+    }
+
+    private func runCheckDefinitions(_ definitions: [CheckDefinition], runID: String) async {
+        currentDefinitions = Dictionary(uniqueKeysWithValues: definitions.map { ($0.id, $0) })
+        checks = definitions.map {
+            Check.pending(id: $0.id, title: $0.title, timeoutSeconds: $0.timeoutSeconds, logPath: $0.logPath)
+        }
+        scheduleHarnessSelfCheck(runID: runID)
+        for definition in definitions {
+            updateCheck(
+                id: definition.id,
+                with: Check.pending(
+                    id: definition.id,
+                    title: definition.title,
+                    timeoutSeconds: definition.timeoutSeconds,
+                    logPath: definition.logPath
+                ).replacing(
+                    state: .running,
+                    summary: L10n.string("Running…")
+                )
+            )
+        }
+
+        await withTaskGroup(of: ResolvedCheck.self) { group in
+            for definition in definitions {
+                group.addTask {
+                    await Self.executeCheckDefinition(definition)
+                }
+            }
+
+            for await resolved in group {
+                guard currentRunID == runID else { continue }
+                updateCheck(id: resolved.check.id, with: resolved.check)
+                CodexSessionManager.shared.recordDoctorCheckEvent(
+                    runID: runID,
+                    checkName: resolved.check.title,
+                    checkID: resolved.check.id,
+                    startedAt: resolved.startedAt,
+                    endedAt: resolved.endedAt,
+                    outcome: resolved.check.state.rawValue,
+                    latencyMS: resolved.latencyMS,
+                    error: resolved.errorMessage
+                )
+            }
+        }
+    }
+
+    nonisolated static func executeCheckDefinition(_ definition: CheckDefinition) async -> ResolvedCheck {
+        let startedAt = Date()
+        let result = await checkResultWithTimeout(definition)
+        let endedAt = Date()
+        let latencyMS = max(0, Int(endedAt.timeIntervalSince(startedAt) * 1_000))
+
+        switch result {
+        case .success(let check):
+            let state = check.state.isTerminal ? check.state : Check.terminalState(for: check.severity)
+            return ResolvedCheck(
+                check: check.replacing(
+                    state: state,
+                    timeoutSeconds: definition.timeoutSeconds,
+                    logPath: check.logPath ?? definition.logPath
+                ),
+                startedAt: startedAt,
+                endedAt: endedAt,
+                latencyMS: latencyMS,
+                errorMessage: nil
+            )
+        case .failure(let error as DoctorCheckTimeoutError):
+            let message = error.errorDescription ?? L10n.string("Doctor check timed out.")
+            return ResolvedCheck(
+                check: Check(
+                    id: definition.id,
+                    title: definition.title,
+                    severity: .error,
+                    summary: L10n.string("Timed out. Click Retry to run this check again."),
+                    detail: message + " " + L10n.string("Click Retry to run this check again."),
+                    actions: [.retryCheck(definition.id)],
+                    state: .timeout,
+                    timeoutSeconds: definition.timeoutSeconds,
+                    logPath: definition.logPath,
+                    errorMessage: message
+                ),
+                startedAt: startedAt,
+                endedAt: endedAt,
+                latencyMS: latencyMS,
+                errorMessage: message
+            )
+        case .failure(let error):
             let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            checks = localChecks + [Check(
-                id: "host-unreachable",
-                title: L10n.string("Host unreachable"),
-                severity: .error,
-                summary: L10n.string("Couldn't reach this host to run health checks."),
-                detail: message,
-                actions: []
-            )]
-            lastRefreshedAt = now
-            return
+            let logPath = definition.logPath ?? doctorEventLogPath
+            return ResolvedCheck(
+                check: Check(
+                    id: definition.id,
+                    title: definition.title,
+                    severity: .error,
+                    summary: L10n.string("Check failed. Open logs or retry."),
+                    detail: message,
+                    actions: [.openLogs(logPath), .retryCheck(definition.id)],
+                    state: .fail,
+                    timeoutSeconds: definition.timeoutSeconds,
+                    logPath: logPath,
+                    errorMessage: message
+                ),
+                startedAt: startedAt,
+                endedAt: endedAt,
+                latencyMS: latencyMS,
+                errorMessage: message
+            )
         }
+    }
 
-        let snapshot = GatewayStateSnapshot.decode(from: statusResult.gateway_state_json)
-        let gatewayCheck = makeGatewayCheck(result: statusResult, snapshot: snapshot)
-        let telegramCheck = await makeTelegramCheck(snapshot: snapshot)
-        let availability = await probeHermesAvailability(on: connection)
-        publishHermesAvailability(availability)
-        let hermesCheck = makeHermesCheck(availability: availability)
-        // Order: local stack first (machine-side state user can fix without
-        // touching the VM), then host-level (gateway, Hermes version,
-        // Telegram downstream).
-        checks = localChecks + [gatewayCheck, hermesCheck, telegramCheck]
-        lastRefreshedAt = now
+    private nonisolated static func checkResultWithTimeout(_ definition: CheckDefinition) async -> Result<Check, Error> {
+        await withCheckedContinuation { continuation in
+            let gate = CheckResultGate()
+            let operation = Task { @MainActor in
+                do {
+                    let check = try await definition.run()
+                    _ = gate.resume(continuation, returning: .success(check))
+                } catch {
+                    _ = gate.resume(continuation, returning: .failure(error))
+                }
+            }
+            Task {
+                let timeoutNanoseconds = UInt64(max(0.001, definition.timeoutSeconds) * 1_000_000_000)
+                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+                let timeout = DoctorCheckTimeoutError(
+                    title: definition.title,
+                    timeoutSeconds: definition.timeoutSeconds
+                )
+                if gate.resume(continuation, returning: .failure(timeout)) {
+                    operation.cancel()
+                }
+            }
+        }
+    }
+
+    private func updateCheck(id: String, with check: Check) {
+        if let index = checks.firstIndex(where: { $0.id == id }) {
+            checks[index] = check
+        } else {
+            checks.append(check)
+        }
+    }
+
+    private func scheduleHarnessSelfCheck(runID: String) {
+        harnessSelfCheckTask?.cancel()
+        harnessSelfCheckTask = Task { [weak self] in
+            let nanoseconds = UInt64(Self.harnessNoCompletionAlertSeconds * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: nanoseconds)
+            await MainActor.run {
+                guard let self,
+                      self.currentRunID == runID,
+                      !self.checks.contains(where: { $0.state.isTerminal })
+                else { return }
+                self.actionError = L10n.string(
+                    "Doctor harness alert: no checks completed within %.0f seconds. Open logs and retry the run.",
+                    Self.harnessNoCompletionAlertSeconds
+                )
+            }
+        }
     }
 
     // MARK: - Local stack checks
 
-    /// Probe the Mac-side moving parts that the rest of OS1 depends on.
-    /// Each runs with a short timeout and returns a Check row; never throws.
-    private func makeLocalStackChecks(recentEvents: [CompanyEvent]) async -> [Check] {
-        async let codex = makeBinaryCheck(id: "cli-codex", title: "Codex CLI", binary: "codex", versionArgs: ["--version"])
-        async let claude = makeBinaryCheck(id: "cli-claude", title: "Claude Code CLI", binary: "claude", versionArgs: ["--version"])
-        async let wuphf = makeWUPHFCheck()
-        async let launchd = makeLaunchdCheck()
-        async let voicePort = makeVoicePortCheck()
-        async let keychain = makeKeychainCheck()
-        async let connectorHealth = makeConnectorHealthCheck()
-        async let sharedCredentials = makeSharedCredentialScopeCheck()
-        async let notarization = makeNotarizationCheck()
-        async let productionGates = makeProductionGatesCheck()
-        async let evalHarness = makeEvaluationHarnessCheck()
-        async let dataGovernance = makeDataGovernanceCheck()
-        async let stateBackups = makeStateBackupCheck()
-        async let durableSchema = makeDurableStateSchemaCheck()
-        async let heartbeatSandbox = makeCodexHeartbeatSandboxCheck()
-        async let codexFeatures = makeCodexFeatureMatrixCheck()
-        async let browserStealth = makeBrowserStealthCoverageCheck()
-        async let providerKeys = makeProviderKeyHealthCheck(recentEvents: recentEvents)
-        return await [
-            codex,
-            claude,
-            wuphf,
-            launchd,
-            voicePort,
-            keychain,
-            connectorHealth,
-            sharedCredentials,
-            notarization,
-            productionGates,
-            evalHarness,
-            dataGovernance,
-            stateBackups,
-            durableSchema,
-            heartbeatSandbox,
-            codexFeatures,
-            browserStealth,
-            providerKeys,
+    private func makeLocalStackCheckDefinitions(recentEvents: [CompanyEvent]) -> [CheckDefinition] {
+        [
+            CheckDefinition(id: "cli-codex", title: "Codex CLI", timeoutSeconds: 8) { [weak self] in
+                guard let self else { throw DoctorCheckError.deallocated }
+                return await self.makeBinaryCheck(id: "cli-codex", title: "Codex CLI", binary: "codex", versionArgs: ["--version"])
+            },
+            CheckDefinition(id: "cli-claude", title: "Claude Code CLI", timeoutSeconds: 8) { [weak self] in
+                guard let self else { throw DoctorCheckError.deallocated }
+                return await self.makeBinaryCheck(id: "cli-claude", title: "Claude Code CLI", binary: "claude", versionArgs: ["--version"])
+            },
+            CheckDefinition(id: "wuphf", title: "WUPHF office", timeoutSeconds: 8) { [weak self] in
+                guard let self else { throw DoctorCheckError.deallocated }
+                return await self.makeWUPHFCheck()
+            },
+            CheckDefinition(id: "launchd", title: "Launchd plists", timeoutSeconds: 8) { [weak self] in
+                guard let self else { throw DoctorCheckError.deallocated }
+                return await self.makeLaunchdCheck()
+            },
+            CheckDefinition(id: "voice-port", title: "Voice server port", timeoutSeconds: 5) { [weak self] in
+                guard let self else { throw DoctorCheckError.deallocated }
+                return await self.makeVoicePortCheck()
+            },
+            CheckDefinition(id: "keychain", title: "Keychain credentials", timeoutSeconds: 12) { [weak self] in
+                guard let self else { throw DoctorCheckError.deallocated }
+                return await self.makeKeychainCheck()
+            },
+            CheckDefinition(id: "api-first-connectors", title: "API-first connectors") { [weak self] in
+                guard let self else { throw DoctorCheckError.deallocated }
+                return await self.makeConnectorHealthCheck()
+            },
+            CheckDefinition(id: "company-credential-scopes", title: "Company credential scopes") { [weak self] in
+                guard let self else { throw DoctorCheckError.deallocated }
+                return await self.makeSharedCredentialScopeCheck()
+            },
+            CheckDefinition(id: "notarization", title: "App bundle signing", timeoutSeconds: 12) { [weak self] in
+                guard let self else { throw DoctorCheckError.deallocated }
+                return await self.makeNotarizationCheck()
+            },
+            CheckDefinition(id: "production-gates", title: L10n.string("Production gates")) { [weak self] in
+                guard let self else { throw DoctorCheckError.deallocated }
+                return await self.makeProductionGatesCheck()
+            },
+            CheckDefinition(id: "evaluation-harness", title: L10n.string("Agent eval harness")) { [weak self] in
+                guard let self else { throw DoctorCheckError.deallocated }
+                return await self.makeEvaluationHarnessCheck()
+            },
+            CheckDefinition(id: "data-governance", title: "Data governance") { [weak self] in
+                guard let self else { throw DoctorCheckError.deallocated }
+                return await self.makeDataGovernanceCheck()
+            },
+            CheckDefinition(id: "company-state-backups", title: "Company state backups") { [weak self] in
+                guard let self else { throw DoctorCheckError.deallocated }
+                return await self.makeStateBackupCheck()
+            },
+            CheckDefinition(id: "durable-state-schema", title: "Durable state schema") { [weak self] in
+                guard let self else { throw DoctorCheckError.deallocated }
+                return await self.makeDurableStateSchemaCheck()
+            },
+            CheckDefinition(id: "codex-heartbeat-sandbox", title: "Codex heartbeat sandbox") { [weak self] in
+                guard let self else { throw DoctorCheckError.deallocated }
+                return await self.makeCodexHeartbeatSandboxCheck()
+            },
+            CheckDefinition(id: "codex-feature-matrix", title: "Codex feature matrix") { [weak self] in
+                guard let self else { throw DoctorCheckError.deallocated }
+                return await self.makeCodexFeatureMatrixCheck()
+            },
+            CheckDefinition(id: "browser-stealth-coverage", title: "Browser stealth coverage") { [weak self] in
+                guard let self else { throw DoctorCheckError.deallocated }
+                return await self.makeBrowserStealthCoverageCheck()
+            },
+            CheckDefinition(id: "provider-key-health", title: "Provider keys") { [weak self] in
+                guard let self else { throw DoctorCheckError.deallocated }
+                return await self.makeProviderKeyHealthCheck(recentEvents: recentEvents)
+            }
         ]
     }
 
@@ -1439,15 +1873,21 @@ final class DoctorViewModel: ObservableObject {
 
     func runAction(_ action: Action) async {
         guard actionInFlight == nil else { return }
-        if action == .reinstallLaunchAgents {
+        switch action {
+        case .reinstallLaunchAgents:
             actionInFlight = action
             actionError = nil
             defer { actionInFlight = nil }
             await reinstallLaunchAgents()
             await refresh()
             return
-        }
-        if action == .migrateSchema {
+        case .openLogs(let path):
+            openLogs(at: path)
+            return
+        case .retryCheck(let id):
+            await retryCheck(id: id)
+            return
+        case .migrateSchema:
             actionInFlight = action
             actionError = nil
             defer { actionInFlight = nil }
@@ -1458,6 +1898,8 @@ final class DoctorViewModel: ObservableObject {
             }
             await refresh()
             return
+        case .restartGateway, .revalidateTelegram, .updateHermes:
+            break
         }
         guard let connection = currentConnection else {
             actionError = L10n.string("No host selected.")
@@ -1474,13 +1916,56 @@ final class DoctorViewModel: ObservableObject {
             await revalidateTelegramToken()
         case .updateHermes:
             await performHermesUpdateBridge()
-        case .reinstallLaunchAgents:
-            await reinstallLaunchAgents()
-        case .migrateSchema:
+        case .reinstallLaunchAgents, .migrateSchema, .retryCheck, .openLogs:
             break
         }
         // Always refresh after an action so the user sees the new state.
         await refresh()
+    }
+
+    private func retryCheck(id: String) async {
+        guard let definition = currentDefinitions[id] else {
+            await refresh()
+            return
+        }
+        actionInFlight = .retryCheck(id)
+        actionError = nil
+        defer { actionInFlight = nil }
+
+        updateCheck(
+            id: id,
+            with: Check.pending(
+                id: definition.id,
+                title: definition.title,
+                timeoutSeconds: definition.timeoutSeconds,
+                logPath: definition.logPath
+            ).replacing(
+                state: .running,
+                summary: L10n.string("Running…")
+            )
+        )
+        let runID = currentRunID ?? UUID().uuidString
+        let resolved = await Self.executeCheckDefinition(definition)
+        updateCheck(id: id, with: resolved.check)
+        CodexSessionManager.shared.recordDoctorCheckEvent(
+            runID: runID,
+            checkName: resolved.check.title,
+            checkID: resolved.check.id,
+            startedAt: resolved.startedAt,
+            endedAt: resolved.endedAt,
+            outcome: resolved.check.state.rawValue,
+            latencyMS: resolved.latencyMS,
+            error: resolved.errorMessage
+        )
+    }
+
+    private func openLogs(at path: String) {
+        let url = URL(fileURLWithPath: path)
+        if FileManager.default.fileExists(atPath: path) {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        } else {
+            NSWorkspace.shared.open(url.deletingLastPathComponent())
+        }
     }
 
     private func restartGateway(on connection: ConnectionProfile) async {

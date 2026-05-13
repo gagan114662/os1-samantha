@@ -2942,6 +2942,59 @@ final class CodexSessionManager: ObservableObject {
         return event
     }
 
+    @discardableResult
+    func recordDoctorCheckEvent(
+        runID: String,
+        checkName: String,
+        checkID: String,
+        startedAt: Date,
+        endedAt: Date,
+        outcome: String,
+        latencyMS: Int,
+        error: String?
+    ) -> CompanyEvent {
+        return appendEvent(
+            kind: .doctorCheckFinished,
+            summary: "Doctor check \(checkName) finished with \(outcome).",
+            runID: runID,
+            tool: checkID,
+            outputSummary: error,
+            latencyMS: latencyMS,
+            metadata: Self.doctorCheckMetadata(
+                checkName: checkName,
+                checkID: checkID,
+                startedAt: startedAt,
+                endedAt: endedAt,
+                outcome: outcome,
+                latencyMS: latencyMS,
+                error: error
+            )
+        )
+    }
+
+    nonisolated static func doctorCheckMetadata(
+        checkName: String,
+        checkID: String,
+        startedAt: Date,
+        endedAt: Date,
+        outcome: String,
+        latencyMS: Int,
+        error: String?
+    ) -> [String: String] {
+        var metadata = [
+            "checkName": checkName,
+            "checkID": checkID,
+            "startedAt": ISO8601DateFormatter().string(from: startedAt),
+            "endedAt": ISO8601DateFormatter().string(from: endedAt),
+            "outcome": outcome,
+            "latencyMS": "\(latencyMS)"
+        ]
+        if let error, !error.isEmpty {
+            metadata["error"] = error
+        }
+        return metadata
+    }
+
     func recentEvents(limit: Int = 200) -> [CompanyEvent] {
         guard let text = try? String(contentsOf: eventLogURL, encoding: .utf8) else { return [] }
         let decoder = JSONDecoder()
