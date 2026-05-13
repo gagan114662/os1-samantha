@@ -43,6 +43,71 @@ struct PortfolioCompanySnapshot: Codable, Hashable, Identifiable {
     var hasFinancialData: Bool {
         entries.contains { $0.kind != .refund && $0.occurredAt != nil }
     }
+
+    /// Build a snapshot from verified-by-construction `CompanyPaymentProviderEvent`
+    /// records (Stripe webhooks, etc.) plus any pre-existing ledger entries.
+    /// Payment events are converted to ledger entries with
+    /// `confidence = .verified` — the aggregator's revenue filter then admits
+    /// them while continuing to exclude estimated / unverified manual entries.
+    /// This is the wiring path acceptance bullet 2 requires:
+    /// "Revenue is sourced from verified `CompanyPaymentProviderEvent` records
+    /// only — no estimated/projected revenue counted."
+    static func from(
+        companyID: String,
+        displayName: String,
+        lifecycleStage: CodexSession.LifecycleStage?,
+        templateID: String? = nil,
+        nativeCurrency: String = "USD",
+        paymentEvents: [CompanyPaymentProviderEvent],
+        ledgerEntries: [CompanyLedgerEntry] = [],
+        lastUpdatedAt: Date? = nil
+    ) -> PortfolioCompanySnapshot {
+        let converted = paymentEvents.map(Self.ledgerEntry(from:))
+        return PortfolioCompanySnapshot(
+            companyID: companyID,
+            displayName: displayName,
+            lifecycleStage: lifecycleStage,
+            templateID: templateID,
+            nativeCurrency: nativeCurrency,
+            entries: converted + ledgerEntries,
+            lastUpdatedAt: lastUpdatedAt
+        )
+    }
+
+    /// Map a provider event to a ledger entry. Provider events are
+    /// inherently verified (the webhook carries the signed proof), so the
+    /// confidence is hard-coded to `.verified`. `charge` and `payout` become
+    /// revenue; `refund` is mirrored; `fee` / `tax` / `transfer` are costs.
+    static func ledgerEntry(from event: CompanyPaymentProviderEvent) -> CompanyLedgerEntry {
+        let kind: CompanyLedgerEntry.Kind
+        let category: CompanyLedgerEntry.Category
+        switch event.kind {
+        case .charge, .payout:
+            kind = .revenue
+            category = .sales
+        case .refund:
+            kind = .refund
+            category = .refund
+        case .fee:
+            kind = .cost
+            category = .paymentFees
+        case .tax, .transfer:
+            kind = .cost
+            category = .other
+        }
+        return CompanyLedgerEntry(
+            id: "payment-\(event.id)",
+            companyID: event.companyID,
+            occurredAt: event.occurredAt,
+            kind: kind,
+            category: category,
+            amountUSD: event.amountUSD,
+            source: event.provider,
+            sourceReference: event.sourceReference,
+            confidence: .verified,
+            note: "Provider event \(event.id)"
+        )
+    }
 }
 
 enum PortfolioGranularity: String, Codable, CaseIterable, Hashable {
@@ -103,6 +168,17 @@ struct PortfolioCompanyReport: Codable, Hashable, Identifiable {
     var marginUSD: Double { revenueUSD - costUSD }
 }
 
+/// Why the aggregator most recently re-ran. Surfaced in the report so the
+/// dashboard can show provenance ("Last recomputed: heartbeat tick at …")
+/// and so we can prove via tests that recompute is bound to heartbeats, not
+/// to view-appear (acceptance bullet 4).
+enum PortfolioRecomputeTrigger: String, Codable, Hashable, CaseIterable {
+    case heartbeat
+    case manual
+    case scheduled
+    case initialLoad
+}
+
 struct PortfolioAggregateReport: Codable, Hashable {
     let generatedAt: Date
     let granularity: PortfolioGranularity
@@ -118,6 +194,7 @@ struct PortfolioAggregateReport: Codable, Hashable {
     let companyCount: Int
     let companiesWithMissingDataCount: Int
     let nativeCurrencies: [String]
+    let recomputeTrigger: PortfolioRecomputeTrigger
 
     var totalMarginUSD: Double { totalRevenueUSD - totalCostUSD }
 
@@ -140,7 +217,8 @@ enum PortfolioAggregator {
         granularity: PortfolioGranularity,
         now: Date,
         bucketCount: Int? = nil,
-        topN: Int = 5
+        topN: Int = 5,
+        trigger: PortfolioRecomputeTrigger = .initialLoad
     ) -> PortfolioAggregateReport {
         let bucketsToShow = max(1, bucketCount ?? granularity.defaultBucketCount)
         let ranges = bucketRanges(
@@ -264,8 +342,48 @@ enum PortfolioAggregator {
             bottomPerformers: bottom,
             companyCount: snapshots.count,
             companiesWithMissingDataCount: missingDataCount,
-            nativeCurrencies: currencies.sorted()
+            nativeCurrencies: currencies.sorted(),
+            recomputeTrigger: trigger
         )
+    }
+
+    // MARK: - Doctor portfolio-p&l row (AC9)
+
+    /// Health verdict for the Doctor `portfolio-p&l` row. The acceptance rule
+    /// is "turns red if aggregate cost-rate exceeds aggregate revenue-rate for
+    /// more than 7 days." We compute it from the daily-granularity report:
+    /// take the trailing 7 daily buckets and check whether cost > revenue in
+    /// every one. Fewer than 7 dated buckets → unknown (we don't have the data
+    /// to make the call yet).
+    enum PortfolioPnLVerdict: Equatable {
+        case healthy(consecutiveCostHeavyDays: Int)
+        case degraded(consecutiveCostHeavyDays: Int)
+        case red(consecutiveCostHeavyDays: Int)
+        case insufficientData
+    }
+
+    static func portfolioPnLVerdict(
+        report: PortfolioAggregateReport,
+        thresholdDays: Int = 7
+    ) -> PortfolioPnLVerdict {
+        guard report.granularity == .daily else {
+            // Doctor row is defined on daily buckets — coarser granularities
+            // can't answer the 7-day question deterministically.
+            return .insufficientData
+        }
+        guard report.buckets.count >= thresholdDays else {
+            return .insufficientData
+        }
+        let trailing = Array(report.buckets.suffix(thresholdDays))
+        let costHeavy = trailing.allSatisfy { $0.costUSD > $0.revenueUSD }
+        let streak = trailing.reversed().prefix(while: { $0.costUSD > $0.revenueUSD }).count
+        if costHeavy {
+            return .red(consecutiveCostHeavyDays: streak)
+        }
+        if streak >= thresholdDays / 2 {
+            return .degraded(consecutiveCostHeavyDays: streak)
+        }
+        return .healthy(consecutiveCostHeavyDays: streak)
     }
 
     /// Returns the inclusive-start / exclusive-end ranges that buckets cover

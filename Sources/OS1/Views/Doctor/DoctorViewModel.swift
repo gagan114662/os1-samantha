@@ -672,8 +672,89 @@ final class DoctorViewModel: ObservableObject {
             CheckDefinition(id: "provider-key-health", title: "Provider keys") { [weak self] in
                 guard let self else { throw DoctorCheckError.deallocated }
                 return await self.makeProviderKeyHealthCheck(recentEvents: recentEvents)
+            },
+            CheckDefinition(id: "portfolio-p&l", title: "Portfolio P&L") { [weak self] in
+                guard let self else { throw DoctorCheckError.deallocated }
+                return self.makePortfolioPnLCheck()
             }
         ]
+    }
+
+    /// Builds the `portfolio-p&l` Doctor row. Reads the most recent persisted
+    /// snapshot from `PortfolioSnapshotStore` and applies the 7-day cost>revenue
+    /// rule. If no snapshot is available yet (cold start), shows an `unknown`
+    /// state rather than green — we don't claim health we can't prove.
+    nonisolated func makePortfolioPnLCheck() -> Check {
+        let store = PortfolioSnapshotStore.defaultStore()
+        guard let report = try? store.loadLatest() else {
+            return Self.portfolioPnLDoctorRow(report: nil)
+        }
+        return Self.portfolioPnLDoctorRow(report: report)
+    }
+
+    /// Pure rendering of the Doctor row from a snapshot. Static + nonisolated
+    /// so the test suite can drive it with synthetic reports.
+    nonisolated static func portfolioPnLDoctorRow(
+        report: PortfolioAggregateReport?,
+        thresholdDays: Int = 7
+    ) -> Check {
+        guard let report else {
+            return Check(
+                id: "portfolio-p&l",
+                title: "Portfolio P&L",
+                severity: .unknown,
+                summary: "No portfolio snapshot recorded yet.",
+                detail: "Open the Portfolio tab to record the first snapshot. The row turns red after \(thresholdDays) consecutive days of cost > revenue.",
+                actions: []
+            )
+        }
+        let verdict = PortfolioAggregator.portfolioPnLVerdict(report: report, thresholdDays: thresholdDays)
+        let margin = report.totalRevenueUSD - report.totalCostUSD
+        let summary = String(
+            format: "Margin %@$%.2f over %d companies (last recompute: %@).",
+            margin >= 0 ? "+" : "−",
+            abs(margin),
+            report.companyCount,
+            report.recomputeTrigger.rawValue
+        )
+        switch verdict {
+        case .red(let streak):
+            return Check(
+                id: "portfolio-p&l",
+                title: "Portfolio P&L",
+                severity: .error,
+                summary: summary,
+                detail: "Aggregate cost has exceeded revenue for \(streak) consecutive days (≥ \(thresholdDays) threshold). Pause underperformers or cut spend.",
+                actions: []
+            )
+        case .degraded(let streak):
+            return Check(
+                id: "portfolio-p&l",
+                title: "Portfolio P&L",
+                severity: .warn,
+                summary: summary,
+                detail: "Cost-heavy for \(streak) of the last \(thresholdDays) days. Trending toward the red threshold.",
+                actions: []
+            )
+        case .healthy(let streak):
+            return Check(
+                id: "portfolio-p&l",
+                title: "Portfolio P&L",
+                severity: .ok,
+                summary: summary,
+                detail: streak == 0 ? "Revenue ≥ cost on every recent day." : "Brief \(streak)-day cost-heavy streak; well below the \(thresholdDays)-day threshold.",
+                actions: []
+            )
+        case .insufficientData:
+            return Check(
+                id: "portfolio-p&l",
+                title: "Portfolio P&L",
+                severity: .unknown,
+                summary: summary,
+                detail: "Not enough daily history yet to evaluate the \(thresholdDays)-day rule.",
+                actions: []
+            )
+        }
     }
 
     private func makeProviderKeyHealthCheck(recentEvents: [CompanyEvent]) async -> Check {
