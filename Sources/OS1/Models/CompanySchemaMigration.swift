@@ -36,6 +36,30 @@ struct CompanySchemaMigrationReport: Codable, Hashable {
     var rollbackPath: String?
 }
 
+struct CompanySchemaVersionStatus: Codable, Hashable, Sendable {
+    enum State: String, Codable, Hashable, Sendable {
+        case missing
+        case current
+        case migrationRequired
+        case unsupported
+        case unreadable
+    }
+
+    var schema: String
+    var onDiskVersion: Int?
+    var expectedVersion: Int
+    var state: State
+    var warningCode: String?
+
+    var requiresMigration: Bool {
+        state == .missing || state == .migrationRequired
+    }
+
+    var isWarning: Bool {
+        state != .current
+    }
+}
+
 struct CompanyPersistedArtifactEnvelope<Payload: Codable & Hashable>: Codable, Hashable {
     var version: Int
     var schema: String
@@ -92,6 +116,7 @@ struct CompanySchemaMigrationRegistry: Sendable {
 enum CompanySchemaMigrationError: Error, LocalizedError, Equatable {
     case unsupportedVersion(Int)
     case unreadablePayload
+    case missingSchemaVersion
     case validationFailed([String])
 
     var errorDescription: String? {
@@ -100,6 +125,8 @@ enum CompanySchemaMigrationError: Error, LocalizedError, Equatable {
             return "Unsupported durable state schema version \(version)."
         case .unreadablePayload:
             return "State payload is not a known OS1 durable-state schema."
+        case .missingSchemaVersion:
+            return "Durable state is missing a schema version."
         case .validationFailed(let errors):
             return "Migrated state failed validation: \(errors.joined(separator: ", "))"
         }
@@ -124,8 +151,13 @@ enum CompanySchemaMigrationEngine {
         from data: Data,
         now: Date = Date()
     ) throws -> (sessions: [CodexSession], report: CompanySchemaMigrationReport) {
-        if let current = try? JSONDecoder().decode(CompanyDurableStateEnvelope.self, from: data),
-           current.schemaVersion == CompanyDurableStateEnvelope.currentSchemaVersion {
+        let declaredVersion = try schemaVersion(in: data)
+        if let declaredVersion, declaredVersion > CompanyDurableStateEnvelope.currentSchemaVersion {
+            throw CompanySchemaMigrationError.unsupportedVersion(declaredVersion)
+        }
+
+        if declaredVersion == CompanyDurableStateEnvelope.currentSchemaVersion {
+            let current = try JSONDecoder().decode(CompanyDurableStateEnvelope.self, from: data)
             let errors = validate(sessions: current.records)
             guard errors.isEmpty else { throw CompanySchemaMigrationError.validationFailed(errors) }
             return (
@@ -141,15 +173,70 @@ enum CompanySchemaMigrationEngine {
             )
         }
 
-        if let version = try? schemaVersion(in: data),
-           version > CompanyDurableStateEnvelope.currentSchemaVersion {
-            throw CompanySchemaMigrationError.unsupportedVersion(version)
-        }
-
         let migrated = try migrateToCurrent(from: data, now: now)
         let errors = validate(sessions: migrated.envelope.records)
         guard errors.isEmpty else { throw CompanySchemaMigrationError.validationFailed(errors) }
         return (migrated.envelope.records, migrated.report)
+    }
+
+    static func inspectDurableState(data: Data, schema: String = "CodexSession") -> CompanySchemaVersionStatus {
+        do {
+            guard let version = try schemaVersion(in: data) else {
+                return CompanySchemaVersionStatus(
+                    schema: schema,
+                    onDiskVersion: nil,
+                    expectedVersion: CompanyDurableStateEnvelope.currentSchemaVersion,
+                    state: .missing,
+                    warningCode: "schema.version.missing"
+                )
+            }
+            if version == CompanyDurableStateEnvelope.currentSchemaVersion {
+                return CompanySchemaVersionStatus(
+                    schema: schema,
+                    onDiskVersion: version,
+                    expectedVersion: CompanyDurableStateEnvelope.currentSchemaVersion,
+                    state: .current,
+                    warningCode: nil
+                )
+            }
+            if version < CompanyDurableStateEnvelope.currentSchemaVersion {
+                return CompanySchemaVersionStatus(
+                    schema: schema,
+                    onDiskVersion: version,
+                    expectedVersion: CompanyDurableStateEnvelope.currentSchemaVersion,
+                    state: .migrationRequired,
+                    warningCode: "schema.version.outdated"
+                )
+            }
+            return CompanySchemaVersionStatus(
+                schema: schema,
+                onDiskVersion: version,
+                expectedVersion: CompanyDurableStateEnvelope.currentSchemaVersion,
+                state: .unsupported,
+                warningCode: "schema.version.unsupported"
+            )
+        } catch {
+            return CompanySchemaVersionStatus(
+                schema: schema,
+                onDiskVersion: nil,
+                expectedVersion: CompanyDurableStateEnvelope.currentSchemaVersion,
+                state: .unreadable,
+                warningCode: "schema.version.unreadable"
+            )
+        }
+    }
+
+    static func inspectDurableStateFile(at url: URL, schema: String = "CodexSession") -> CompanySchemaVersionStatus {
+        guard let data = try? Data(contentsOf: url) else {
+            return CompanySchemaVersionStatus(
+                schema: schema,
+                onDiskVersion: nil,
+                expectedVersion: CompanyDurableStateEnvelope.currentSchemaVersion,
+                state: .missing,
+                warningCode: "schema.file.missing"
+            )
+        }
+        return inspectDurableState(data: data, schema: schema)
     }
 
     static func migrateFileAtomically(
@@ -157,20 +244,29 @@ enum CompanySchemaMigrationEngine {
         now: Date = Date()
     ) throws -> CompanySchemaMigrationReport {
         let original = try Data(contentsOf: url)
+        let status = inspectDurableState(data: original)
+        let existingBackupURL = status.state == .current || status.state == .unreadable
+            ? nil
+            : rollbackURL(for: url, now: now, status: status)
+        if let existingBackupURL {
+            try original.write(to: existingBackupURL, options: [.atomic])
+        }
+
         let decoded = try decodeSessions(from: original, now: now)
         if decoded.report.status == .notNeeded {
             return decoded.report
         }
 
-        let rollbackURL = url.deletingLastPathComponent()
-            .appendingPathComponent("\(url.lastPathComponent).pre-migration-\(Int(now.timeIntervalSince1970))")
-        try original.write(to: rollbackURL, options: [.atomic])
+        let migrationRollbackURL = existingBackupURL ?? rollbackURL(for: url, now: now, status: status)
+        if existingBackupURL == nil {
+            try original.write(to: migrationRollbackURL, options: [.atomic])
+        }
 
         do {
             let migratedData = try encodeCurrent(sessions: decoded.sessions, now: now)
             try migratedData.write(to: url, options: [.atomic])
             var report = decoded.report
-            report.rollbackPath = rollbackURL.path
+            report.rollbackPath = migrationRollbackURL.path
             return report
         } catch {
             return CompanySchemaMigrationReport(
@@ -179,9 +275,24 @@ enum CompanySchemaMigrationEngine {
                 status: .failed,
                 migratedRecordCount: 0,
                 validationErrors: [error.localizedDescription],
-                rollbackPath: rollbackURL.path
+                rollbackPath: migrationRollbackURL.path
             )
         }
+    }
+
+    private static func rollbackURL(for url: URL, now: Date, status: CompanySchemaVersionStatus) -> URL {
+        let suffix = status.onDiskVersion.map { "v\($0)" } ?? "legacy"
+        let base = url.deletingLastPathComponent()
+            .appendingPathComponent(
+                "\(url.lastPathComponent).pre-migration-\(suffix)-\(Int(now.timeIntervalSince1970))"
+            )
+        if !FileManager.default.fileExists(atPath: base.path) {
+            return base
+        }
+        return url.deletingLastPathComponent()
+            .appendingPathComponent(
+                "\(url.lastPathComponent).pre-migration-\(suffix)-\(Int(now.timeIntervalSince1970))-\(UUID().uuidString)"
+            )
     }
 
     static func validate(sessions: [CodexSession]) -> [String] {
@@ -248,7 +359,7 @@ enum CompanySchemaMigrationEngine {
         throw CompanySchemaMigrationError.unreadablePayload
     }
 
-    private static func schemaVersion(in data: Data) throws -> Int? {
+    static func schemaVersion(in data: Data) throws -> Int? {
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         return object["schemaVersion"] as? Int
     }

@@ -354,11 +354,13 @@ allowlists, approval gates, append-only event logs, run timelines,
 revenue ledgers, validation gates, factory gates, distribution policy,
 budget guards, heartbeat locks, restart recovery, Doctor production
 checks, and local backups.
+Durable session state is schema-versioned at startup, migrated from the
+previous two formats with validation, and protected by pre-migration
+rollback copies.
 
 Still in progress: translation polish, GitHub Pages site,
 certificate-backed signing/notarization, broader role-based permissions,
-schema migrations, encrypted backup/restore drills, content quality
-review, compliance policy, accounting export, customer support flows,
-payments risk controls, and production deployment channels. Track the
-open GitHub issues before relying on OS1 for unattended live revenue
-operations.
+encrypted backup/restore drills, content quality review, compliance
+policy, accounting export, customer support flows, payments risk controls,
+and production deployment channels. Track the open GitHub issues before
+relying on OS1 for unattended live revenue operations.

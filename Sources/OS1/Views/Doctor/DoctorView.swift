@@ -256,6 +256,7 @@ private struct DoctorCheckCard: View {
         case .revalidateTelegram: return L10n.string("Revalidate token")
         case .updateHermes: return L10n.string("Update")
         case .reinstallLaunchAgents: return L10n.string("Reinstall LaunchAgents")
+        case .migrateSchema: return L10n.string("Migrate")
         }
     }
 }

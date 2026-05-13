@@ -2292,6 +2292,7 @@ struct CodexTasksView: View {
         case .permissionDenied: return "lock.shield"
         case .permissionEscalated: return "exclamationmark.shield"
         case .governanceDecisionRecorded: return "doc.badge.clock"
+        case .schemaMigration: return "arrow.triangle.2.circlepath.doc.on.clipboard"
         case .stateBackupCreated: return "externaldrive.badge.checkmark"
         case .ledgerEntryRecorded: return "dollarsign.circle"
         case .untrustedContentInfluencedDecision: return "exclamationmark.shield"
@@ -2314,7 +2315,7 @@ struct CodexTasksView: View {
         case .heartbeatStarted:
             return .yellow
         case .heartbeatFinished, .lifecycleChanged, .companyResumed, .fleetResumed, .approvalApproved,
-             .stateBackupCreated, .ledgerEntryRecorded, .complianceChecked:
+             .schemaMigration, .stateBackupCreated, .ledgerEntryRecorded, .complianceChecked:
             return .green
         case .experimentDecided:
             return .blue

@@ -27,6 +27,7 @@ struct CompanyEvent: Codable, Hashable, Identifiable {
         case permissionDenied
         case permissionEscalated
         case governanceDecisionRecorded
+        case schemaMigration
         case stateBackupCreated
         case ledgerEntryRecorded
         case untrustedContentInfluencedDecision

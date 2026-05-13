@@ -2880,6 +2880,20 @@ final class CodexSessionManager: ObservableObject {
         }
     }
 
+    func durableStateSchemaStatus() -> CompanySchemaVersionStatus {
+        CompanySchemaMigrationEngine.inspectDurableStateFile(at: persistURL)
+    }
+
+    @discardableResult
+    func migrateDurableStateIfNeeded(now: Date = Date()) throws -> CompanySchemaMigrationReport {
+        let report = try CompanySchemaMigrationEngine.migrateFileAtomically(at: persistURL, now: now)
+        appendSchemaMigrationEvent(report: report)
+        if report.status == .migrated {
+            try reloadPersistedSessionsAfterMigration()
+        }
+        return report
+    }
+
     @discardableResult
     private func appendEvent(
         kind: CompanyEvent.Kind,
@@ -3415,18 +3429,33 @@ final class CodexSessionManager: ObservableObject {
     }
 
     private func loadPersistedSessions() {
-        guard let data = try? Data(contentsOf: persistURL),
-              let decoded = try? CompanySchemaMigrationEngine.decodeSessions(from: data) else { return }
-        appendEvent(
-            kind: .lifecycleChanged,
-            summary: "Durable session state schema validated",
-            metadata: [
-                "sourceVersion": "\(decoded.report.sourceVersion)",
-                "targetVersion": "\(decoded.report.targetVersion)",
-                "status": decoded.report.status.rawValue,
-                "records": "\(decoded.report.migratedRecordCount)"
-            ]
-        )
+        guard FileManager.default.fileExists(atPath: persistURL.path) else { return }
+        do {
+            let report = try CompanySchemaMigrationEngine.migrateFileAtomically(at: persistURL)
+            appendSchemaMigrationEvent(report: report)
+            guard report.status != .failed else { return }
+            try reloadPersistedSessionsAfterMigration()
+        } catch {
+            let data = (try? Data(contentsOf: persistURL)) ?? Data()
+            let status = CompanySchemaMigrationEngine.inspectDurableState(data: data)
+            appendEvent(
+                kind: .schemaMigration,
+                summary: "Durable session state schema validation failed",
+                metadata: [
+                    "schema": status.schema,
+                    "sourceVersion": status.onDiskVersion.map(String.init) ?? "missing",
+                    "targetVersion": "\(status.expectedVersion)",
+                    "status": "failed",
+                    "warningCode": status.warningCode ?? "schema.validation.failed",
+                    "error": (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                ]
+            )
+        }
+    }
+
+    private func reloadPersistedSessionsAfterMigration() throws {
+        let data = try Data(contentsOf: persistURL)
+        let decoded = try CompanySchemaMigrationEngine.decodeSessions(from: data)
         sessions = decoded.sessions.map {
             Self.recoverSessionAfterRestart($0, now: Date(), retryJitterSeconds: maxJitterSeconds)
         }
@@ -3434,6 +3463,21 @@ final class CodexSessionManager: ObservableObject {
         Task { @MainActor [weak self] in
             self?.resumeAllScheduledCompanies()
         }
+    }
+
+    private func appendSchemaMigrationEvent(report: CompanySchemaMigrationReport) {
+        appendEvent(
+            kind: .schemaMigration,
+            summary: "Durable session state schema \(report.status.rawValue)",
+            metadata: [
+                "schema": "CodexSession",
+                "sourceVersion": "\(report.sourceVersion)",
+                "targetVersion": "\(report.targetVersion)",
+                "status": report.status.rawValue,
+                "records": "\(report.migratedRecordCount)",
+                "rollbackPath": report.rollbackPath ?? ""
+            ]
+        )
     }
 
     // MARK: - Helpers
