@@ -7,7 +7,12 @@
 
     <key>ProgramArguments</key>
     <array>
+        <string>/usr/bin/env</string>
+        <string>python3</string>
+        <string>/Users/gaganarora/Desktop/my projects/hermes-desktop-os1/scripts/wuphf-stripe-webhook-proxy.py</string>
+        <string>--wuphf-bin</string>
         <string>/opt/homebrew/bin/wuphf</string>
+        <string>--</string>
         <string>--no-open</string>
         <string>--no-nex</string>
         <string>--pack</string>

@@ -1202,6 +1202,7 @@ final class CodexSessionManager: ObservableObject {
             throw PaymentWebhookReceiver.Error.paymentsCapabilityNotGranted(companyID)
         }
         let secret = endpointSecret
+            ?? ProcessInfo.processInfo.environment["STRIPE_WEBHOOK_SECRET"]
             ?? PaymentCredentialStore.shared.loadSecret(.stripeWebhookSecret, forProfileId: credentialProfileId)
             ?? ""
         let event = try PaymentWebhookReceiver.verifiedStripe(

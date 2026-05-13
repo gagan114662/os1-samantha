@@ -180,6 +180,23 @@ the app, choose Open, and confirm.
    shows an install banner. One click runs the official Hermes
    Agent installer. You can use the rest of the app while it runs.
 
+### Stripe webhooks for WUPHF
+
+The WUPHF LaunchAgent runs WUPHF behind the OS1 localhost proxy so OS1 can
+own native payment webhook routes while the WUPHF UI still listens on
+`localhost:7891`. Set `STRIPE_WEBHOOK_SECRET` in the LaunchAgent environment,
+or save the webhook secret in OS1 Payments, then forward Stripe events to:
+
+```sh
+stripe listen --forward-to localhost:7891/webhooks/stripe
+```
+
+OS1 exposes `POST /webhooks/stripe` for signed events and
+`GET /api/stripe/status` to report whether the webhook secret is configured.
+Accepted Stripe events are verified with the `Stripe-Signature` header,
+deduplicated, logged through `~/.os1/wuphf.log`, and appended to the company
+ledger when the event metadata includes `company_id`.
+
 ### SSH
 
 Add a connection and switch the transport picker to **SSH**. Alias or

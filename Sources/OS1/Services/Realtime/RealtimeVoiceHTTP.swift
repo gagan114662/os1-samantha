@@ -52,6 +52,7 @@ struct HTTPResponse {
         switch status {
         case 200..<300: "OK"
         case 400:       "Bad Request"
+        case 403:       "Forbidden"
         case 404:       "Not Found"
         case 413:       "Payload Too Large"
         case 500:       "Internal Server Error"

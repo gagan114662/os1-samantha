@@ -193,6 +193,15 @@ final class RealtimeVoiceSessionServer: ObservableObject, @unchecked Sendable {
                 let response = await self?.fetchSignedURL(apiKey: apiKey, agentID: agentID) ?? .plain(status: 500, body: "Voice server unavailable")
                 self?.send(response, on: connection)
             }
+        case ("GET", "/api/stripe/status"):
+            let response = stripeStatusResponse()
+            send(response, on: connection)
+        case ("POST", "/webhooks/stripe"):
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let response = self.stripeWebhookResponse(request: request)
+                self.send(response, on: connection)
+            }
         case ("POST", "/codex-spawn"):
             let payload = (try? JSONSerialization.jsonObject(with: request.body) as? [String: Any]) ?? [:]
             let task = (payload["task"] as? String) ?? (payload["instruction"] as? String) ?? ""
