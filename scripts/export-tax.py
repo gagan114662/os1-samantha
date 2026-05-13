@@ -3,7 +3,7 @@
 Headless tax-export CLI for OS1 (issue #191).
 
 Reads a portfolio ledger dump + entity registry, produces filing-ready exports
-per (entity × jurisdiction) pair. Mirrors the deterministic guarantees of the
+per (entity x jurisdiction) pair. Mirrors the deterministic guarantees of the
 Swift `TaxExportPipeline`: identical inputs (including --exported-at) produce
 byte-identical bytes, suitable for `diff -r` across reruns.
 
@@ -18,8 +18,9 @@ import io
 import json
 import os
 import sys
-from datetime import datetime, timezone
-from typing import Any, Iterable
+from collections.abc import Iterable
+from datetime import UTC, datetime
+from typing import Any
 
 USD = "USD"
 
@@ -60,7 +61,6 @@ ENTITY_TYPE_TO_FORM = {
 
 
 def money(value: float) -> str:
-    # Banker-free rounding to two decimals matching Swift `%.2f`.
     return f"{round2(value):.2f}"
 
 
@@ -78,19 +78,18 @@ def fx_to_usd(amount: float, currency: str, fx_rates: dict[str, float]) -> float
 
 
 def iso(dt: datetime) -> str:
-    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def parse_iso(value: str) -> datetime:
     if value.endswith("Z"):
         value = value[:-1] + "+00:00"
-    return datetime.fromisoformat(value).astimezone(timezone.utc)
+    return datetime.fromisoformat(value).astimezone(UTC)
 
 
 def fiscal_year_bounds(year: int, start_month: int) -> tuple[datetime, datetime]:
-    start = datetime(year, start_month, 1, tzinfo=timezone.utc)
-    end_year = year + 1 if start_month == 1 else year + 1
-    end = datetime(end_year, start_month, 1, tzinfo=timezone.utc)
+    start = datetime(year, start_month, 1, tzinfo=UTC)
+    end = datetime(year + 1, start_month, 1, tzinfo=UTC)
     return start, end
 
 
@@ -146,7 +145,7 @@ def jurisdictions_for(entity: dict[str, Any], override: list[str] | None) -> lis
     if override:
         return sorted(set(override))
     seen: list[str] = []
-    for j in [entity["primaryJurisdiction"]] + entity.get("additionalJurisdictions", []):
+    for j in [entity["primaryJurisdiction"], *entity.get("additionalJurisdictions", [])]:
         if j not in seen:
             seen.append(j)
     return sorted(seen)
@@ -215,9 +214,9 @@ def csv_bytes(header: list[str], rows: Iterable[list[str]]) -> bytes:
 
 
 def make_pl(lines: list[dict[str, Any]]) -> bytes:
-    revenue = sum(l["amount"] for l in lines if l["kind"] == "revenue")
-    refunds = sum(l["amount"] for l in lines if l["kind"] == "refund")
-    costs = sum(l["amount"] for l in lines if l["kind"] == "cost")
+    revenue = sum(row["amount"] for row in lines if row["kind"] == "revenue")
+    refunds = sum(row["amount"] for row in lines if row["kind"] == "refund")
+    costs = sum(row["amount"] for row in lines if row["kind"] == "cost")
     net = revenue - refunds - costs
     return csv_bytes(
         ["line_item", "amount_usd"],
@@ -232,26 +231,26 @@ def make_pl(lines: list[dict[str, Any]]) -> bytes:
 
 def make_register(lines: list[dict[str, Any]], kind: str, path: str) -> tuple[str, bytes]:
     rows = []
-    for l in lines:
-        if l["kind"] != kind:
+    for row in lines:
+        if row["kind"] != kind:
             continue
         rows.append([
-            l["id"],
-            l["occurredAt"],
-            l.get("category") or "",
-            money(l["amount"]),
-            l.get("jurisdiction") or "",
-            l.get("counterparty") or "",
-            l.get("memo") or "",
+            row["id"],
+            row["occurredAt"],
+            row.get("category") or "",
+            money(row["amount"]),
+            row.get("jurisdiction") or "",
+            row.get("counterparty") or "",
+            row.get("memo") or "",
         ])
     header = ["id", "occurred_at", "category", "amount_usd", "jurisdiction", "counterparty", "memo"]
     return path, csv_bytes(header, rows)
 
 
 def make_irs_line_items(lines: list[dict[str, Any]], entity: dict[str, Any]) -> bytes:
-    totals = {key: 0.0 for key, _ in LINE_ITEMS}
-    for l in lines:
-        totals[classify(l.get("category"), l["kind"])] += l["amount"]
+    totals = dict.fromkeys((key for key, _ in LINE_ITEMS), 0.0)
+    for row in lines:
+        totals[classify(row.get("category"), row["kind"])] += row["amount"]
     form = ENTITY_TYPE_TO_FORM.get(entity["entityType"], "Schedule C")
     rows = [[form, label, money(totals[key])] for key, label in LINE_ITEMS]
     return csv_bytes(["form", "line_item", "amount_usd"], rows)
@@ -282,7 +281,7 @@ def make_1099(
          "amount_usd", "us_resident", "form_type", "withholding_required"],
         rows,
     )
-    return body + f"\n# tax_year={tax_year} threshold_usd=600.00".encode("utf-8")
+    return body + f"\n# tax_year={tax_year} threshold_usd=600.00".encode()
 
 
 def make_quarterly_estimates(
@@ -291,9 +290,9 @@ def make_quarterly_estimates(
     jurisdiction: str,
     active_fraction: float,
 ) -> bytes:
-    revenue = sum(l["amount"] for l in lines if l["kind"] == "revenue")
-    refunds = sum(l["amount"] for l in lines if l["kind"] == "refund")
-    costs = sum(l["amount"] for l in lines if l["kind"] == "cost")
+    revenue = sum(row["amount"] for row in lines if row["kind"] == "revenue")
+    refunds = sum(row["amount"] for row in lines if row["kind"] == "refund")
+    costs = sum(row["amount"] for row in lines if row["kind"] == "cost")
     net = max(0.0, revenue - refunds - costs)
     rate = 0.22 if jurisdiction == "US-FED" else 0.093
     estimated = round2(net * rate * active_fraction)
@@ -305,13 +304,13 @@ def make_quarterly_estimates(
         f"{tax_year + 1:04d}-01-15",
     ]
     basis = f"net={money(net)} rate={rate:.4f} active={active_fraction:.4f}"
-    rows = [[q, d, money(per_q), basis] for q, d in zip(["Q1", "Q2", "Q3", "Q4"], deadlines)]
+    rows = [[q, d, money(per_q), basis] for q, d in zip(["Q1", "Q2", "Q3", "Q4"], deadlines, strict=True)]
     return csv_bytes(["quarter", "deadline", "amount_usd", "basis"], rows)
 
 
 def make_ca_sales_tax(lines: list[dict[str, Any]]) -> bytes:
-    ca_rev = [l for l in lines if l["kind"] == "revenue" and (l.get("jurisdiction") or "US-CA") == "US-CA"]
-    total = sum(l["amount"] for l in ca_rev)
+    ca_rev = [row for row in lines if row["kind"] == "revenue" and (row.get("jurisdiction") or "US-CA") == "US-CA"]
+    total = sum(row["amount"] for row in ca_rev)
     tax = round2(total * 0.0725)
     return csv_bytes(
         ["jurisdiction", "taxable_revenue_usd", "rate", "tax_owed_usd", "filing_form"],
@@ -325,8 +324,8 @@ def sha256_hex(data: bytes) -> str:
 
 def totals_checksum(lines: list[dict[str, Any]], totals: dict[str, Any]) -> str:
     canonical = ""
-    for l in lines:
-        canonical += f"{l['id']}|{l['kind']}|{l.get('category') or '-'}|{money(l['amount'])}\n"
+    for row in lines:
+        canonical += f"{row['id']}|{row['kind']}|{row.get('category') or '-'}|{money(row['amount'])}\n"
     canonical += (
         f"TOTAL|revenue={money(totals['revenueUSD'])}|refunds={money(totals['refundsUSD'])}|"
         f"cost={money(totals['costUSD'])}|net={money(totals['netUSD'])}|count={totals['lineCount']}"
@@ -365,19 +364,20 @@ def build_bundle(
             lines, tax_year, jurisdiction, active_fraction
         )
         unclassified = sum(
-            1 for l in lines if l["kind"] == "cost" and classify(l.get("category"), l["kind"]) == "unclassified"
+            1 for row in lines if row["kind"] == "cost"
+            and classify(row.get("category"), row["kind"]) == "unclassified"
         )
         if unclassified:
-            notes.append(f"{unclassified} cost line(s) classified as 'unclassified' — operator triage required.")
+            notes.append(f"{unclassified} cost line(s) classified as 'unclassified' - operator triage required.")
     elif jurisdiction == "US-CA":
         files["sales_tax_summary.csv"] = make_ca_sales_tax(lines)
         files["quarterly_estimates.csv"] = make_quarterly_estimates(
             lines, tax_year, jurisdiction, active_fraction
         )
 
-    revenue = sum(l["amount"] for l in lines if l["kind"] == "revenue")
-    refunds = sum(l["amount"] for l in lines if l["kind"] == "refund")
-    costs = sum(l["amount"] for l in lines if l["kind"] == "cost")
+    revenue = sum(row["amount"] for row in lines if row["kind"] == "revenue")
+    refunds = sum(row["amount"] for row in lines if row["kind"] == "refund")
+    costs = sum(row["amount"] for row in lines if row["kind"] == "cost")
     totals = {
         "revenueUSD": round2(revenue),
         "refundsUSD": round2(refunds),
@@ -422,7 +422,7 @@ def run(args: argparse.Namespace) -> int:
         with open(args.fx_rates) as f:
             fx_rates.update(json.load(f).get("rates", {}))
 
-    exported_at = parse_iso(args.exported_at) if args.exported_at else datetime.now(timezone.utc)
+    exported_at = parse_iso(args.exported_at) if args.exported_at else datetime.now(UTC)
     target_entity = next((e for e in registry["entities"] if e["id"] == args.entity_id), None)
     if target_entity is None:
         print(f"ERROR: entity {args.entity_id} not found", file=sys.stderr)
@@ -451,7 +451,7 @@ def run(args: argparse.Namespace) -> int:
         for path, data in sorted(files.items()):
             with open(os.path.join(bundle_dir, path), "wb") as f:
                 f.write(data)
-        print(f"wrote {bundle_dir} ({len(files)} files, totals_checksum={manifest['totalsChecksum'][:12]}…)")
+        print(f"wrote {bundle_dir} ({len(files)} files, totals_checksum={manifest['totalsChecksum'][:12]})")
     return 0
 
 
