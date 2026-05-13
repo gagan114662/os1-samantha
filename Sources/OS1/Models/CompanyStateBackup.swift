@@ -211,7 +211,7 @@ enum CompanyStateBackupKeychainStore {
         }
         var bytes = [UInt8](repeating: 0, count: 32)
         let status = bytes.withUnsafeMutableBytes { rawBuffer in
-            SecRandomCopyBytes(kSecRandomDefault, bytes.count, rawBuffer.baseAddress!)
+            SecRandomCopyBytes(kSecRandomDefault, rawBuffer.count, rawBuffer.baseAddress!)
         }
         precondition(status == errSecSuccess, "SecRandomCopyBytes failed with status \(status)")
         let data = Data(bytes)
