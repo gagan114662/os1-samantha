@@ -438,7 +438,7 @@ final class DoctorViewModel: ObservableObject {
     }
 
     private func runCheckDefinitions(_ definitions: [CheckDefinition], runID: String) async {
-        currentDefinitions = Dictionary(uniqueKeysWithValues: definitions.map { ($0.id, $0) })
+        currentDefinitions = Dictionary(definitions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         checks = definitions.map {
             Check.pending(id: $0.id, title: $0.title, timeoutSeconds: $0.timeoutSeconds, logPath: $0.logPath)
         }
