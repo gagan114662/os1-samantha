@@ -40,3 +40,4 @@ daemons/*/.env
 launchd/*.local.plist
 .os1-runtime/
 *.credentials.json
+.build-*/

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Live view of the active Orgo VM's desktop, rendered as a 2.5-second
@@ -19,6 +20,7 @@ struct DesktopView: View {
     /// Tracks the stream's actual state so the header badge tells the truth
     /// (loading vs live vs stale vs failed) instead of always saying "Streaming".
     @State private var streamStatus: ScreenshotStreamView.Status = .loading
+    @State private var isHoveringComputerID = false
 
     var body: some View {
         Group {
@@ -63,11 +65,27 @@ struct DesktopView: View {
                 .foregroundStyle(theme.palette.onCoralPrimary)
             Text("·")
                 .foregroundStyle(theme.palette.onCoralMuted)
-            Text(computerId)
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(theme.palette.onCoralMuted)
-                .lineLimit(1)
-                .truncationMode(.middle)
+            HStack(spacing: 5) {
+                Text(UIDisplayFormatting.shortComputerID(computerId))
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(theme.palette.onCoralMuted)
+                    .lineLimit(1)
+                    .help(computerId)
+
+                if isHoveringComputerID {
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(computerId, forType: .string)
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(theme.palette.onCoralSecondary)
+                    .help(L10n.string("Copy computer ID"))
+                }
+            }
+            .onHover { isHoveringComputerID = $0 }
             Spacer()
             statusBadge(for: streamStatus)
         }

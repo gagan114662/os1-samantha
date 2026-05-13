@@ -45,6 +45,7 @@ struct HermesPageContainer<Content: View>: View {
                 .padding(.vertical, verticalPadding)
                 .frame(maxWidth: .infinity, alignment: .top)
         }
+        .safeAreaPadding(.top, 12)
         .background(theme.palette.coral)
     }
 }
@@ -89,8 +90,11 @@ struct HermesPageHeader<Accessory: View>: View {
             Text(L10n.string(title))
                 .os1(theme.typography.titleSection)
                 .foregroundStyle(theme.palette.onCoralPrimary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.82)
+                // Supported app widths render page titles in full; narrower
+                // widths wrap to a second line before any clipping can occur.
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+                .help(L10n.string(title))
 
             Text(L10n.string(subtitle))
                 .os1(theme.typography.body)

@@ -6,64 +6,17 @@ struct SessionsView: View {
     @State private var searchText = ""
 
     var body: some View {
-        HermesPersistentHSplitView(layout: $splitLayout, detailMinWidth: 420) {
-            VStack(alignment: .leading, spacing: 18) {
-                HermesPageHeader(
-                    title: "Sessions",
-                    subtitle: "Browse the recent Hermes conversations discovered on the active host."
-                ) {
-                    HStack(spacing: 10) {
-                        HermesRefreshButton(isRefreshing: appState.isRefreshingSessions) {
-                            Task { await appState.refreshSessions(query: searchText) }
-                        }
-                        .disabled(appState.isLoadingSessions)
-
-                        HermesExpandableSearchField(
-                            text: $searchText,
-                            prompt: L10n.string("Search sessions"),
-                            expandedWidth: 220
-                        )
-                    }
-                    .fixedSize(horizontal: true, vertical: false)
+        Group {
+            if usesFullWidthEmptyState {
+                fullWidthSessionStarter
+            } else {
+                HermesPersistentHSplitView(layout: $splitLayout, detailMinWidth: 420) {
+                    primaryContent
+                } detail: {
+                    sessionDetail
+                        .hermesSplitDetailColumn(minWidth: 420, idealWidth: 520)
                 }
-
-                sessionsToolbar
-                sessionsContent
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .padding(.horizontal, 20)
-            .padding(.vertical, 20)
-        } detail: {
-            SessionDetailView(
-                session: selectedSession,
-                messages: appState.sessionMessageDisplays,
-                errorMessage: appState.sessionsError,
-                conversationError: appState.sessionConversationError,
-                isSendingMessage: appState.isSendingSessionMessage,
-                isDeletingSession: selectedSession.map { selectedSession in
-                    appState.isDeletingSession && appState.selectedSessionID == selectedSession.id
-                } ?? false,
-                pendingTurn: appState.pendingSessionTurn,
-                onResumeInTerminal: { session in
-                    appState.resumeSessionInTerminal(session)
-                },
-                onDeleteSession: { session in
-                    await appState.deleteSession(session)
-                },
-                onStartSession: { prompt, autoApproveCommands in
-                    await appState.startNewSession(
-                        with: prompt,
-                        autoApproveCommands: autoApproveCommands
-                    )
-                },
-                onSendMessage: { prompt, autoApproveCommands in
-                    await appState.sendMessageToSelectedSession(
-                        prompt,
-                        autoApproveCommands: autoApproveCommands
-                    )
-                }
-            )
-            .hermesSplitDetailColumn(minWidth: 420, idealWidth: 520)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .task(id: appState.activeConnectionID) {
@@ -81,6 +34,90 @@ struct SessionsView: View {
             guard !Task.isCancelled else { return }
             await appState.loadSessions(reset: true, query: searchText)
         }
+    }
+
+    private var primaryContent: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            header
+            sessionsToolbar
+            sessionsContent
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 20)
+        .safeAreaPadding(.top, 8)
+    }
+
+    private var fullWidthSessionStarter: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            header
+            sessionDetail
+                .frame(maxWidth: .infinity, minHeight: 560, maxHeight: .infinity, alignment: .topLeading)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 20)
+        .safeAreaPadding(.top, 8)
+    }
+
+    private var header: some View {
+        HermesPageHeader(
+            title: "Sessions",
+            subtitle: "Browse the recent Hermes conversations discovered on the active host."
+        ) {
+            HStack(spacing: 10) {
+                HermesRefreshButton(isRefreshing: appState.isRefreshingSessions) {
+                    Task { await appState.refreshSessions(query: searchText) }
+                }
+                .disabled(appState.isLoadingSessions)
+
+                HermesExpandableSearchField(
+                    text: $searchText,
+                    prompt: L10n.string("Search sessions"),
+                    expandedWidth: 220
+                )
+            }
+            .fixedSize(horizontal: true, vertical: false)
+        }
+    }
+
+    private var sessionDetail: some View {
+        SessionDetailView(
+            session: selectedSession,
+            messages: appState.sessionMessageDisplays,
+            errorMessage: appState.sessionsError,
+            conversationError: appState.sessionConversationError,
+            isSendingMessage: appState.isSendingSessionMessage,
+            isDeletingSession: selectedSession.map { selectedSession in
+                appState.isDeletingSession && appState.selectedSessionID == selectedSession.id
+            } ?? false,
+            pendingTurn: appState.pendingSessionTurn,
+            onResumeInTerminal: { session in
+                appState.resumeSessionInTerminal(session)
+            },
+            onDeleteSession: { session in
+                await appState.deleteSession(session)
+            },
+            onStartSession: { prompt, autoApproveCommands in
+                await appState.startNewSession(
+                    with: prompt,
+                    autoApproveCommands: autoApproveCommands
+                )
+            },
+            onSendMessage: { prompt, autoApproveCommands in
+                await appState.sendMessageToSelectedSession(
+                    prompt,
+                    autoApproveCommands: autoApproveCommands
+                )
+            }
+        )
+    }
+
+    private var usesFullWidthEmptyState: Bool {
+        appState.sessions.isEmpty &&
+            !appState.isLoadingSessions &&
+            appState.sessionsError == nil &&
+            appState.pendingSessionTurn == nil
     }
 
     @ViewBuilder

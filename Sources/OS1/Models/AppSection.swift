@@ -23,13 +23,13 @@ enum AppSection: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 
     var title: String {
-        L10n.string(rawTitle)
+        L10n.string(titleKey)
     }
 
-    private var rawTitle: String {
+    var titleKey: String {
         switch self {
         case .connections:
-            "Host"
+            "Hosts"
         case .overview:
             "Overview"
         case .files:
@@ -55,7 +55,7 @@ enum AppSection: String, CaseIterable, Identifiable {
         case .codexTasks:
             "Tasks"
         case .mail:
-            "Mail"
+            "AgentMail"
         case .messaging:
             "Messaging"
         case .connectors:

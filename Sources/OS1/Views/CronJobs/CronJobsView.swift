@@ -18,36 +18,17 @@ struct CronJobsView: View {
     }
 
     var body: some View {
-        HermesPersistentHSplitView(layout: $splitLayout, detailMinWidth: 460) {
-            VStack(alignment: .leading, spacing: 18) {
-                HermesPageHeader(
-                    title: "Cron Jobs",
-                    subtitle: "Browse, create and maintain Hermes jobs discovered on the active host."
-                ) {
-                    HStack(spacing: 10) {
-                        HermesRefreshButton(isRefreshing: appState.isRefreshingCronJobs) {
-                            Task { await appState.refreshCronJobs() }
-                        }
-                        .disabled(appState.isLoadingCronJobs || appState.isSavingCronJobDraft)
-
-                        HermesExpandableSearchField(
-                            text: $searchText,
-                            prompt: L10n.string("Search jobs"),
-                            expandedWidth: 220
-                        )
-                    }
-                    .fixedSize(horizontal: true, vertical: false)
+        Group {
+            if usesFullWidthEmptyState {
+                primaryContent
+            } else {
+                HermesPersistentHSplitView(layout: $splitLayout, detailMinWidth: 460) {
+                    primaryContent
+                } detail: {
+                    detailContent
+                        .hermesSplitDetailColumn(minWidth: 460, idealWidth: 580)
                 }
-
-                filterBar
-                jobsContent
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .padding(.horizontal, 20)
-            .padding(.vertical, 20)
-        } detail: {
-            detailContent
-                .hermesSplitDetailColumn(minWidth: 460, idealWidth: 580)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .task(id: appState.activeConnectionID) {
@@ -69,6 +50,43 @@ struct CronJobsView: View {
                 ))
             }
         }
+    }
+
+    private var primaryContent: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HermesPageHeader(
+                title: "Cron Jobs",
+                subtitle: "Browse, create and maintain Hermes jobs discovered on the active host."
+            ) {
+                HStack(spacing: 10) {
+                    HermesRefreshButton(isRefreshing: appState.isRefreshingCronJobs) {
+                        Task { await appState.refreshCronJobs() }
+                    }
+                    .disabled(appState.isLoadingCronJobs || appState.isSavingCronJobDraft)
+
+                    HermesExpandableSearchField(
+                        text: $searchText,
+                        prompt: L10n.string("Search jobs"),
+                        expandedWidth: 220
+                    )
+                }
+                .fixedSize(horizontal: true, vertical: false)
+            }
+
+            filterBar
+            jobsContent
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 20)
+        .safeAreaPadding(.top, 8)
+    }
+
+    private var usesFullWidthEmptyState: Bool {
+        appState.cronJobs.isEmpty &&
+            !appState.isLoadingCronJobs &&
+            appState.cronJobsError == nil &&
+            editorMode == nil
     }
 
     private var filterBar: some View {

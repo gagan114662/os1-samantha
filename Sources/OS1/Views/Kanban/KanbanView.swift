@@ -12,11 +12,17 @@ struct KanbanView: View {
     @State private var taskDraft = KanbanTaskDraft()
 
     var body: some View {
-        HermesPersistentHSplitView(layout: $splitLayout, detailMinWidth: 420) {
-            primaryContent
-        } detail: {
-            detailContent
-                .hermesSplitDetailColumn(minWidth: 420, idealWidth: 560)
+        Group {
+            if usesFullWidthEmptyState {
+                primaryContent
+            } else {
+                HermesPersistentHSplitView(layout: $splitLayout, detailMinWidth: 420) {
+                    primaryContent
+                } detail: {
+                    detailContent
+                        .hermesSplitDetailColumn(minWidth: 420, idealWidth: 560)
+                }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .task(id: appState.activeConnectionID) {
@@ -32,6 +38,14 @@ struct KanbanView: View {
                 appState.includeArchivedKanbanTasks = true
             }
         }
+    }
+
+    private var usesFullWidthEmptyState: Bool {
+        guard let board = appState.kanbanBoard else { return false }
+        return !appState.isLoadingKanbanBoard &&
+            appState.kanbanError == nil &&
+            !isCreatingTask &&
+            (!board.isInitialized || board.tasks.isEmpty)
     }
 
     private var primaryContent: some View {
@@ -61,6 +75,7 @@ struct KanbanView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(.horizontal, 20)
         .padding(.vertical, 20)
+        .safeAreaPadding(.top, 8)
     }
 
     private var kanbanToolbar: some View {

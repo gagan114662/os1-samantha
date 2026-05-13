@@ -151,6 +151,8 @@ struct LocalizationCoverageTests {
             "Usage",
             "Skills",
             "Terminal",
+            "%lld computer",
+            "%lld computers",
             "New Job",
             "New Task",
             "New Chat",

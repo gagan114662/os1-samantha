@@ -1,4 +1,6 @@
 "Active" = "Active";
+"(not set)" = "(not set)";
+"account plan" = "account plan";
 "Active profile" = "Active profile";
 "Add First Host" = "Add First Host";
 "Add Host" = "Add Host";
@@ -8,6 +10,7 @@
 "Cache" = "Cache";
 "Canonical Files" = "Canonical Files";
 "Cancel" = "Cancel";
+"Copy computer ID" = "Copy computer ID";
 "Choose a Hermes cron job from the active host to inspect it, or create a new one." = "Choose a Hermes cron job from the active host to inspect it, or create a new one.";
 "Choose a Hermes session from the active host to inspect its transcript." = "Choose a Hermes session from the active host to inspect its transcript.";
 "Choose a Hermes skill from the active host to inspect its metadata and full SKILL.md." = "Choose a Hermes skill from the active host to inspect its metadata and full SKILL.md.";
@@ -25,6 +28,7 @@
 "Cron Jobs" = "Cron Jobs";
 "Current Host" = "Current Host";
 "Current Total" = "Current Total";
+"Currently Active" = "Currently Active";
 "Custom Colors" = "Custom Colors";
 "Custom colors update the running terminal immediately. Preset ANSI colors stay anchored so git output, prompts, and tools keep a readable palette." = "Custom colors update the running terminal immediately. Preset ANSI colors stay anchored so git output, prompts, and tools keep a readable palette.";
 "Delete session" = "Delete session";
@@ -133,6 +137,7 @@
 "Usage" = "Usage";
 "Use Host" = "Use Host";
 "Use System" = "Use System";
+"View changelog" = "View changelog";
 "Use an SSH alias when possible. It keeps the system SSH config as the source of truth." = "Use an SSH alias when possible. It keeps the system SSH config as the source of truth.";
 "Use an SSH alias whenever possible. It keeps the system SSH config as the source of truth and makes profiles easier to move between machines." = "Use an SSH alias whenever possible. It keeps the system SSH config as the source of truth and makes profiles easier to move between machines.";
 "User file" = "User file";
@@ -1015,6 +1020,7 @@
 "Configure in Providers" = "Configure in Providers";
 
 // MARK: - Pass 2 additions: Tasks / Tiles / Doctor (auto-appended)
+"%lld computer" = "%lld computer";
 "%lld computers" = "%lld computers";
 "%lld of %lld OS1 agents loaded" = "%lld of %lld OS1 agents loaded";
 "%lld total" = "%lld total";

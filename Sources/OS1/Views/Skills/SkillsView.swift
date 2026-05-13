@@ -407,44 +407,14 @@ private struct SkillCardBadgeScroller: View {
     let badges: [SkillPreviewBadge]
     let backgroundColor: Color
 
-    @State private var contentWidth: CGFloat = 0
-    @State private var viewportWidth: CGFloat = 0
-
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(badges) { badge in
-                    HermesBadge(
-                        text: badge.text,
-                        tint: badge.tint,
-                        isMonospaced: badge.isMonospaced
-                    )
-                }
-            }
-            .background(
-                GeometryReader { proxy in
-                    Color.clear
-                        .preference(key: SkillBadgeContentWidthKey.self, value: proxy.size.width)
-                }
-            )
-        }
-        .background(
-            GeometryReader { proxy in
-                Color.clear
-                    .preference(key: SkillBadgeViewportWidthKey.self, value: proxy.size.width)
-            }
-        )
-        .onPreferenceChange(SkillBadgeContentWidthKey.self) { contentWidth = $0 }
-        .onPreferenceChange(SkillBadgeViewportWidthKey.self) { viewportWidth = $0 }
-        .overlay(alignment: .trailing) {
-            if contentWidth > viewportWidth + 1 {
-                LinearGradient(
-                    colors: [.clear, backgroundColor],
-                    startPoint: .leading,
-                    endPoint: .trailing
+        HermesWrappingFlowLayout(horizontalSpacing: 8, verticalSpacing: 8) {
+            ForEach(badges) { badge in
+                HermesBadge(
+                    text: badge.text,
+                    tint: badge.tint,
+                    isMonospaced: badge.isMonospaced
                 )
-                .frame(width: 34)
-                .allowsHitTesting(false)
             }
         }
     }
@@ -455,22 +425,6 @@ private struct SkillPreviewBadge: Identifiable {
     let text: String
     let tint: Color
     var isMonospaced = false
-}
-
-private struct SkillBadgeContentWidthKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
-private struct SkillBadgeViewportWidthKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
 }
 
 private extension SkillSummary {

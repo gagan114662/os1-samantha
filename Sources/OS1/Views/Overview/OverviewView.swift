@@ -173,7 +173,7 @@ struct OverviewView: View {
 
                 HermesLabeledValue(
                     label: "Home folder",
-                    value: overview.remoteHome,
+                    value: L10n.string(UIDisplayFormatting.readableHomeFolder(overview.remoteHome)),
                     isMonospaced: true
                 )
 
@@ -554,12 +554,19 @@ struct OverviewView: View {
                     .foregroundStyle(.os1OnCoralSecondary)
                     .fixedSize(horizontal: false, vertical: true)
 
-                Button {
-                    Task { await appState.performHermesUpdate() }
-                } label: {
-                    Label(L10n.string("Update Hermes Agent"), systemImage: "arrow.up.circle.fill")
+                HStack(spacing: 10) {
+                    Button {
+                        Task { await appState.performHermesUpdate() }
+                    } label: {
+                        Label(L10n.string("Update Hermes Agent"), systemImage: "arrow.up.circle.fill")
+                    }
+                    .buttonStyle(.os1Primary)
+
+                    Link(destination: URL(string: "https://github.com/NousResearch/hermes-agent/commits/main")!) {
+                        Label(L10n.string("View changelog"), systemImage: "list.bullet.rectangle")
+                    }
+                    .buttonStyle(.os1Secondary)
                 }
-                .buttonStyle(.os1Primary)
             }
         }
     }
