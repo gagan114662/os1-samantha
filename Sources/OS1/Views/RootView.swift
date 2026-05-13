@@ -30,6 +30,7 @@ struct RootView: View {
     )
     @State private var showRealtimeVoicePanel = false
     @State private var showPortfolioDashboard = false
+    @StateObject private var taxViewModel = TaxViewModel.make()
 
     var body: some View {
         OS1HSplitView {
@@ -321,7 +322,7 @@ struct RootView: View {
         guard let connection = appState.activeConnection else {
             return [.connections]
         }
-        var sections: [AppSection] = [.connections, .overview, .sessions, .cronjobs, .kanban, .files, .usage, .skills, .knowledgeBase, .codexTasks, .connectors, .providers, .mail, .messaging, .terminal, .doctor]
+        var sections: [AppSection] = [.connections, .overview, .sessions, .cronjobs, .kanban, .files, .usage, .skills, .knowledgeBase, .codexTasks, .connectors, .providers, .mail, .messaging, .terminal, .doctor, .tax]
         if case .orgo = connection.transport {
             sections.append(.desktop)
             sections.append(.tiles)
@@ -345,7 +346,7 @@ struct RootView: View {
             SidebarGroup(title: L10n.string("CHANNELS"),
                          sections: [.mail, .messaging]),
             SidebarGroup(title: L10n.string("CONFIGURATION"),
-                         sections: [.providers, .connectors]),
+                         sections: [.providers, .connectors, .tax]),
         ]
         // Filter to only sections that are actually available; drop empty groups
         return groups.compactMap { g in
@@ -436,6 +437,8 @@ struct RootView: View {
             ProvidersView(viewModel: appState.providersViewModel)
         case .doctor:
             DoctorView(viewModel: appState.doctorViewModel)
+        case .tax:
+            TaxView(viewModel: taxViewModel)
         case .terminal:
             TerminalWorkspaceView(
                 workspace: appState.terminalWorkspace,

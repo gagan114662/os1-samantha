@@ -39,6 +39,20 @@ struct CompanyLedgerEntry: Codable, Hashable, Identifiable {
     var sourceReference: String? = nil
     let confidence: Confidence
     let note: String
+    /// Tax entity this ledger line is attributed to. Optional for backward-
+    /// compatibility with existing on-disk ledgers; the Doctor `tax-pipeline`
+    /// row surfaces unmapped lines so the operator can backfill via
+    /// `withEntityID(from:)` once `~/.os1/entities.json` is populated.
+    var entityID: String? = nil
+
+    /// Returns a copy with `entityID` populated from the registry mapping for
+    /// this line's `companyID`. Returns self unchanged if no mapping exists.
+    func withEntityID(from registry: TaxEntityRegistry) -> CompanyLedgerEntry {
+        guard let companyID, let mapped = registry.companyToEntity[companyID] else { return self }
+        var copy = self
+        copy.entityID = mapped
+        return copy
+    }
 
     var isTraceable: Bool {
         sourceEventID != nil ||
