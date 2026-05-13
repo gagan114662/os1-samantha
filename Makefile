@@ -1,4 +1,4 @@
-.PHONY: build install install-launch-agents test-focus smoke-stripe-live smoke-faceless-video
+.PHONY: build install install-launch-agents test-focus evals smoke-stripe-live smoke-faceless-video
 
 build:
 	@./scripts/build-macos-app.sh
@@ -20,6 +20,11 @@ test-focus:
 	scratch="/tmp/os1-build-cache/$${USER:-unknown}-$$$$"; \
 	mkdir -p "$$scratch"; \
 	swift test --scratch-path "$$scratch" --filter "$$filter"
+
+evals:
+	@python3 scripts/run-evals.py \
+		--json-report artifacts/evals/non-live-report.json \
+		--markdown-report artifacts/evals/non-live-report.md
 
 smoke-stripe-live:
 	@SECRET=$$(security find-generic-password -a "$${USER}" -s OS1_STRIPE_WEBHOOK_SECRET -w 2>/dev/null || true); \
