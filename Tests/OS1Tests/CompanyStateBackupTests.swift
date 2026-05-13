@@ -118,6 +118,7 @@ struct CompanyStateBackupTests {
             key: key,
             createdAt: Date(timeIntervalSince1970: 1_700_000_000)
         )
+        let manifestHash = try CompanyStateBackupCodec.manifestHash(backup.manifest)
         let drill = try CompanyStateBackupBuilder.restoreEncryptedBackup(
             backup,
             key: key,
@@ -130,11 +131,128 @@ struct CompanyStateBackupTests {
             encoding: .utf8
         )
         #expect(backup.entries.allSatisfy { !$0.sealedBase64.contains("revenue") })
+        #expect(backup.manifestSHA256 == manifestHash)
+        #expect(backup.keyDescriptor.kind == .operatorSupplied)
         #expect(drill.status == .passed)
         #expect(drill.restoredEntryCount == 2)
         #expect(drill.recoveryPointObjectiveHours == 24)
         #expect(drill.recoveryTimeObjectiveHours == 4)
         #expect(restoredLedger.contains("amountUSD"))
+    }
+
+    @Test
+    func ciSmokeTestEncryptedBackupBundleRoundTripsThroughStoreRetrieveDecryptAndIntegrityVerify() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("os1-backup-ci-source-\(UUID().uuidString)", isDirectory: true)
+        let storageRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("os1-backup-ci-store-\(UUID().uuidString)", isDirectory: true)
+        let restoreRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("os1-backup-ci-restore-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: storageRoot)
+            try? FileManager.default.removeItem(at: restoreRoot)
+        }
+
+        let sessions = root.appendingPathComponent("sessions.json")
+        let events = root.appendingPathComponent("events/company.jsonl")
+        let approvals = root.appendingPathComponent("approvals/company.json")
+        let ledger = root.appendingPathComponent("sessions/company/LEDGER.json")
+        for url in [events, approvals, ledger] {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        }
+        try #"{"sessions":[]}"#.write(to: sessions, atomically: true, encoding: .utf8)
+        try #"{"kind":"companyCreated"}"#.write(to: events, atomically: true, encoding: .utf8)
+        try #"{"approval":"allowed"}"#.write(to: approvals, atomically: true, encoding: .utf8)
+        try #"[{"kind":"revenue","amountUSD":42}]"#.write(to: ledger, atomically: true, encoding: .utf8)
+
+        let operatorSecret = "correct horse battery staple"
+        let key = CompanyStateBackupKeyMaterial.operatorSupplied(operatorSecret)
+        let backup = try OS1BackupCommand.backupWithOperatorSuppliedKey(
+            sourceRoot: root,
+            candidates: [
+                .init(sourceURL: sessions, relativePath: "sessions.json", kind: .sessions),
+                .init(sourceURL: events, relativePath: "events/company.jsonl", kind: .events),
+                .init(sourceURL: approvals, relativePath: "approvals/company.json", kind: .approval),
+                .init(sourceURL: ledger, relativePath: "sessions/company/LEDGER.json", kind: .ledger)
+            ],
+            operatorSecret: operatorSecret,
+            backupID: "ci-smoke-backup",
+            createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        let storedRoot = try OS1BackupCommand.store(backup: backup, storageRoot: storageRoot)
+        let retrieved = try OS1BackupCommand.retrieve(backupID: "ci-smoke-backup", storageRoot: storageRoot)
+        let integrity = CompanyStateBackupBuilder.verifyEncryptedBackup(retrieved, key: key)
+        let drill = try OS1BackupCommand.restore(
+            backup: retrieved,
+            key: key,
+            destinationRoot: restoreRoot,
+            drilledAt: Date(timeIntervalSince1970: 1_700_000_120)
+        )
+
+        #expect(FileManager.default.fileExists(atPath: storedRoot.appendingPathComponent("bundle.json").path))
+        #expect(FileManager.default.fileExists(atPath: storedRoot.appendingPathComponent("manifest.sha256").path))
+        #expect(retrieved.manifestSHA256 == backup.manifestSHA256)
+        #expect(integrity.isPassing)
+        #expect(integrity.verifiedEntryCount == 4)
+        #expect(drill.status == .passed)
+        #expect(drill.restoredEntryCount == 4)
+        #expect(try String(contentsOf: restoreRoot.appendingPathComponent("sessions/company/LEDGER.json"), encoding: .utf8)
+            .contains("amountUSD"))
+    }
+
+    @Test
+    func restoreSurfacesStructuredErrorWhenBundleManifestIsTampered() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("os1-backup-tamper-source-\(UUID().uuidString)", isDirectory: true)
+        let restoreRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("os1-backup-tamper-restore-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: restoreRoot)
+        }
+
+        let ledger = root.appendingPathComponent("LEDGER.json")
+        try #"[{"kind":"revenue","amountUSD":5}]"#.write(to: ledger, atomically: true, encoding: .utf8)
+        let key = SymmetricKey(size: .bits256)
+        let backup = try CompanyStateBackupBuilder.makeEncryptedBackup(
+            backupID: "tamper-backup",
+            sourceRoot: root,
+            candidates: [.init(sourceURL: ledger, relativePath: "LEDGER.json", kind: .ledger)],
+            key: key
+        )
+        let tamperedManifest = CompanyStateBackupManifest(
+            schemaVersion: backup.manifest.schemaVersion,
+            createdAt: backup.manifest.createdAt.addingTimeInterval(1),
+            backupID: backup.manifest.backupID,
+            sourceRoot: backup.manifest.sourceRoot,
+            recoveryPointObjectiveHours: backup.manifest.recoveryPointObjectiveHours,
+            recoveryTimeObjectiveHours: backup.manifest.recoveryTimeObjectiveHours,
+            backupFrequencyHours: backup.manifest.backupFrequencyHours,
+            retentionDays: backup.manifest.retentionDays,
+            storageLocation: backup.manifest.storageLocation,
+            restorePermissions: backup.manifest.restorePermissions,
+            encryption: backup.manifest.encryption,
+            secretsPolicy: backup.manifest.secretsPolicy,
+            entries: backup.manifest.entries
+        )
+        let tampered = CompanyEncryptedStateBackup(
+            manifest: tamperedManifest,
+            manifestSHA256: backup.manifestSHA256,
+            algorithm: backup.algorithm,
+            keyDescriptor: backup.keyDescriptor,
+            entries: backup.entries
+        )
+
+        do {
+            _ = try CompanyStateBackupBuilder.restoreEncryptedBackup(tampered, key: key, destinationRoot: restoreRoot)
+            Issue.record("Expected manifest tampering to throw.")
+        } catch let error as CompanyStateBackupRestoreError {
+            #expect(error.code == "manifest_hash_mismatch")
+        }
     }
 
     @Test
@@ -206,12 +324,27 @@ struct CompanyStateBackupTests {
             ),
             now: now
         ).isEmpty)
-        #expect(DoctorViewModel.stateBackupProblems(latestManifest: stale, integrityReport: nil, now: now)
-            .contains { $0.contains("RPO") })
+        #expect(DoctorViewModel.stateBackupProblems(
+            latestManifest: stale,
+            integrityReport: nil,
+            now: now,
+            staleThresholdHours: 12
+        ).contains { $0.contains("stale threshold") })
         #expect(DoctorViewModel.stateBackupProblems(
             latestManifest: fresh,
             integrityReport: failingIntegrity,
             now: now
         ).contains { $0.contains("Checksum mismatches") })
+        #expect(DoctorViewModel.configuredStateBackupStaleThresholdHours(
+            environment: ["OS1_BACKUP_STALE_THRESHOLD_HOURS": "6"]
+        ) == 6)
+        #expect(DoctorViewModel.stateBackupDoctorRows(
+            latestManifest: fresh,
+            oldestManifest: stale,
+            integrityReport: failingIntegrity,
+            now: now,
+            staleThresholdHours: 6,
+            unreadableBackupCount: 1
+        ).contains("Last successful backup age: 1h (threshold 6h)"))
     }
 }

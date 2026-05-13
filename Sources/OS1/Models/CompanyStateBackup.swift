@@ -1,9 +1,10 @@
 import Foundation
 import CryptoKit
+import Security
 
-struct CompanyStateBackupManifest: Codable, Hashable {
-    struct Entry: Codable, Hashable, Identifiable {
-        enum Kind: String, Codable, CaseIterable, Hashable {
+struct CompanyStateBackupManifest: Codable, Hashable, Sendable {
+    struct Entry: Codable, Hashable, Identifiable, Sendable {
+        enum Kind: String, Codable, CaseIterable, Hashable, Sendable {
             case sessions
             case events
             case lessons
@@ -67,8 +68,8 @@ struct CompanyStateBackupManifest: Codable, Hashable {
     }
 }
 
-struct CompanyBackupIntegrityReport: Codable, Hashable {
-    enum Status: String, Codable, Hashable {
+struct CompanyBackupIntegrityReport: Codable, Hashable, Sendable {
+    enum Status: String, Codable, Hashable, Sendable {
         case passed
         case failed
     }
@@ -78,27 +79,171 @@ struct CompanyBackupIntegrityReport: Codable, Hashable {
     var verifiedEntryCount: Int
     var missingPaths: [String]
     var checksumMismatches: [String]
+    var manifestHashMismatch: String? = nil
 
     var isPassing: Bool {
-        status == .passed
+        status == .passed && manifestHashMismatch == nil
     }
 }
 
-struct CompanyEncryptedBackupEntry: Codable, Hashable, Identifiable {
+struct CompanyBackupEncryptionKeyDescriptor: Codable, Hashable, Sendable {
+    enum Kind: String, Codable, Hashable, Sendable {
+        case operatorSupplied
+        case keychainManaged
+    }
+
+    let kind: Kind
+    let identifier: String
+    let keychainService: String?
+    let keychainAccount: String?
+
+    static func operatorSupplied(identifier: String = "operator-supplied") -> Self {
+        Self(kind: .operatorSupplied, identifier: identifier, keychainService: nil, keychainAccount: nil)
+    }
+
+    static func keychainManaged(
+        service: String = CompanyStateBackupKeychainStore.defaultService,
+        account: String = CompanyStateBackupKeychainStore.defaultAccount
+    ) -> Self {
+        Self(
+            kind: .keychainManaged,
+            identifier: "\(service):\(account)",
+            keychainService: service,
+            keychainAccount: account
+        )
+    }
+}
+
+struct CompanyEncryptedBackupEntry: Codable, Hashable, Identifiable, Sendable {
     var id: String { relativePath }
     let relativePath: String
     let kind: CompanyStateBackupManifest.Entry.Kind
     let sealedBase64: String
 }
 
-struct CompanyEncryptedStateBackup: Codable, Hashable {
+struct CompanyEncryptedStateBackup: Codable, Hashable, Sendable {
     let manifest: CompanyStateBackupManifest
+    let manifestSHA256: String
     let algorithm: String
+    let keyDescriptor: CompanyBackupEncryptionKeyDescriptor
     let entries: [CompanyEncryptedBackupEntry]
 }
 
-struct CompanyRestoreDrillReport: Codable, Hashable {
-    enum Status: String, Codable, Hashable {
+enum CompanyStateBackupRestoreError: LocalizedError, Hashable, Sendable {
+    case manifestHashMismatch(expected: String, actual: String)
+    case integrityCheckFailed(backupID: String, missingPaths: [String], checksumMismatches: [String])
+    case invalidRelativePath(String)
+
+    var code: String {
+        switch self {
+        case .manifestHashMismatch: "manifest_hash_mismatch"
+        case .integrityCheckFailed: "backup_integrity_check_failed"
+        case .invalidRelativePath: "invalid_backup_relative_path"
+        }
+    }
+
+    var errorDescription: String? {
+        switch self {
+        case .manifestHashMismatch(let expected, let actual):
+            return "Backup manifest hash mismatch (expected \(expected), actual \(actual))."
+        case .integrityCheckFailed(let backupID, let missingPaths, let checksumMismatches):
+            let missing = missingPaths.isEmpty ? "none" : missingPaths.joined(separator: ", ")
+            let mismatches = checksumMismatches.isEmpty ? "none" : checksumMismatches.joined(separator: ", ")
+            return "Backup \(backupID) failed integrity checks. Missing: \(missing). Mismatches: \(mismatches)."
+        case .invalidRelativePath(let path):
+            return "Backup entry has an unsafe relative path: \(path)."
+        }
+    }
+}
+
+enum CompanyStateBackupCodec {
+    static func encoder() -> JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return encoder
+    }
+
+    static func decoder() -> JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }
+
+    static func manifestHash(_ manifest: CompanyStateBackupManifest) throws -> String {
+        try sha256Hex(encoder().encode(manifest))
+    }
+
+    static func sha256Hex(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+enum CompanyStateBackupKeyMaterial {
+    static func operatorSupplied(_ secret: String) -> SymmetricKey {
+        if let decoded = Data(base64Encoded: secret), decoded.count == 32 {
+            return SymmetricKey(data: decoded)
+        }
+        return SymmetricKey(data: Data(SHA256.hash(data: Data(secret.utf8))))
+    }
+}
+
+enum CompanyStateBackupKeychainStore {
+    enum StoreError: LocalizedError {
+        case saveFailed(OSStatus)
+
+        var errorDescription: String? {
+            switch self {
+            case .saveFailed(let status):
+                return "Couldn't save the OS1 backup encryption key to Keychain (status \(status))."
+            }
+        }
+    }
+
+    static let defaultService = "ai.os1.state-backup-key"
+    static let defaultAccount = "default"
+
+    static func loadOrCreateKey(service: String = defaultService, account: String = defaultAccount) throws -> SymmetricKey {
+        if let stored = KeychainSecret.read(service: service, account: account),
+           let data = Data(base64Encoded: stored),
+           data.count == 32 {
+            return SymmetricKey(data: data)
+        }
+        var bytes = [UInt8](repeating: 0, count: 32)
+        let status = bytes.withUnsafeMutableBytes { rawBuffer in
+            SecRandomCopyBytes(kSecRandomDefault, bytes.count, rawBuffer.baseAddress!)
+        }
+        precondition(status == errSecSuccess, "SecRandomCopyBytes failed with status \(status)")
+        let data = Data(bytes)
+        try saveKeyData(data, service: service, account: account)
+        return SymmetricKey(data: data)
+    }
+
+    private static func saveKeyData(_ data: Data, service: String, account: String) throws {
+        let payload = Data(data.base64EncodedString().utf8)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
+        let attributes: [String: Any] = [kSecValueData as String: payload]
+        let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        switch updateStatus {
+        case errSecSuccess:
+            return
+        case errSecItemNotFound:
+            var addQuery = query
+            addQuery[kSecValueData as String] = payload
+            let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+            guard addStatus == errSecSuccess else { throw StoreError.saveFailed(addStatus) }
+        default:
+            throw StoreError.saveFailed(updateStatus)
+        }
+    }
+}
+
+struct CompanyRestoreDrillReport: Codable, Hashable, Sendable {
+    enum Status: String, Codable, Hashable, Sendable {
         case passed
         case failed
     }
@@ -115,7 +260,7 @@ struct CompanyRestoreDrillReport: Codable, Hashable {
 }
 
 enum CompanyStateBackupBuilder {
-    struct Candidate: Hashable {
+    struct Candidate: Hashable, Sendable {
         let sourceURL: URL
         let relativePath: String
         let kind: CompanyStateBackupManifest.Entry.Kind
@@ -150,6 +295,7 @@ enum CompanyStateBackupBuilder {
         sourceRoot: URL,
         candidates: [Candidate],
         key: SymmetricKey,
+        keyDescriptor: CompanyBackupEncryptionKeyDescriptor = .operatorSupplied(),
         createdAt: Date = Date()
     ) throws -> CompanyEncryptedStateBackup {
         let manifest = try makeManifest(
@@ -171,7 +317,9 @@ enum CompanyStateBackupBuilder {
         }.sorted { $0.relativePath < $1.relativePath }
         return CompanyEncryptedStateBackup(
             manifest: manifest,
+            manifestSHA256: try CompanyStateBackupCodec.manifestHash(manifest),
             algorithm: "AES-GCM",
+            keyDescriptor: keyDescriptor,
             entries: entries
         )
     }
@@ -204,7 +352,8 @@ enum CompanyStateBackupBuilder {
             checkedAt: checkedAt,
             verifiedEntryCount: verified,
             missingPaths: missing.sorted(),
-            checksumMismatches: mismatches.sorted()
+            checksumMismatches: mismatches.sorted(),
+            manifestHashMismatch: nil
         )
     }
 
@@ -213,6 +362,16 @@ enum CompanyStateBackupBuilder {
         key: SymmetricKey,
         checkedAt: Date = Date()
     ) -> CompanyBackupIntegrityReport {
+        if let mismatch = manifestHashMismatch(in: backup) {
+            return CompanyBackupIntegrityReport(
+                status: .failed,
+                checkedAt: checkedAt,
+                verifiedEntryCount: 0,
+                missingPaths: [],
+                checksumMismatches: [],
+                manifestHashMismatch: mismatch
+            )
+        }
         let encryptedByPath = Dictionary(uniqueKeysWithValues: backup.entries.map { ($0.relativePath, $0) })
         var verified = 0
         var missing: [String] = []
@@ -239,8 +398,25 @@ enum CompanyStateBackupBuilder {
             checkedAt: checkedAt,
             verifiedEntryCount: verified,
             missingPaths: missing.sorted(),
-            checksumMismatches: mismatches.sorted()
+            checksumMismatches: mismatches.sorted(),
+            manifestHashMismatch: nil
         )
+    }
+
+    static func manifestHashMismatch(in backup: CompanyEncryptedStateBackup) -> String? {
+        guard let actual = try? CompanyStateBackupCodec.manifestHash(backup.manifest),
+              actual != backup.manifestSHA256 else { return nil }
+        return "expected \(backup.manifestSHA256), actual \(actual)"
+    }
+
+    static func validateEncryptedBackupBundle(_ backup: CompanyEncryptedStateBackup) throws {
+        if let actual = try? CompanyStateBackupCodec.manifestHash(backup.manifest),
+           actual != backup.manifestSHA256 {
+            throw CompanyStateBackupRestoreError.manifestHashMismatch(
+                expected: backup.manifestSHA256,
+                actual: actual
+            )
+        }
     }
 
     static func restoreEncryptedBackup(
@@ -249,18 +425,13 @@ enum CompanyStateBackupBuilder {
         destinationRoot: URL,
         drilledAt: Date = Date()
     ) throws -> CompanyRestoreDrillReport {
+        try validateEncryptedBackupBundle(backup)
         let integrity = verifyEncryptedBackup(backup, key: key, checkedAt: drilledAt)
         guard integrity.isPassing else {
-            return CompanyRestoreDrillReport(
-                status: .failed,
-                drilledAt: drilledAt,
+            throw CompanyStateBackupRestoreError.integrityCheckFailed(
                 backupID: backup.manifest.backupID,
-                restoredEntryCount: 0,
-                recoveryPointObjectiveHours: backup.manifest.recoveryPointObjectiveHours,
-                recoveryTimeObjectiveHours: backup.manifest.recoveryTimeObjectiveHours,
-                integrity: integrity,
-                restoreRoot: destinationRoot.path,
-                notes: ["Integrity failed; restore blocked before writing files."]
+                missingPaths: integrity.missingPaths,
+                checksumMismatches: integrity.checksumMismatches
             )
         }
 
@@ -271,7 +442,7 @@ enum CompanyStateBackupBuilder {
                   let sealedData = Data(base64Encoded: encrypted.sealedBase64) else { continue }
             let box = try AES.GCM.SealedBox(combined: sealedData)
             let data = try AES.GCM.open(box, using: key)
-            let destination = destinationRoot.appendingPathComponent(entry.relativePath)
+            let destination = try restoredDestination(for: entry.relativePath, destinationRoot: destinationRoot)
             try FileManager.default.createDirectory(
                 at: destination.deletingLastPathComponent(),
                 withIntermediateDirectories: true
@@ -292,6 +463,44 @@ enum CompanyStateBackupBuilder {
             notes: ["Clean-machine restore drill completed without secrets."]
         )
     }
+
+    private static func restoredDestination(for relativePath: String, destinationRoot: URL) throws -> URL {
+        guard !relativePath.hasPrefix("/"),
+              !relativePath.split(separator: "/").contains("..") else {
+            throw CompanyStateBackupRestoreError.invalidRelativePath(relativePath)
+        }
+        return destinationRoot.appendingPathComponent(relativePath)
+    }
+}
+
+enum CompanyEncryptedBackupBundleStore {
+    static let bundleFilename = "bundle.json"
+    static let manifestFilename = "manifest.json"
+    static let manifestHashFilename = "manifest.sha256"
+
+    static func store(_ backup: CompanyEncryptedStateBackup, storageRoot: URL) throws -> URL {
+        try CompanyStateBackupBuilder.validateEncryptedBackupBundle(backup)
+        let backupRoot = storageRoot.appendingPathComponent(backup.manifest.backupID, isDirectory: true)
+        try FileManager.default.createDirectory(at: backupRoot, withIntermediateDirectories: true)
+
+        let encoder = CompanyStateBackupCodec.encoder()
+        try encoder.encode(backup).write(to: backupRoot.appendingPathComponent(bundleFilename), options: [.atomic])
+        try encoder.encode(backup.manifest).write(to: backupRoot.appendingPathComponent(manifestFilename), options: [.atomic])
+        try (backup.manifestSHA256 + "\n").write(
+            to: backupRoot.appendingPathComponent(manifestHashFilename),
+            atomically: true,
+            encoding: .utf8
+        )
+        return backupRoot
+    }
+
+    static func retrieve(backupID: String, storageRoot: URL) throws -> CompanyEncryptedStateBackup {
+        let backupRoot = storageRoot.appendingPathComponent(backupID, isDirectory: true)
+        let data = try Data(contentsOf: backupRoot.appendingPathComponent(bundleFilename))
+        let backup = try CompanyStateBackupCodec.decoder().decode(CompanyEncryptedStateBackup.self, from: data)
+        try CompanyStateBackupBuilder.validateEncryptedBackupBundle(backup)
+        return backup
+    }
 }
 
 enum OS1BackupCommand {
@@ -299,6 +508,7 @@ enum OS1BackupCommand {
         sourceRoot: URL,
         candidates: [CompanyStateBackupBuilder.Candidate],
         key: SymmetricKey,
+        keyDescriptor: CompanyBackupEncryptionKeyDescriptor = .operatorSupplied(),
         backupID: String = UUID().uuidString,
         createdAt: Date = Date()
     ) throws -> CompanyEncryptedStateBackup {
@@ -307,8 +517,58 @@ enum OS1BackupCommand {
             sourceRoot: sourceRoot,
             candidates: candidates,
             key: key,
+            keyDescriptor: keyDescriptor,
             createdAt: createdAt
         )
+    }
+
+    static func backupWithOperatorSuppliedKey(
+        sourceRoot: URL,
+        candidates: [CompanyStateBackupBuilder.Candidate],
+        operatorSecret: String,
+        backupID: String = UUID().uuidString,
+        createdAt: Date = Date()
+    ) throws -> CompanyEncryptedStateBackup {
+        try backup(
+            sourceRoot: sourceRoot,
+            candidates: candidates,
+            key: CompanyStateBackupKeyMaterial.operatorSupplied(operatorSecret),
+            keyDescriptor: .operatorSupplied(),
+            backupID: backupID,
+            createdAt: createdAt
+        )
+    }
+
+    static func backupWithKeychainManagedKey(
+        sourceRoot: URL,
+        candidates: [CompanyStateBackupBuilder.Candidate],
+        service: String = CompanyStateBackupKeychainStore.defaultService,
+        account: String = CompanyStateBackupKeychainStore.defaultAccount,
+        backupID: String = UUID().uuidString,
+        createdAt: Date = Date()
+    ) throws -> CompanyEncryptedStateBackup {
+        try backup(
+            sourceRoot: sourceRoot,
+            candidates: candidates,
+            key: CompanyStateBackupKeychainStore.loadOrCreateKey(service: service, account: account),
+            keyDescriptor: .keychainManaged(service: service, account: account),
+            backupID: backupID,
+            createdAt: createdAt
+        )
+    }
+
+    static func store(
+        backup: CompanyEncryptedStateBackup,
+        storageRoot: URL
+    ) throws -> URL {
+        try CompanyEncryptedBackupBundleStore.store(backup, storageRoot: storageRoot)
+    }
+
+    static func retrieve(
+        backupID: String,
+        storageRoot: URL
+    ) throws -> CompanyEncryptedStateBackup {
+        try CompanyEncryptedBackupBundleStore.retrieve(backupID: backupID, storageRoot: storageRoot)
     }
 
     static func restore(
