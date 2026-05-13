@@ -148,8 +148,10 @@ struct ProvidersView: View {
                     Text(providerCapacityLine(for: display.entry))
                         .os1Style(theme.typography.smallCaps)
                         .foregroundStyle(theme.palette.onCoralMuted)
-                        .lineLimit(1)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .help(providerCapacityLine(for: display.entry))
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
 
                 Spacer(minLength: 8)
 
@@ -175,8 +177,8 @@ struct ProvidersView: View {
     }
 
     private func providerCapacityLine(for entry: ProviderCatalogEntry) -> String {
-        let quota = entry.freeTierQuota.map { "\($0.amount) \($0.unit)" } ?? "account plan"
-        return L10n.string("%@ · Quota: %@ · Cost-to-date: ledger tracked", entry.modality.displayName, quota)
+        let quota = entry.freeTierQuota.map { "\($0.amount) \($0.unit)" }
+        return UIDisplayFormatting.providerCapacityLine(modality: entry.modality.displayName, quota: quota)
     }
 
     private func statusPill(for display: ProvidersViewModel.ProviderDisplay) -> some View {

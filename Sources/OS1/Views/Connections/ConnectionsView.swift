@@ -281,9 +281,21 @@ private struct ConnectionCard: View {
 
     private var primaryActions: some View {
         HStack(spacing: 10) {
-            Button(L10n.string("Use Host"), action: onConnect)
-                .buttonStyle(.os1Primary)
-                .disabled(isActive)
+            if isActive {
+                Label(L10n.string("Currently Active"), systemImage: "checkmark.circle.fill")
+                    .font(.os1SmallCaps)
+                    .foregroundStyle(theme.palette.onCoralPrimary)
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 7)
+                    .background(theme.palette.glassFill, in: Capsule())
+                    .overlay {
+                        Capsule()
+                            .strokeBorder(theme.palette.glassBorder, lineWidth: 1)
+                    }
+            } else {
+                Button(L10n.string("Use Host"), action: onConnect)
+                    .buttonStyle(.os1Primary)
+            }
 
             Button(L10n.string("Test"), action: onTest)
                 .buttonStyle(.os1Secondary)

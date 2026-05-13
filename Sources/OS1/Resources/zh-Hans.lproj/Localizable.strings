@@ -1,4 +1,6 @@
 "Active" = "活跃";
+"(not set)" = "（未设置）";
+"account plan" = "账户方案";
 "Active profile" = "当前配置";
 "Add First Host" = "添加第一个主机";
 "Add Host" = "添加主机";
@@ -8,6 +10,7 @@
 "Cache" = "缓存";
 "Canonical Files" = "核心文件";
 "Cancel" = "取消";
+"Copy computer ID" = "复制电脑 ID";
 "Choose a Hermes cron job from the active host to inspect it, or create a new one." = "从当前主机选择一个 Hermes 定时任务查看，或创建新的任务。";
 "Choose a Hermes session from the active host to inspect its transcript." = "从当前主机选择一个 Hermes 会话查看记录。";
 "Choose a Hermes skill from the active host to inspect its metadata and full SKILL.md." = "从当前主机选择一个 Hermes 技能，查看元数据和完整的 SKILL.md。";
@@ -25,6 +28,7 @@
 "Cron Jobs" = "定时任务";
 "Current Host" = "当前主机";
 "Current Total" = "当前总计";
+"Currently Active" = "当前已启用";
 "Custom Colors" = "自定义颜色";
 "Custom colors update the running terminal immediately. Preset ANSI colors stay anchored so git output, prompts, and tools keep a readable palette." = "自定义颜色会立即更新正在运行的终端。预设 ANSI 颜色保持稳定，让 git 输出、提示符和工具保持可读。";
 "Delete session" = "删除会话";
@@ -133,6 +137,7 @@
 "Usage" = "用量";
 "Use Host" = "使用主机";
 "Use System" = "使用系统";
+"View changelog" = "查看变更日志";
 "Use an SSH alias when possible. It keeps the system SSH config as the source of truth." = "尽可能使用 SSH 别名。这样系统 SSH 配置仍是事实来源。";
 "Use an SSH alias whenever possible. It keeps the system SSH config as the source of truth and makes profiles easier to move between machines." = "尽可能使用 SSH 别名。这样系统 SSH 配置仍是事实来源，也更容易在机器之间迁移配置。";
 "User file" = "用户文件";
@@ -1014,6 +1019,7 @@
 "Configure in Providers" = "在 Providers 中配置";
 
 // MARK: - Pass 2 additions: Tasks / Tiles / Doctor (auto-appended)
+"%lld computer" = "%lld computer";
 "%lld computers" = "%lld computers";
 "%lld of %lld OS1 agents loaded" = "%lld of %lld OS1 agents loaded";
 "%lld total" = "%lld total";

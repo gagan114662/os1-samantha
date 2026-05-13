@@ -58,7 +58,10 @@ struct TilesView: View {
             Text("·")
                 .foregroundStyle(theme.palette.onCoralMuted)
 
-            Text(L10n.string("%lld computers", computers.count))
+            Text(L10n.string(
+                UIDisplayFormatting.computerCountLabelKey(for: computers.count),
+                computers.count
+            ))
                 .os1Style(theme.typography.label)
                 .foregroundStyle(theme.palette.onCoralMuted)
 
@@ -273,4 +276,3 @@ struct TilesView: View {
         }
     }
 }
-

@@ -1,4 +1,6 @@
 "Active" = "Активно";
+"(not set)" = "(не задано)";
+"account plan" = "тариф аккаунта";
 "Active profile" = "Активный профиль";
 "Add First Host" = "Добавить первый хост";
 "Add Host" = "Добавить хост";
@@ -8,6 +10,7 @@
 "Cache" = "Кэш";
 "Canonical Files" = "Основные файлы";
 "Cancel" = "Отмена";
+"Copy computer ID" = "Скопировать ID компьютера";
 "Choose a Hermes cron job from the active host to inspect it, or create a new one." = "Выберите задание Hermes cron на активном хосте, чтобы просмотреть его, или создайте новое.";
 "Choose a Hermes session from the active host to inspect its transcript." = "Выберите сеанс Hermes на активном хосте, чтобы просмотреть его transcript.";
 "Choose a Hermes skill from the active host to inspect its metadata and full SKILL.md." = "Выберите навык Hermes на активном хосте, чтобы просмотреть метаданные и полный SKILL.md.";
@@ -25,6 +28,7 @@
 "Cron Jobs" = "Cron-задания";
 "Current Host" = "Текущий хост";
 "Current Total" = "Текущий итог";
+"Currently Active" = "Сейчас активен";
 "Custom Colors" = "Свои цвета";
 "Custom colors update the running terminal immediately. Preset ANSI colors stay anchored so git output, prompts, and tools keep a readable palette." = "Свои цвета сразу применяются к запущенному терминалу. Предустановленные ANSI-цвета остаются стабильными, чтобы вывод git, prompts и инструменты оставались читаемыми.";
 "Delete session" = "Удалить сеанс";
@@ -133,6 +137,7 @@
 "Usage" = "Использование";
 "Use Host" = "Использовать хост";
 "Use System" = "Системная";
+"View changelog" = "Открыть журнал изменений";
 "Use an SSH alias when possible. It keeps the system SSH config as the source of truth." = "По возможности используйте SSH-псевдоним. Так системная SSH-конфигурация остается источником истины.";
 "Use an SSH alias whenever possible. It keeps the system SSH config as the source of truth and makes profiles easier to move between machines." = "По возможности используйте SSH-псевдоним. Так системная SSH-конфигурация остается источником истины, а профили проще переносить между машинами.";
 "User file" = "Файл пользователя";
@@ -1014,6 +1019,7 @@
 "Configure in Providers" = "Настроить в Providers";
 
 // MARK: - Pass 2 additions: Tasks / Tiles / Doctor (auto-appended)
+"%lld computer" = "%lld computer";
 "%lld computers" = "%lld computers";
 "%lld of %lld OS1 agents loaded" = "%lld of %lld OS1 agents loaded";
 "%lld total" = "%lld total";

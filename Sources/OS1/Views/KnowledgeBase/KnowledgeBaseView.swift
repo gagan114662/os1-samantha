@@ -24,6 +24,7 @@ struct KnowledgeBaseView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .padding(.horizontal, 20)
             .padding(.vertical, 20)
+            .safeAreaPadding(.top, 8)
         } detail: {
             detailColumn
                 .hermesSplitDetailColumn(minWidth: 380, idealWidth: 520)

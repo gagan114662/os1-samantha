@@ -250,7 +250,7 @@ struct RootView: View {
                 Image(systemName: section.systemImage)
                     .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
                     .frame(width: 18)
-                Text(L10n.string(section.title))
+                Text(section.title)
                     .os1Style(theme.typography.body)
                 Spacer(minLength: 0)
             }
