@@ -180,32 +180,50 @@ out/
 
 ## Manifest schema — `manifest.json`
 
+Keys are emitted in sorted (alphabetical) order with 2-space indentation —
+matching `json.dumps(obj, sort_keys=True, indent=2)`. Monetary totals are
+serialized as **2-decimal strings**, not JSON numbers, so Swift and Python
+produce byte-identical output (`Double` / `float` shortest-roundtrip
+representations diverge across runtimes; fixed strings do not).
+
 ```json
 {
   "entityID": "llc-acme",
   "entityLegalName": "Acme Holdings LLC",
-  "taxYear": 2025,
-  "jurisdiction": "US-FED",
-  "sourceLedgerCommitHash": "deadbeef…",
   "exportedAt": "2025-12-31T23:59:59Z",
-  "totalsChecksum": "<sha256-hex>",
   "files": [
-    {"path": "pl.csv", "sha256": "…", "byteCount": 156},
-    {"path": "irs_line_items.csv", "sha256": "…", "byteCount": 412}
+    {
+      "byteCount": 156,
+      "path": "pl.csv",
+      "sha256": "…"
+    },
+    {
+      "byteCount": 412,
+      "path": "irs_line_items.csv",
+      "sha256": "…"
+    }
   ],
-  "totals": {
-    "revenueUSD": 12500.00,
-    "refundsUSD": 250.00,
-    "costUSD": 4800.00,
-    "netUSD": 7450.00,
-    "lineCount": 87
-  },
+  "jurisdiction": "US-FED",
   "notes": [
     "Active-day fraction: 0.5041 (prorated for mid-year incorporation/dissolution).",
     "3 cost line(s) classified as 'unclassified' — operator triage required."
-  ]
+  ],
+  "sourceLedgerCommitHash": "deadbeef…",
+  "taxYear": 2025,
+  "totals": {
+    "costUSD": "4800.00",
+    "lineCount": 87,
+    "netUSD": "7450.00",
+    "refundsUSD": "250.00",
+    "revenueUSD": "12500.00"
+  },
+  "totalsChecksum": "<sha256-hex>"
 }
 ```
+
+`lineCount` stays a JSON integer (it's a count, not money). The in-memory
+`TaxExportManifest.Totals` Swift struct still holds `Double` fields for
+ergonomic in-app access — only the on-disk JSON uses string-formatted money.
 
 `totalsChecksum` is SHA256 over a canonical concatenation of `id|kind|category|amount`
 for every line plus the totals tuple. Two runs with the same inputs always
