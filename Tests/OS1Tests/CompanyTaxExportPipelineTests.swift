@@ -456,6 +456,29 @@ struct CompanyTaxExportPipelineTests {
     // MARK: - Doctor row
 
     @Test
+    func doctorRowAccruesCaliforniaSalesTaxSinceFilingStart() {
+        let entity = entity(primary: "US-CA")
+        let registry = TaxEntityRegistry(
+            entities: [entity],
+            companyToEntity: ["co-acme": entity.id]
+        )
+        let caLines: [TaxLedgerLine] = [
+            line("ca-q1", date: date(2026, 2, 1), kind: .revenue, category: .sales, amount: 5_000, jurisdiction: "US-CA"),
+            line("ca-q2", date: date(2026, 4, 1), kind: .revenue, category: .sales, amount: 3_000, jurisdiction: "US-CA"),
+            line("non-ca", date: date(2026, 4, 1), kind: .revenue, category: .sales, amount: 10_000, jurisdiction: "US-FED"),
+            line("ca-future", date: date(2027, 1, 1), kind: .revenue, category: .sales, amount: 9_999, jurisdiction: "US-CA")
+        ]
+        let row = TaxPipelineDoctorRow.compute(
+            ledger: [],
+            registry: registry,
+            now: date(2026, 5, 1),
+            taxLedgerLines: caLines
+        )
+        // CA-pinned revenue YTD = 8_000 × 0.0725 = 580.00
+        #expect(row.salesTaxAccruedSinceLastFilingUSD == 580.0)
+    }
+
+    @Test
     func doctorRowSurfacesUnclassifiedAndMissingMappingCounts() {
         let registry = TaxEntityRegistry(
             entities: [entity()],
