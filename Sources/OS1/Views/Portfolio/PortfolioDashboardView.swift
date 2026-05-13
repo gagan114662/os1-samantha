@@ -8,12 +8,25 @@ struct PortfolioDashboardView: View {
 
     let snapshots: [PortfolioCompanySnapshot]
     let now: Date
+    /// Bayesian posteriors (one per company) sourced from
+    /// `CompanyProfitPriorEngine.nightlySnapshot`. When non-empty the Top-N
+    /// section renders the allocation recommender on top of the raw margin
+    /// table; when empty the existing point-estimate rows render unchanged.
+    let posteriors: [CompanyProfitPosterior]
+    let operatorCapacity: PortfolioAllocationRecommender.OperatorCapacity
 
     @State private var granularity: PortfolioGranularity = .daily
 
-    init(snapshots: [PortfolioCompanySnapshot], now: Date = Date()) {
+    init(
+        snapshots: [PortfolioCompanySnapshot],
+        now: Date = Date(),
+        posteriors: [CompanyProfitPosterior] = [],
+        operatorCapacity: PortfolioAllocationRecommender.OperatorCapacity = .standard
+    ) {
         self.snapshots = snapshots
         self.now = now
+        self.posteriors = posteriors
+        self.operatorCapacity = operatorCapacity
     }
 
     var body: some View {
@@ -185,11 +198,50 @@ struct PortfolioDashboardView: View {
 
     private func topBottomSection(report: PortfolioAggregateReport) -> some View {
         VStack(alignment: .leading, spacing: 16) {
+            if !posteriors.isEmpty {
+                HermesSurfacePanel(title: "Allocation recommender") {
+                    recommenderList()
+                }
+            }
             HermesSurfacePanel(title: "Top performers") {
                 performerList(report.topPerformers, emptyLabel: "No ranked companies yet.")
             }
             HermesSurfacePanel(title: "Bottom performers") {
                 performerList(report.bottomPerformers, emptyLabel: "No ranked companies yet.")
+            }
+        }
+    }
+
+    private func recommenderList() -> some View {
+        let recs = PortfolioAllocationRecommender.rank(
+            posteriors: posteriors,
+            capacity: operatorCapacity,
+            topN: 7
+        )
+        return Group {
+            if recs.isEmpty {
+                Text(L10n.string("No allocation candidates yet."))
+                    .font(.os1Body)
+                    .foregroundStyle(.os1OnCoralSecondary)
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(recs) { rec in
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(alignment: .firstTextBaseline) {
+                                Text("#\(rec.rank) \(rec.companyID)")
+                                    .font(.os1Body)
+                                Spacer()
+                                Text("EV \(PortfolioDashboardView.formatCurrency(rec.expectedValueUSD))")
+                                    .font(.os1Body.monospaced())
+                            }
+                            Text(
+                                "band \(PortfolioDashboardView.formatCurrency(rec.lowerCredibleUSD))–\(PortfolioDashboardView.formatCurrency(rec.upperCredibleUSD)) • P(MRR≥target) \(String(format: "%.2f", rec.probabilityMRRExceedsTarget))"
+                            )
+                            .font(.os1Body.monospaced())
+                            .foregroundStyle(.os1OnCoralSecondary)
+                        }
+                    }
+                }
             }
         }
     }
@@ -263,6 +315,9 @@ struct PortfolioDashboardView: View {
 
     /// Deterministic rendered summary used by snapshot tests. Same content
     /// for light + dark mode (semantic content is theme-independent).
+    ///
+    /// Convenience overload that emits only point estimates — preserved for
+    /// backward compatibility with existing snapshot tests.
     @MainActor
     static func renderedSummary(report: PortfolioAggregateReport) -> [String] {
         var lines: [String] = []
@@ -283,5 +338,22 @@ struct PortfolioDashboardView: View {
             lines.append("bottom|\(row.companyID)|\(formatCurrency(row.marginUSD))")
         }
         return lines
+    }
+
+    /// Banded variant — used when posteriors are available. Every projection
+    /// row (`top|`, `bottom|`, `allocation|`) carries a `band=` suffix so the
+    /// AC3 contract ("no point estimates without bands in the digest") is
+    /// verifiable from rendered text.
+    @MainActor
+    static func renderedSummary(
+        report: PortfolioAggregateReport,
+        posteriors: [CompanyProfitPosterior],
+        recommendations: [PortfolioAllocationRecommender.Recommendation] = []
+    ) -> [String] {
+        PortfolioDigestRenderer.render(
+            report: report,
+            posteriors: posteriors,
+            recommendations: recommendations
+        )
     }
 }
