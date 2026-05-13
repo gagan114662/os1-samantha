@@ -21,6 +21,23 @@ struct CompanyMarketplacePaymentIngestTests {
     }
 
     @Test
+    func etsyCSVIngestProducesProviderEventsForReconciliation() throws {
+        let csv = """
+        Order ID,Date,Item Total,Currency,SKU
+        E-1,2026-05-01,12.50,USD,printable-a
+        E-2,2026-05-02,8.00,USD,printable-b
+        E-3,2026-05-03,4.50,USD,printable-c
+        """
+
+        let events = try EtsyCSVIngest.providerEvents(csv: csv, companyID: "etsy-co")
+
+        #expect(events.count == 3)
+        #expect(events.allSatisfy { $0.kind == .charge })
+        #expect(events.map(\.sourceReference) == ["E-1", "E-2", "E-3"])
+        #expect(events.map(\.provider) == ["etsy", "etsy", "etsy"])
+    }
+
+    @Test
     func kdpCSVIngestProducesExpectedEvents() throws {
         let csv = """
         Royalty Date,Title,ASIN,Royalty,Currency

@@ -121,6 +121,62 @@ struct CompanyPaymentProviderEvent: Codable, Hashable, Identifiable {
     var sourceReference: String
 }
 
+extension CompanyPaymentProviderEvent {
+    init(conversionEvent event: CompanyPaymentConversionEvent) {
+        let kind: Kind = switch event.kind {
+        case .checkoutCompleted:
+            .charge
+        case .refundCreated, .chargebackOpened:
+            .refund
+        }
+        self.init(
+            id: "\(event.provider.rawValue)-\(event.id)",
+            companyID: event.companyID,
+            occurredAt: event.occurredAt,
+            provider: event.provider.rawValue,
+            kind: kind,
+            amountUSD: event.amountUSD,
+            sourceReference: event.providerReference
+        )
+    }
+}
+
+struct CompanyPaymentProviderEventStore {
+    static let fileName = "PAYMENT_PROVIDER_EVENTS.json"
+
+    var url: URL
+
+    func load() throws -> [CompanyPaymentProviderEvent] {
+        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode([CompanyPaymentProviderEvent].self, from: Data(contentsOf: url))
+    }
+
+    @discardableResult
+    func appendIfNew(_ event: CompanyPaymentProviderEvent) throws -> CompanyPaymentProviderEvent {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        var events = try load()
+        if let existing = events.first(where: { $0.id == event.id }) {
+            return existing
+        }
+        events.append(event)
+        events.sort { lhs, rhs in
+            switch (lhs.occurredAt, rhs.occurredAt) {
+            case let (left?, right?) where left != right:
+                return left < right
+            default:
+                return lhs.id < rhs.id
+            }
+        }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(events).write(to: url, options: .atomic)
+        return event
+    }
+}
+
 struct CompanyReconciliationLine: Codable, Hashable, Identifiable {
     enum Status: String, Codable, Hashable {
         case matched

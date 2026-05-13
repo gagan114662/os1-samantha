@@ -6,6 +6,26 @@ enum MarketplaceCSVIngestError: Error, Equatable {
 }
 
 enum EtsyCSVIngest {
+    static func providerEvents(
+        csv: String,
+        companyID: String,
+        fxConverter: (Double, String) -> Double = { amount, _ in amount }
+    ) throws -> [CompanyPaymentProviderEvent] {
+        try MarketplaceCSVParser.providerEvents(
+            csv: csv,
+            companyID: companyID,
+            provider: .etsy,
+            requiredColumns: ["Order ID", "Date", "Item Total", "Currency", "SKU"],
+            idColumn: "Order ID",
+            dateColumn: "Date",
+            amountColumn: "Item Total",
+            currencyColumn: "Currency",
+            referenceColumn: "Order ID",
+            contentColumn: "SKU",
+            fxConverter: fxConverter
+        )
+    }
+
     static func ingest(
         csv: String,
         companyID: String,
@@ -116,6 +136,34 @@ enum GooglePlayCSVIngest {
 }
 
 enum MarketplaceCSVParser {
+    static func providerEvents(
+        csv: String,
+        companyID: String,
+        provider: CompanyPaymentConversionEvent.Provider,
+        requiredColumns: [String],
+        idColumn: String,
+        dateColumn: String,
+        amountColumn: String,
+        currencyColumn: String,
+        referenceColumn: String,
+        contentColumn: String,
+        fxConverter: (Double, String) -> Double
+    ) throws -> [CompanyPaymentProviderEvent] {
+        try events(
+            csv: csv,
+            companyID: companyID,
+            provider: provider,
+            requiredColumns: requiredColumns,
+            idColumn: idColumn,
+            dateColumn: dateColumn,
+            amountColumn: amountColumn,
+            currencyColumn: currencyColumn,
+            referenceColumn: referenceColumn,
+            contentColumn: contentColumn,
+            fxConverter: fxConverter
+        ).map(CompanyPaymentProviderEvent.init(conversionEvent:))
+    }
+
     static func events(
         csv: String,
         companyID: String,

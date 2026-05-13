@@ -131,13 +131,13 @@ final class DoctorViewModel: ObservableObject {
         // failed silently (codex auth, claude CLI, WUPHF, launchd plists,
         // keychain credentials, voice-port freshness).
         let now = Date()
-        paymentsSnapshot = Self.paymentsHealthSnapshot()
+        let recentEvents = CodexSessionManager.shared.recentEvents(limit: 10_000)
+        paymentsSnapshot = Self.paymentsHealthSnapshot(recentEvents: recentEvents)
         fleetSnapshot = Self.fleetHealthSnapshot(
             sessions: CodexSessionManager.shared.sessions,
-            events: CodexSessionManager.shared.recentEvents(limit: 10_000),
+            events: recentEvents,
             now: now
         )
-        let recentEvents = CodexSessionManager.shared.recentEvents(limit: 10_000)
         let localChecks = await makeLocalStackChecks(recentEvents: recentEvents)
 
         guard let connection = currentConnection else {
@@ -416,10 +416,37 @@ final class DoctorViewModel: ObservableObject {
         )
     }
 
-    static func paymentsHealthSnapshot(replayStoreSize: Int = 0) -> PaymentsHealthSnapshot {
-        PaymentsHealthSnapshot(rows: [
-            .init(provider: "Stripe", endpoint: "/webhooks/stripe", lastEvent: "fixture-ready", reconciliation: "ledger-ready", replayStoreSize: replayStoreSize),
-            .init(provider: "Gumroad", endpoint: "/webhooks/gumroad", lastEvent: "fixture-ready", reconciliation: "ledger-ready", replayStoreSize: replayStoreSize),
+    static func paymentsHealthSnapshot(
+        recentEvents: [CompanyEvent] = [],
+        replayStoreSize: Int = 0
+    ) -> PaymentsHealthSnapshot {
+        func lastEvent(for provider: String, fallback: String) -> String {
+            let latest = recentEvents
+                .filter {
+                    $0.kind == .ledgerEntryRecorded &&
+                    $0.metadata["provider"]?.caseInsensitiveCompare(provider) == .orderedSame
+                }
+                .max { $0.occurredAt < $1.occurredAt }
+            guard let latest else { return fallback }
+            let eventID = latest.metadata["eventID"] ?? latest.metadata["providerEventID"] ?? "event"
+            return "\(eventID) @ \(ISO8601DateFormatter().string(from: latest.occurredAt))"
+        }
+
+        return PaymentsHealthSnapshot(rows: [
+            .init(
+                provider: "Stripe",
+                endpoint: "/webhooks/stripe",
+                lastEvent: lastEvent(for: "stripe", fallback: "waiting-for-event"),
+                reconciliation: "ledger-ready",
+                replayStoreSize: replayStoreSize
+            ),
+            .init(
+                provider: "Gumroad",
+                endpoint: "/webhooks/gumroad",
+                lastEvent: lastEvent(for: "gumroad", fallback: "waiting-for-event"),
+                reconciliation: "ledger-ready",
+                replayStoreSize: replayStoreSize
+            ),
             .init(provider: "Etsy", endpoint: "sales.csv", lastEvent: "csv-ready", reconciliation: "ledger-ready", replayStoreSize: replayStoreSize),
             .init(provider: "KDP", endpoint: "royalties.csv", lastEvent: "csv-ready", reconciliation: "ledger-ready", replayStoreSize: replayStoreSize),
             .init(provider: "App Store", endpoint: "sales.csv", lastEvent: "csv-ready", reconciliation: "ledger-ready", replayStoreSize: replayStoreSize),
