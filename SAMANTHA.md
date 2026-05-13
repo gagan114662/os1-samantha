@@ -66,11 +66,11 @@ Tests/OS1Tests/
 daemons/
   samantha-bot/bot.py                   Telegram bot daemon, uses Claude Code subscription
   coo/daemon.py                         "COO" daemon that polls Codex companies + escalates via Telegram
-launchd/                                LaunchAgent plists for all four processes
-  com.os1.app.plist
-  com.os1.wuphf.plist
-  com.os1.samantha-bot.plist
-  com.os1.coo.plist
+launchd/                                LaunchAgent templates for all four processes
+  com.os1.app.plist.template
+  com.os1.wuphf.plist.template
+  com.os1.samantha-bot.plist.template
+  com.os1.coo.plist.template
 vm-launchers/                           .desktop files for the Orgo VM's Linux desktop
 scripts/
   build-macos-app.sh                    Universal binary + ad-hoc sign
@@ -101,7 +101,8 @@ Run the Doctor tab to see what's missing.
 
 - `~/.os1/credentials.env` — local-only env file for misc API keys
 - `~/.os1/codex-tasks/` — company worktrees, journals, audits, revenue trackers
-- `~/.os1/voice-port` — ephemeral port discovery file for the voice server
+- `~/.os1/local-server-port` — ephemeral port discovery file for OS1's local HTTP server
+- `~/.os1/voice-port` — legacy symlink kept for older WUPHF/Telegram integrations
 - `~/.os1/coo/state.json`, `~/.os1/samantha-bot/bot.pid` — runtime state
 
 ---
@@ -112,11 +113,12 @@ Run the Doctor tab to see what's missing.
    LaunchAgent runs WUPHF behind the OS1 proxy so Stripe can forward to
    `stripe listen --forward-to localhost:7891/webhooks/stripe`. Set
    `STRIPE_WEBHOOK_SECRET` or save the Stripe webhook secret in OS1 Payments.
+   ElevenLabs credentials are not required for Stripe webhook ingestion.
 2. Install Claude Code CLI + Codex CLI (Mac and/or VM).
 3. Put your keys in Keychain (use the `Providers` and `Connectors` tabs in OS1).
-4. `swift build` + `./scripts/build-macos-app.sh` to produce `dist/OS1.app`.
-5. `launchctl load -w ~/Library/LaunchAgents/com.os1.*.plist` to bring all four services up.
-6. Talk to Samantha. Or text `@your-bot` on Telegram.
+4. `make install` to build `dist/OS1.app`, render the LaunchAgent templates for
+   your checkout, and reload changed agents.
+5. Talk to Samantha. Or text `@your-bot` on Telegram.
 
 For production distribution, also run `./scripts/notarize.sh` after setting `OS1_CODESIGN_IDENTITY`.
 

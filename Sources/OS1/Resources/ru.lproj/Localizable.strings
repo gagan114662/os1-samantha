@@ -1159,6 +1159,11 @@
 "Auto future" = "Auto future";
 "Revoke" = "Revoke";
 
+// MARK: - LaunchAgent doctor checks
+"Reinstall LaunchAgents" = "Переустановить LaunchAgents";
+"%lld of %lld OS1 agents loaded; %lld plist(s) need reinstall" = "%lld из %lld агентов OS1 загружено; %lld plist требуют переустановки";
+"Run `make install` from the OS1 checkout to render and load the WUPHF proxy LaunchAgent. Error: %@" = "Запустите `make install` из checkout OS1, чтобы создать и загрузить LaunchAgent прокси WUPHF. Ошибка: %@";
+
 // MARK: - Provider modalities
 "Each provider's API key is stored in macOS Keychain on this Mac, scoped per host. Installing pushes it onto that host's ~/.hermes/.env so Samantha can use the provider on the next heartbeat — no daemon restart needed." = "API-ключ каждого провайдера хранится в Keychain на этом Mac и привязан к хосту. Установка записывает его в ~/.hermes/.env на этом хосте, чтобы Samantha могла использовать провайдера на следующем heartbeat — перезапуск демона не нужен.";
 "%@ · Quota: %@ · Cost-to-date: ledger tracked" = "%@ · квота: %@ · затраты: в ledger";

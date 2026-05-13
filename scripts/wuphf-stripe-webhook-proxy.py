@@ -46,7 +46,12 @@ class ProxyState:
         self.voice_port_file = voice_port_file
 
     def voice_port(self) -> int:
-        return int(self.voice_port_file.read_text(encoding="utf-8").strip())
+        path = self.voice_port_file
+        if not path.exists():
+            legacy_path = path.with_name("voice-port")
+            if legacy_path.exists():
+                path = legacy_path
+        return int(path.read_text(encoding="utf-8").strip())
 
 
 class WuphfProxyHandler(BaseHTTPRequestHandler):
@@ -131,7 +136,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--public-port", type=int, default=7891)
     parser.add_argument("--upstream-port", type=int, default=7892)
-    parser.add_argument("--voice-port-file", default=str(Path.home() / ".os1/voice-port"))
+    parser.add_argument("--voice-port-file", default=str(Path.home() / ".os1/local-server-port"))
     parser.add_argument("--wuphf-bin", default=shutil.which("wuphf") or "/opt/homebrew/bin/wuphf")
     parser.add_argument("wuphf_args", nargs=argparse.REMAINDER)
     return parser.parse_args()

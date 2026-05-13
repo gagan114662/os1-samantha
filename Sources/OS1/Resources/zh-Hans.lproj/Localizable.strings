@@ -1159,6 +1159,11 @@
 "Auto future" = "Auto future";
 "Revoke" = "Revoke";
 
+// MARK: - LaunchAgent doctor checks
+"Reinstall LaunchAgents" = "重新安装 LaunchAgents";
+"%lld of %lld OS1 agents loaded; %lld plist(s) need reinstall" = "已加载 %lld/%lld 个 OS1 agent；%lld 个 plist 需要重新安装";
+"Run `make install` from the OS1 checkout to render and load the WUPHF proxy LaunchAgent. Error: %@" = "请在 OS1 checkout 中运行 `make install` 以生成并加载 WUPHF 代理 LaunchAgent。错误：%@";
+
 // MARK: - Provider modalities
 "Each provider's API key is stored in macOS Keychain on this Mac, scoped per host. Installing pushes it onto that host's ~/.hermes/.env so Samantha can use the provider on the next heartbeat — no daemon restart needed." = "每个提供商的 API 密钥都会按主机范围存储在这台 Mac 的 Keychain 中。安装会把它写入该主机的 ~/.hermes/.env，让 Samantha 在下一次心跳中使用该提供商，无需重启守护进程。";
 "%@ · Quota: %@ · Cost-to-date: ledger tracked" = "%@ · 配额：%@ · 累计成本：ledger 跟踪";

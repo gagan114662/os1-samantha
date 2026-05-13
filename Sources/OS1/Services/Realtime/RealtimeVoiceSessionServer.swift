@@ -8,6 +8,8 @@ final class RealtimeVoiceSessionServer: ObservableObject, @unchecked Sendable {
 
     private let queue = DispatchQueue(label: "com.elementsoftware.os1.realtime-voice")
     private var listener: NWListener?
+    static let localServerPortFileName = "local-server-port"
+    static let legacyVoicePortFileName = "voice-port"
 
     // Internal — extensions in the same module use these to implement
     // their endpoint handlers (RealtimeVoiceSessionServer+Orgo.swift, etc).
@@ -15,6 +17,7 @@ final class RealtimeVoiceSessionServer: ObservableObject, @unchecked Sendable {
     var agentID: String?
     let elevenLabsAPIKeyProvider: @Sendable () -> String?
     let agentIDProvider: @Sendable () -> String?
+    let runtimeDirectoryProvider: @Sendable () -> URL
     let orgoMCPBridge: RealtimeOrgoMCPBridge
 
     init(
@@ -34,10 +37,15 @@ final class RealtimeVoiceSessionServer: ObservableObject, @unchecked Sendable {
         },
         orgoDefaultComputerIDProvider: @escaping @Sendable () -> String? = {
             ProcessInfo.processInfo.environment["ORGO_DEFAULT_COMPUTER_ID"]
+        },
+        runtimeDirectoryProvider: @escaping @Sendable () -> URL = {
+            FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".os1", isDirectory: true)
         }
     ) {
         self.elevenLabsAPIKeyProvider = elevenLabsAPIKeyProvider
         self.agentIDProvider = agentIDProvider
+        self.runtimeDirectoryProvider = runtimeDirectoryProvider
         self.orgoMCPBridge = RealtimeOrgoMCPBridge(
             apiKeyProvider: orgoAPIKeyProvider,
             defaultComputerIDProvider: orgoDefaultComputerIDProvider
@@ -51,22 +59,8 @@ final class RealtimeVoiceSessionServer: ObservableObject, @unchecked Sendable {
     func start() {
         guard listener == nil else { return }
 
-        guard let apiKey = elevenLabsAPIKeyProvider()?.trimmingCharacters(in: .whitespacesAndNewlines), !apiKey.isEmpty else {
-            endpointURL = nil
-            statusText = "ELEVENLABS_API_KEY missing"
-            lastError = "Set ELEVENLABS_API_KEY (and ELEVENLABS_AGENT_ID) before launching OS1 to use voice mode."
-            return
-        }
-
-        guard let agentID = agentIDProvider()?.trimmingCharacters(in: .whitespacesAndNewlines), !agentID.isEmpty else {
-            endpointURL = nil
-            statusText = "ELEVENLABS_AGENT_ID missing"
-            lastError = "Set ELEVENLABS_AGENT_ID (the Conversational AI agent ID) before launching OS1."
-            return
-        }
-
-        self.apiKey = apiKey
-        self.agentID = agentID
+        self.apiKey = Self.nonEmptyCredential(elevenLabsAPIKeyProvider())
+        self.agentID = Self.nonEmptyCredential(agentIDProvider())
 
         do {
             let parameters = NWParameters.tcp
@@ -75,7 +69,7 @@ final class RealtimeVoiceSessionServer: ObservableObject, @unchecked Sendable {
 
             let listener = try NWListener(using: parameters)
             self.listener = listener
-            statusText = "Starting local session endpoint"
+            statusText = "Starting local HTTP endpoint"
             lastError = nil
 
             listener.stateUpdateHandler = { [weak self] state in
@@ -86,7 +80,7 @@ final class RealtimeVoiceSessionServer: ObservableObject, @unchecked Sendable {
             }
             listener.start(queue: queue)
         } catch {
-            statusText = "Failed to start voice endpoint"
+            statusText = "Failed to start local HTTP endpoint"
             lastError = error.localizedDescription
         }
     }
@@ -102,24 +96,18 @@ final class RealtimeVoiceSessionServer: ObservableObject, @unchecked Sendable {
         switch state {
         case .ready:
             guard let port = listener?.port else { return }
-            // Persist the port so external processes (e.g. the Telegram bot)
-            // can discover the voice server's HTTP endpoint and call /codex-*.
-            let portFile = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent(".os1/voice-port").path
-            try? FileManager.default.createDirectory(
-                atPath: (portFile as NSString).deletingLastPathComponent,
-                withIntermediateDirectories: true
-            )
-            try? "\(port.rawValue)".write(toFile: portFile, atomically: true, encoding: .utf8)
+            Self.writePortFiles(port: port.rawValue, runtimeDirectory: runtimeDirectoryProvider())
             DispatchQueue.main.async { [weak self] in
                 self?.endpointURL = URL(string: "http://127.0.0.1:\(port.rawValue)/")
-                self?.statusText = "Voice endpoint ready"
+                self?.statusText = self?.apiKey == nil || self?.agentID == nil
+                    ? "Local HTTP endpoint ready; voice credentials missing"
+                    : "Voice endpoint ready"
                 self?.lastError = nil
             }
         case .failed(let error):
             DispatchQueue.main.async { [weak self] in
                 self?.endpointURL = nil
-                self?.statusText = "Voice endpoint failed"
+                self?.statusText = "Local HTTP endpoint failed"
                 self?.lastError = error.localizedDescription
                 self?.listener?.cancel()
                 self?.listener = nil
@@ -131,6 +119,31 @@ final class RealtimeVoiceSessionServer: ObservableObject, @unchecked Sendable {
             }
         default:
             break
+        }
+    }
+
+    private static func nonEmptyCredential(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed?.isEmpty == false ? trimmed : nil
+    }
+
+    static func writePortFiles(port: UInt16, runtimeDirectory: URL) {
+        let localServerPortURL = runtimeDirectory.appendingPathComponent(localServerPortFileName)
+        let legacyVoicePortURL = runtimeDirectory.appendingPathComponent(legacyVoicePortFileName)
+        let portText = "\(port)"
+        try? FileManager.default.createDirectory(
+            at: runtimeDirectory,
+            withIntermediateDirectories: true
+        )
+        try? portText.write(to: localServerPortURL, atomically: true, encoding: .utf8)
+        try? FileManager.default.removeItem(at: legacyVoicePortURL)
+        do {
+            try FileManager.default.createSymbolicLink(
+                atPath: legacyVoicePortURL.path,
+                withDestinationPath: localServerPortURL.path
+            )
+        } catch {
+            try? portText.write(to: legacyVoicePortURL, atomically: true, encoding: .utf8)
         }
     }
 

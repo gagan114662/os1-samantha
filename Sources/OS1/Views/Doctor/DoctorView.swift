@@ -255,6 +255,7 @@ private struct DoctorCheckCard: View {
         case .restartGateway: return L10n.string("Restart gateway")
         case .revalidateTelegram: return L10n.string("Revalidate token")
         case .updateHermes: return L10n.string("Update")
+        case .reinstallLaunchAgents: return L10n.string("Reinstall LaunchAgents")
         }
     }
 }

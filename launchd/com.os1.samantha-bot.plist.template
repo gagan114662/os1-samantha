@@ -9,15 +9,15 @@
     <array>
         <string>/usr/bin/env</string>
         <string>python3</string>
-        <string>/Users/gaganarora/.os1/samantha-bot/bot.py</string>
+        <string>__OS1_HOME__/.os1/samantha-bot/bot.py</string>
     </array>
 
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/opt/homebrew/bin:/Users/gaganarora/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <string>__OS1_PATH__</string>
         <key>HOME</key>
-        <string>/Users/gaganarora</string>
+        <string>__OS1_HOME__</string>
     </dict>
 
     <key>RunAtLoad</key>
@@ -30,9 +30,9 @@
     <integer>10</integer>
 
     <key>StandardOutPath</key>
-    <string>/Users/gaganarora/.os1/samantha-bot/bot.log</string>
+    <string>__OS1_HOME__/.os1/samantha-bot/bot.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/gaganarora/.os1/samantha-bot/bot.err</string>
+    <string>__OS1_HOME__/.os1/samantha-bot/bot.err</string>
 
     <key>ProcessType</key>
     <string>Background</string>

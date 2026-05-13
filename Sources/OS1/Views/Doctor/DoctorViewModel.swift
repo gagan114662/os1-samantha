@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import SwiftUI
 
@@ -27,6 +28,7 @@ final class DoctorViewModel: ObservableObject {
         case restartGateway
         case revalidateTelegram
         case updateHermes
+        case reinstallLaunchAgents
     }
 
     struct Check: Identifiable, Equatable, Sendable {
@@ -58,6 +60,14 @@ final class DoctorViewModel: ObservableObject {
                 ?? "never"
             return "\(displayName): \(keyStatus), last successful call: \(last)"
         }
+    }
+
+    struct LaunchAgentDriftReport: Equatable, Sendable {
+        let label: String
+        let installedPath: String
+        let expectedHash: String
+        let installedHash: String?
+        let problem: String?
     }
 
     @Published private(set) var checks: [Check] = []
@@ -667,12 +677,7 @@ final class DoctorViewModel: ObservableObject {
     }
 
     private nonisolated static func productionOperatingModelURL() -> URL {
-        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let cwdDoc = cwd.appendingPathComponent("docs/production-operating-model.md")
-        if FileManager.default.fileExists(atPath: cwdDoc.path) {
-            return cwdDoc
-        }
-        return URL(fileURLWithPath: "/Users/gaganarora/Desktop/my projects/hermes-desktop-os1/docs/production-operating-model.md")
+        repositoryFileURL("docs/production-operating-model.md")
     }
 
     private func makeEvaluationHarnessCheck() async -> Check {
@@ -718,21 +723,11 @@ final class DoctorViewModel: ObservableObject {
     }
 
     private nonisolated static func evaluationReportURL() -> URL {
-        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let cwdReport = cwd.appendingPathComponent("artifacts/evals/non-live-report.json")
-        if FileManager.default.fileExists(atPath: cwdReport.path) {
-            return cwdReport
-        }
-        return URL(fileURLWithPath: "/Users/gaganarora/Desktop/my projects/hermes-desktop-os1/artifacts/evals/non-live-report.json")
+        repositoryFileURL("artifacts/evals/non-live-report.json")
     }
 
     private nonisolated static func dataGovernanceURL() -> URL {
-        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let cwdDoc = cwd.appendingPathComponent("docs/data-governance.md")
-        if FileManager.default.fileExists(atPath: cwdDoc.path) {
-            return cwdDoc
-        }
-        return URL(fileURLWithPath: "/Users/gaganarora/Desktop/my projects/hermes-desktop-os1/docs/data-governance.md")
+        repositoryFileURL("docs/data-governance.md")
     }
 
     nonisolated static func stateBackupProblems(
@@ -795,7 +790,7 @@ final class DoctorViewModel: ObservableObject {
     /// yourself — without notarization, fresh Macs show "unidentified
     /// developer" Gatekeeper warnings.
     private func makeNotarizationCheck() async -> Check {
-        let appPath = "/Users/gaganarora/Desktop/my projects/hermes-desktop-os1/dist/OS1.app"
+        let appPath = Self.repositoryFileURL("dist/OS1.app").path
         guard FileManager.default.fileExists(atPath: appPath) else {
             return Check(
                 id: "notarization",
@@ -885,7 +880,7 @@ final class DoctorViewModel: ObservableObject {
     }
 
     private func makeWUPHFCheck() async -> Check {
-        guard let url = URL(string: "http://127.0.0.1:7891/api/channels") else {
+        guard let url = URL(string: "http://127.0.0.1:7891/api/stripe/status") else {
             return Check(id: "wuphf", title: "WUPHF office", severity: .warn, summary: "Bad URL", detail: nil, actions: [])
         }
         var request = URLRequest(url: url)
@@ -894,41 +889,58 @@ final class DoctorViewModel: ObservableObject {
             let (data, response) = try await URLSession.shared.data(for: request)
             let code = (response as? HTTPURLResponse)?.statusCode ?? 0
             if code == 200 {
-                let agentCount = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["channels"] as? [Any]
+                let status = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+                let secretConfigured = (status["webhook_secret_configured"] as? Bool) == true
                 return Check(
                     id: "wuphf",
                     title: "WUPHF office",
                     severity: .ok,
-                    summary: L10n.string("Reachable on :7891 — %lld channel(s)", agentCount?.count ?? 0),
-                    detail: "http://127.0.0.1:7891 responding. The autonomous AI employees layer is up.",
+                    summary: secretConfigured
+                        ? "Proxy routing Stripe status on :7891"
+                        : "Proxy routing Stripe status on :7891; webhook secret missing",
+                    detail: "http://127.0.0.1:7891/api/stripe/status returned 200. The WUPHF proxy is routing OS1 payment endpoints.",
                     actions: []
                 )
             }
-            return Check(id: "wuphf", title: "WUPHF office", severity: .warn, summary: "Unexpected HTTP \(code)", detail: nil, actions: [])
+            return Check(
+                id: "wuphf",
+                title: "WUPHF office",
+                severity: .error,
+                summary: code == 404 ? "Stripe proxy route missing on :7891" : "Unexpected HTTP \(code) from Stripe status route",
+                detail: "Doctor reached :7891, but /api/stripe/status did not return 200. "
+                    + "Raw WUPHF or an old LaunchAgent may be bound to the public port; "
+                    + "run make install or reinstall the LaunchAgent.",
+                actions: [.reinstallLaunchAgents]
+            )
         } catch {
             return Check(
                 id: "wuphf",
                 title: "WUPHF office",
                 severity: .warn,
                 summary: L10n.string("Not reachable on :7891"),
-                detail: L10n.string("Start it with `launchctl load -w ~/Library/LaunchAgents/com.os1.wuphf.plist` (or run `wuphf --no-open --no-nex --pack starter` once for development). Error: %@", error.localizedDescription),
-                actions: []
+                detail: L10n.string(
+                    "Run `make install` from the OS1 checkout to render and load the WUPHF proxy LaunchAgent. Error: %@",
+                    error.localizedDescription
+                ),
+                actions: [.reinstallLaunchAgents]
             )
         }
     }
 
     private func makeLaunchdCheck() async -> Check {
         let output = await runWithTimeout(executable: "/bin/launchctl", args: ["list"], timeoutSec: 3) ?? ""
-        let labels = ["com.os1.wuphf", "com.os1.app", "com.os1.samantha-bot", "com.os1.coo"]
+        let labels = Self.launchAgentLabels
         let loaded = labels.filter { output.contains($0) }
         let missing = labels.filter { !output.contains($0) }
-        if missing.isEmpty {
+        let driftReports = Self.launchAgentDriftReports()
+        let driftProblems = driftReports.compactMap(\.problem)
+        if missing.isEmpty && driftProblems.isEmpty {
             return Check(
                 id: "launchd",
                 title: "Launchd plists",
                 severity: .ok,
                 summary: L10n.string("All %lld OS1 agents loaded", labels.count),
-                detail: loaded.joined(separator: "\n"),
+                detail: (loaded + driftReports.map { "\($0.label): \($0.expectedHash)" }).joined(separator: "\n"),
                 actions: []
             )
         }
@@ -936,22 +948,38 @@ final class DoctorViewModel: ObservableObject {
             id: "launchd",
             title: "Launchd plists",
             severity: .warn,
-            summary: L10n.string("%lld of %lld OS1 agents loaded", loaded.count, labels.count),
-            detail: "Loaded: \(loaded.joined(separator: ", "))\nMissing: \(missing.joined(separator: ", "))\n\nLoad missing ones with `launchctl load -w ~/Library/LaunchAgents/<label>.plist`.",
-            actions: []
+            summary: driftProblems.isEmpty
+                ? L10n.string("%lld of %lld OS1 agents loaded", loaded.count, labels.count)
+                : L10n.string("%lld of %lld OS1 agents loaded; %lld plist(s) need reinstall", loaded.count, labels.count, driftProblems.count),
+            detail: [
+                "Loaded: \(loaded.joined(separator: ", "))",
+                "Missing: \(missing.joined(separator: ", "))",
+                driftProblems.joined(separator: "\n"),
+                "Run `make install` or click Reinstall LaunchAgent to render and reload the current templates."
+            ].joined(separator: "\n\n"),
+            actions: [.reinstallLaunchAgents]
         )
     }
 
     private func makeVoicePortCheck() async -> Check {
-        let path = NSString(string: "~/.os1/voice-port").expandingTildeInPath
+        let preferredPath = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".os1")
+            .appendingPathComponent(RealtimeVoiceSessionServer.localServerPortFileName)
+            .path
+        let legacyPath = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".os1")
+            .appendingPathComponent(RealtimeVoiceSessionServer.legacyVoicePortFileName)
+            .path
+        let path = FileManager.default.fileExists(atPath: preferredPath) ? preferredPath : legacyPath
         guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
               let mtime = attrs[.modificationDate] as? Date else {
             return Check(
                 id: "voice-port",
-                title: "Voice server port",
+                title: "Local server port",
                 severity: .warn,
-                summary: L10n.string("No ~/.os1/voice-port file"),
-                detail: L10n.string("OS1's voice server writes its TCP port here when it starts. Missing file = voice runtime never mounted (boot animation didn't finish, or the voice section was disabled)."),
+                summary: "No ~/.os1/local-server-port or ~/.os1/voice-port file",
+                detail: "OS1 writes its local HTTP server TCP port here when it starts. "
+                    + "Missing file means local routes such as Stripe webhooks and voice setup are not mounted.",
                 actions: []
             )
         }
@@ -960,7 +988,7 @@ final class DoctorViewModel: ObservableObject {
         if age < 300 {
             return Check(
                 id: "voice-port",
-                title: "Voice server port",
+                title: "Local server port",
                 severity: .ok,
                 summary: L10n.string("Port %@ (fresh, %.0fs old)", port, age),
                 detail: path,
@@ -969,10 +997,11 @@ final class DoctorViewModel: ObservableObject {
         }
         return Check(
             id: "voice-port",
-            title: "Voice server port",
+            title: "Local server port",
             severity: .warn,
             summary: L10n.string("Port %@ (stale, %.0f min old)", port, age / 60),
-            detail: L10n.string("Voice server hasn't refreshed its port file recently. Could be a stale file from a prior OS1 process. Restart OS1 to rewrite it."),
+            detail: "The local HTTP server has not refreshed its port file recently. "
+                + "Could be a stale file from a prior OS1 process. Restart OS1 to rewrite it.",
             actions: []
         )
     }
@@ -1090,6 +1119,132 @@ final class DoctorViewModel: ObservableObject {
         )
     }
 
+    nonisolated static let launchAgentLabels = [
+        "com.os1.wuphf",
+        "com.os1.app",
+        "com.os1.samantha-bot",
+        "com.os1.coo"
+    ]
+
+    nonisolated static func renderLaunchAgentTemplate(
+        _ template: String,
+        repoRoot: String,
+        home: String,
+        path: String
+    ) -> String {
+        template
+            .replacingOccurrences(of: "__OS1_REPO_ROOT__", with: repoRoot)
+            .replacingOccurrences(of: "__OS1_HOME__", with: home)
+            .replacingOccurrences(of: "__OS1_PATH__", with: path)
+    }
+
+    nonisolated static func stableLaunchAgentHash(_ text: String) -> String {
+        SHA256.hash(data: Data(text.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+
+    nonisolated static func launchAgentDriftReports(
+        repoRoot: URL? = nil,
+        home: URL = FileManager.default.homeDirectoryForCurrentUser,
+        installedDirectory: URL? = nil
+    ) -> [LaunchAgentDriftReport] {
+        guard let repoRoot = repoRoot ?? launchAgentRepoRoot() else {
+            return [LaunchAgentDriftReport(
+                label: "launchd",
+                installedPath: "",
+                expectedHash: "",
+                installedHash: nil,
+                problem: "Could not find OS1 repo root for LaunchAgent template comparison"
+            )]
+        }
+        let templateDirectory = repoRoot.appendingPathComponent("launchd", isDirectory: true)
+        let installedDirectory = installedDirectory ?? home
+            .appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+        let path = defaultLaunchAgentPath(home: home)
+        let templates = (try? FileManager.default.contentsOfDirectory(
+            at: templateDirectory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ))?
+            .filter { $0.lastPathComponent.hasPrefix("com.os1.") && $0.lastPathComponent.hasSuffix(".plist.template") }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent } ?? []
+
+        return templates.map { templateURL in
+            let baseName = String(templateURL.lastPathComponent.dropLast(".template".count))
+            let label = String(baseName.dropLast(".plist".count))
+            let installedURL = installedDirectory.appendingPathComponent(baseName)
+            let template = (try? String(contentsOf: templateURL, encoding: .utf8)) ?? ""
+            let expected = renderLaunchAgentTemplate(
+                template,
+                repoRoot: repoRoot.path,
+                home: home.path,
+                path: path
+            )
+            let expectedHash = stableLaunchAgentHash(expected)
+            guard let installed = try? String(contentsOf: installedURL, encoding: .utf8) else {
+                return LaunchAgentDriftReport(
+                    label: label,
+                    installedPath: installedURL.path,
+                    expectedHash: expectedHash,
+                    installedHash: nil,
+                    problem: "\(label): missing installed plist at \(installedURL.path) (expected \(expectedHash))"
+                )
+            }
+            let installedHash = stableLaunchAgentHash(installed)
+            return LaunchAgentDriftReport(
+                label: label,
+                installedPath: installedURL.path,
+                expectedHash: expectedHash,
+                installedHash: installedHash,
+                problem: installed == expected
+                    ? nil
+                    : "\(label): installed plist out of date at \(installedURL.path) "
+                        + "(installed \(installedHash), expected \(expectedHash))"
+            )
+        }
+    }
+
+    private nonisolated static func defaultLaunchAgentPath(home: URL) -> String {
+        [
+            "/opt/homebrew/bin",
+            home.appendingPathComponent(".local/bin").path,
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin"
+        ].joined(separator: ":")
+    }
+
+    private nonisolated static func launchAgentRepoRoot() -> URL? {
+        var candidates: [URL] = []
+        if let env = ProcessInfo.processInfo.environment["OS1_REPO_ROOT"], !env.isEmpty {
+            candidates.append(URL(fileURLWithPath: env, isDirectory: true))
+        }
+        candidates.append(URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true))
+        var bundleURL = Bundle.main.bundleURL
+        for _ in 0..<5 {
+            candidates.append(bundleURL)
+            bundleURL.deleteLastPathComponent()
+        }
+        return candidates.first { candidate in
+            FileManager.default.fileExists(atPath: candidate.appendingPathComponent("launchd", isDirectory: true).path)
+        }
+    }
+
+    private nonisolated static func repositoryFileURL(_ relativePath: String) -> URL {
+        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+        let cwdURL = cwd.appendingPathComponent(relativePath)
+        if FileManager.default.fileExists(atPath: cwdURL.path) {
+            return cwdURL
+        }
+        if let repoRoot = launchAgentRepoRoot() {
+            return repoRoot.appendingPathComponent(relativePath)
+        }
+        return cwdURL
+    }
+
     private func which(_ binary: String) -> String? {
         let env = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin"
         let extra = ["/opt/homebrew/bin", "/usr/local/bin", NSString(string: "~/.local/bin").expandingTildeInPath]
@@ -1131,6 +1286,14 @@ final class DoctorViewModel: ObservableObject {
 
     func runAction(_ action: Action) async {
         guard actionInFlight == nil else { return }
+        if action == .reinstallLaunchAgents {
+            actionInFlight = action
+            actionError = nil
+            defer { actionInFlight = nil }
+            await reinstallLaunchAgents()
+            await refresh()
+            return
+        }
         guard let connection = currentConnection else {
             actionError = L10n.string("No host selected.")
             return
@@ -1146,6 +1309,8 @@ final class DoctorViewModel: ObservableObject {
             await revalidateTelegramToken()
         case .updateHermes:
             await performHermesUpdateBridge()
+        case .reinstallLaunchAgents:
+            await reinstallLaunchAgents()
         }
         // Always refresh after an action so the user sees the new state.
         await refresh()
@@ -1183,6 +1348,25 @@ final class DoctorViewModel: ObservableObject {
             actionError = error.errorDescription
         } catch {
             actionError = error.localizedDescription
+        }
+    }
+
+    private func reinstallLaunchAgents() async {
+        guard let repoRoot = Self.launchAgentRepoRoot() else {
+            actionError = "Could not find OS1 repo root for LaunchAgent reinstall."
+            return
+        }
+        let script = repoRoot.appendingPathComponent("scripts/install-launch-agents.sh").path
+        guard FileManager.default.isExecutableFile(atPath: script) else {
+            actionError = "LaunchAgent installer is not executable at \(script)."
+            return
+        }
+        guard let output = await runWithTimeout(executable: script, args: ["--reload"], timeoutSec: 30) else {
+            actionError = "LaunchAgent reinstall failed or timed out. Run `make install` from \(repoRoot.path) for full output."
+            return
+        }
+        if !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            actionError = nil
         }
     }
 

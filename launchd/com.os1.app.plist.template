@@ -6,10 +6,10 @@
     <string>com.os1.app</string>
 
     <!--
-      Launch the proper .app bundle via `open -W` so macOS registers it as
+      Launch the proper .app bundle via open -W so macOS registers it as
       a GUI app (window can be drawn, Aqua session context, AppleScript
       reachable). Launching the raw Mach-O binary directly leaves it
-      headless — process runs but no window ever appears.
+      headless: process runs but no window ever appears.
 
       -W waits for the app to quit, so launchd's KeepAlive policy applies.
       -n forbids opening a second copy if one is already running.
@@ -19,23 +19,23 @@
         <string>/usr/bin/open</string>
         <string>-W</string>
         <string>-n</string>
-        <string>/Users/gaganarora/Desktop/my projects/hermes-desktop-os1/dist/OS1.app</string>
+        <string>__OS1_REPO_ROOT__/dist/OS1.app</string>
     </array>
 
     <!--
       No secrets here. OS1 reads:
-        ELEVENLABS_API_KEY  ← Keychain "io.elevenlabs.api-key"
-        ELEVENLABS_AGENT_ID ← Keychain "io.elevenlabs.agent-id"
-        ORGO_API_KEY        ← Keychain "ai.orgo.mac.api-key"
+        ELEVENLABS_API_KEY  <- Keychain "io.elevenlabs.api-key"
+        ELEVENLABS_AGENT_ID <- Keychain "io.elevenlabs.agent-id"
+        ORGO_API_KEY        <- Keychain "ai.orgo.mac.api-key"
     -->
     <key>EnvironmentVariables</key>
     <dict>
         <key>OS1_REALTIME_ORGO_TOOLSETS</key>
         <string>core,screen,files,admin</string>
         <key>PATH</key>
-        <string>/opt/homebrew/bin:/Users/gaganarora/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <string>__OS1_PATH__</string>
         <key>HOME</key>
-        <string>/Users/gaganarora</string>
+        <string>__OS1_HOME__</string>
     </dict>
 
     <!--
@@ -50,8 +50,8 @@
     </dict>
 
     <key>StandardOutPath</key>
-    <string>/Users/gaganarora/.os1/os1.log</string>
+    <string>__OS1_HOME__/.os1/os1.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/gaganarora/.os1/os1.err</string>
+    <string>__OS1_HOME__/.os1/os1.err</string>
 </dict>
 </plist>

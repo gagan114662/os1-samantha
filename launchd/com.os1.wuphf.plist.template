@@ -3,24 +3,32 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.os1.coo</string>
+    <string>com.os1.wuphf</string>
 
     <key>ProgramArguments</key>
     <array>
         <string>/usr/bin/env</string>
         <string>python3</string>
-        <string>/Users/gaganarora/.os1/coo/daemon.py</string>
+        <string>__OS1_REPO_ROOT__/scripts/wuphf-stripe-webhook-proxy.py</string>
+        <string>--wuphf-bin</string>
+        <string>/opt/homebrew/bin/wuphf</string>
+        <string>--</string>
+        <string>--no-open</string>
+        <string>--no-nex</string>
+        <string>--pack</string>
+        <string>starter</string>
     </array>
 
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/opt/homebrew/bin:/Users/gaganarora/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <string>__OS1_PATH__</string>
         <key>HOME</key>
-        <string>/Users/gaganarora</string>
-        <key>OS1_COO_INTERVAL_SECONDS</key>
-        <string>1800</string>
+        <string>__OS1_HOME__</string>
     </dict>
+
+    <key>WorkingDirectory</key>
+    <string>__OS1_HOME__</string>
 
     <key>RunAtLoad</key>
     <true/>
@@ -28,13 +36,10 @@
     <key>KeepAlive</key>
     <true/>
 
-    <key>ThrottleInterval</key>
-    <integer>30</integer>
-
     <key>StandardOutPath</key>
-    <string>/Users/gaganarora/.os1/coo/daemon.log</string>
+    <string>__OS1_HOME__/.os1/wuphf.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/gaganarora/.os1/coo/daemon.err</string>
+    <string>__OS1_HOME__/.os1/wuphf.err</string>
 
     <key>ProcessType</key>
     <string>Background</string>

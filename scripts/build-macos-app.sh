@@ -293,3 +293,11 @@ echo "Version: ${STAMPED_VERSION} (build ${STAMPED_BUILD})"
 echo "Architectures: $(lipo -archs "$MACOS_PATH/$APP_NAME")"
 echo "Signing: ${SIGNING_DESCRIPTION}"
 echo "macOS may still require right-click > Open on first launch."
+
+if [[ "${OS1_SKIP_LAUNCH_AGENTS:-0}" == "1" ]]; then
+    echo "Skipping LaunchAgent install because OS1_SKIP_LAUNCH_AGENTS=1."
+else
+    echo
+    echo "Installing OS1 LaunchAgents..."
+    "$ROOT_DIR/scripts/install-launch-agents.sh"
+fi
