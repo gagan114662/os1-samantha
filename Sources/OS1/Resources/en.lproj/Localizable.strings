@@ -903,6 +903,7 @@
 "Show details" = "Show details";
 "Restart gateway" = "Restart gateway";
 "Revalidate token" = "Revalidate token";
+"Migrate" = "Migrate";
 "Hermes gateway" = "Hermes gateway";
 "Telegram bot" = "Telegram bot";
 "No Telegram token configured. Paste one on the Messaging tab first." = "No Telegram token configured. Paste one on the Messaging tab first.";

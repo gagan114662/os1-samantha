@@ -29,6 +29,7 @@ final class DoctorViewModel: ObservableObject {
         case revalidateTelegram
         case updateHermes
         case reinstallLaunchAgents
+        case migrateSchema
     }
 
     struct Check: Identifiable, Equatable, Sendable {
@@ -214,6 +215,7 @@ final class DoctorViewModel: ObservableObject {
         async let evalHarness = makeEvaluationHarnessCheck()
         async let dataGovernance = makeDataGovernanceCheck()
         async let stateBackups = makeStateBackupCheck()
+        async let durableSchema = makeDurableStateSchemaCheck()
         async let heartbeatSandbox = makeCodexHeartbeatSandboxCheck()
         async let codexFeatures = makeCodexFeatureMatrixCheck()
         async let browserStealth = makeBrowserStealthCoverageCheck()
@@ -232,6 +234,7 @@ final class DoctorViewModel: ObservableObject {
             evalHarness,
             dataGovernance,
             stateBackups,
+            durableSchema,
             heartbeatSandbox,
             codexFeatures,
             browserStealth,
@@ -526,6 +529,46 @@ final class DoctorViewModel: ObservableObject {
             summary: "Backup needs attention",
             detail: problems.joined(separator: "\n"),
             actions: []
+        )
+    }
+
+    private func makeDurableStateSchemaCheck() async -> Check {
+        let status = CodexSessionManager.shared.durableStateSchemaStatus()
+        return Self.durableStateSchemaCheck(status: status)
+    }
+
+    nonisolated static func durableStateSchemaCheck(status: CompanySchemaVersionStatus) -> Check {
+        let onDisk = status.onDiskVersion.map { "v\($0)" } ?? "missing"
+        let expected = "v\(status.expectedVersion)"
+        let summary = "On disk \(onDisk), expected \(expected)"
+        let detail: String?
+        let severity: Severity
+        switch status.state {
+        case .current:
+            severity = .ok
+            detail = "Durable session state is compatible with this OS1 build."
+        case .missing:
+            severity = .warn
+            detail = "Durable session state is missing a schema version; run migration before relying on startup recovery."
+        case .migrationRequired:
+            severity = .warn
+            detail = "Durable session state was written by an older OS1 schema and should be migrated before startup uses it."
+        case .unsupported:
+            severity = .error
+            detail = "Durable session state was written by a newer OS1 schema. Upgrade OS1 or restore from a compatible backup."
+        case .unreadable:
+            severity = .error
+            detail = "Durable session state could not be inspected for schema version."
+        }
+        return Check(
+            id: "durable-state-schema",
+            title: "Durable state schema",
+            severity: severity,
+            summary: summary,
+            detail: [detail, status.warningCode.map { "warningCode=\($0)" }]
+                .compactMap { $0 }
+                .joined(separator: "\n"),
+            actions: status.requiresMigration ? [.migrateSchema] : []
         )
     }
 
@@ -1294,6 +1337,18 @@ final class DoctorViewModel: ObservableObject {
             await refresh()
             return
         }
+        if action == .migrateSchema {
+            actionInFlight = action
+            actionError = nil
+            defer { actionInFlight = nil }
+            do {
+                _ = try CodexSessionManager.shared.migrateDurableStateIfNeeded()
+            } catch {
+                actionError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            }
+            await refresh()
+            return
+        }
         guard let connection = currentConnection else {
             actionError = L10n.string("No host selected.")
             return
@@ -1311,6 +1366,8 @@ final class DoctorViewModel: ObservableObject {
             await performHermesUpdateBridge()
         case .reinstallLaunchAgents:
             await reinstallLaunchAgents()
+        case .migrateSchema:
+            break
         }
         // Always refresh after an action so the user sees the new state.
         await refresh()

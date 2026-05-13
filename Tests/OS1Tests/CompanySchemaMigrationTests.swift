@@ -44,6 +44,71 @@ struct CompanySchemaMigrationTests {
     }
 
     @Test
+    @MainActor
+    func managerStartupMigratesVersion2FileBeforeUsingSessions() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("os1-manager-schema-startup-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let session = fixtureSession(id: "startup-v2")
+        let encodedSession = String(data: try JSONEncoder().encode(session), encoding: .utf8) ?? "{}"
+        let stateURL = root.appendingPathComponent("sessions.json")
+        try """
+        {
+          "schemaVersion": 2,
+          "createdAt": 1700000000,
+          "sessions": [\(encodedSession)]
+        }
+        """.write(to: stateURL, atomically: true, encoding: .utf8)
+
+        let manager = CodexSessionManager(testRoot: root)
+        manager.flushLogsForTesting()
+
+        let migratedData = try Data(contentsOf: stateURL)
+        #expect(try CompanySchemaMigrationEngine.schemaVersion(in: migratedData) == 3)
+        #expect(manager.sessions.map(\.id) == ["startup-v2"])
+        let rollbackCopies = try FileManager.default.contentsOfDirectory(atPath: root.path)
+            .filter { $0.hasPrefix("sessions.json.pre-migration-v2-") }
+        #expect(rollbackCopies.count == 1)
+        #expect(manager.recentEvents().contains { event in
+            event.kind == .schemaMigration
+                && event.metadata["sourceVersion"] == "2"
+                && event.metadata["status"] == "migrated"
+        })
+    }
+
+    @Test
+    func durableStateInspectionReportsVersionsBeforePayloadDecode() throws {
+        let current = """
+        {
+          "schemaVersion": 3,
+          "createdAt": 1700000000,
+          "records": "not-an-array"
+        }
+        """.data(using: .utf8) ?? Data()
+        let v2 = """
+        {
+          "schemaVersion": 2,
+          "createdAt": 1700000000,
+          "sessions": []
+        }
+        """.data(using: .utf8) ?? Data()
+        let legacy = try JSONEncoder().encode([fixtureSession(id: "legacy-v1")])
+
+        let currentStatus = CompanySchemaMigrationEngine.inspectDurableState(data: current)
+        let v2Status = CompanySchemaMigrationEngine.inspectDurableState(data: v2)
+        let legacyStatus = CompanySchemaMigrationEngine.inspectDurableState(data: legacy)
+
+        #expect(currentStatus.onDiskVersion == 3)
+        #expect(currentStatus.state == .current)
+        #expect(v2Status.onDiskVersion == 2)
+        #expect(v2Status.state == .migrationRequired)
+        #expect(legacyStatus.onDiskVersion == nil)
+        #expect(legacyStatus.state == .missing)
+    }
+
+    @Test
     func startupValidationRejectsCorruptMigratedState() throws {
         let first = fixtureSession(id: "duplicate")
         let second = fixtureSession(id: "duplicate")
@@ -77,6 +142,43 @@ struct CompanySchemaMigrationTests {
 
         let after = try String(contentsOf: stateURL, encoding: .utf8)
         #expect(after == original)
+        let rollbackCopies = try FileManager.default.contentsOfDirectory(atPath: root.path)
+            .filter { $0.hasPrefix("sessions.json.pre-migration-v99-") }
+        #expect(rollbackCopies.count == 1)
+    }
+
+    @Test
+    func rollbackToVersion2CodeRefusesVersion3StateWithStructuredError() throws {
+        let state = try CompanySchemaMigrationEngine.encodeCurrent(
+            sessions: [fixtureSession(id: "v3")],
+            now: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        do {
+            _ = try Version2RollbackDecoder.decodeSessions(from: state)
+            Issue.record("Expected v2 code to refuse v3 state cleanly")
+        } catch CompanySchemaMigrationError.unsupportedVersion(let version) {
+            #expect(version == 3)
+        }
+    }
+
+    @Test
+    func doctorSchemaRowSurfacesMismatchWithMigrateAction() {
+        let check = DoctorViewModel.durableStateSchemaCheck(
+            status: CompanySchemaVersionStatus(
+                schema: "CodexSession",
+                onDiskVersion: 2,
+                expectedVersion: 3,
+                state: .migrationRequired,
+                warningCode: "schema.version.outdated"
+            )
+        )
+
+        #expect(check.id == "durable-state-schema")
+        #expect(check.severity == .warn)
+        #expect(check.summary.contains("On disk v2, expected v3"))
+        #expect(check.detail?.contains("warningCode=schema.version.outdated") == true)
+        #expect(check.actions == [.migrateSchema])
     }
 
     @Test
@@ -116,5 +218,23 @@ struct CompanySchemaMigrationTests {
             exitCode: nil,
             pid: nil
         )
+    }
+
+    private enum Version2RollbackDecoder {
+        private struct Version2Envelope: Codable {
+            var schemaVersion: Int
+            var createdAt: Date?
+            var sessions: [CodexSession]
+        }
+
+        static func decodeSessions(from data: Data) throws -> [CodexSession] {
+            guard let version = try CompanySchemaMigrationEngine.schemaVersion(in: data) else {
+                throw CompanySchemaMigrationError.missingSchemaVersion
+            }
+            guard version <= 2 else {
+                throw CompanySchemaMigrationError.unsupportedVersion(version)
+            }
+            return try JSONDecoder().decode(Version2Envelope.self, from: data).sessions
+        }
     }
 }
