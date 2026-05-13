@@ -374,21 +374,29 @@ struct RootView: View {
     }
 
     /// Pulls the current `CodexSession` fleet from the shared manager and
-    /// maps each session to a `PortfolioCompanySnapshot`. Ledger entries
-    /// from per-company ledger files are not wired through `AppState` yet,
-    /// so we surface lifecycle + identity only — the aggregator handles the
-    /// "missing financial data" state gracefully for us.
+    /// maps each session to a `PortfolioCompanySnapshot`. For each session we
+    /// load the verified `CompanyPaymentProviderEvent` records from disk
+    /// (`<worktreePath>/PAYMENT_PROVIDER_EVENTS.json`) so the dashboard reflects
+    /// real revenue — not estimates. Companies with no payment-events file
+    /// surface as "missing financial data" via the aggregator's existing path.
     private func portfolioCompanySnapshots() -> [PortfolioCompanySnapshot] {
         CodexSessionManager.shared.sessions.map { session in
-            PortfolioCompanySnapshot(
+            let paymentEvents = (try? loadPaymentEvents(for: session)) ?? []
+            return PortfolioCompanySnapshot.from(
                 companyID: session.id,
                 displayName: session.title,
                 lifecycleStage: session.lifecycleStage,
                 templateID: session.templateID,
-                entries: [],
+                paymentEvents: paymentEvents,
                 lastUpdatedAt: session.lastHeartbeatAt
             )
         }
+    }
+
+    private func loadPaymentEvents(for session: CodexSession) throws -> [CompanyPaymentProviderEvent] {
+        let url = URL(fileURLWithPath: session.worktreePath)
+            .appendingPathComponent(CompanyPaymentProviderEventStore.fileName)
+        return try CompanyPaymentProviderEventStore(url: url).load()
     }
 
     @ViewBuilder
