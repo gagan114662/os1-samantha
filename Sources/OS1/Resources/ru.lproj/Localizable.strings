@@ -1222,3 +1222,16 @@
 "update available, %@" = "update available, %@";
 "What's new" = "What's new";
 "Hermes update banner dismissed." = "Hermes update banner dismissed.";
+
+/* Portfolio dashboard (#184) */
+"PORTFOLIO" = "ПОРТФЕЛЬ";
+"Portfolio" = "Портфель";
+"Aggregate revenue, cost, and margin across every live company." = "Сводка по выручке, затратам и марже всех активных компаний.";
+"No companies yet" = "Пока нет компаний";
+"Once Samantha launches its first company, its revenue, cost, and margin will roll up here." = "Когда Samantha запустит первую компанию, её выручка, затраты и маржа появятся здесь.";
+"Some companies are missing financial data" = "У некоторых компаний нет финансовых данных";
+"%d of %d companies have no dated ledger entries; their totals are excluded from the time-series chart." = "%1$d из %2$d компаний не имеют датированных записей в журнале; их итоги исключены из временного ряда.";
+"Revenue" = "Выручка";
+"Cost" = "Затраты";
+"Margin" = "Маржа";
+"Bucket" = "Интервал";

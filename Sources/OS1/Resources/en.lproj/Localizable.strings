@@ -1223,3 +1223,16 @@
 "update available, %@" = "update available, %@";
 "What's new" = "What's new";
 "Hermes update banner dismissed." = "Hermes update banner dismissed.";
+
+/* Portfolio dashboard (#184) */
+"PORTFOLIO" = "PORTFOLIO";
+"Portfolio" = "Portfolio";
+"Aggregate revenue, cost, and margin across every live company." = "Aggregate revenue, cost, and margin across every live company.";
+"No companies yet" = "No companies yet";
+"Once Samantha launches its first company, its revenue, cost, and margin will roll up here." = "Once Samantha launches its first company, its revenue, cost, and margin will roll up here.";
+"Some companies are missing financial data" = "Some companies are missing financial data";
+"%d of %d companies have no dated ledger entries; their totals are excluded from the time-series chart." = "%1$d of %2$d companies have no dated ledger entries; their totals are excluded from the time-series chart.";
+"Revenue" = "Revenue";
+"Cost" = "Cost";
+"Margin" = "Margin";
+"Bucket" = "Bucket";
