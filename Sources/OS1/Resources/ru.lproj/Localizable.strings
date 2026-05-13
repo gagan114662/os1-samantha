@@ -1207,3 +1207,22 @@
 "CompanyGrowthCampaign.Channel.redditPost" = "Пост Reddit";
 "CompanyGrowthCampaign.Channel.redditComment" = "Комментарий Reddit";
 "CompanyGrowthCampaign.Channel.affiliateLink" = "Партнерская ссылка";
+// MARK: - Hermes update preferences
+"Settings" = "Settings";
+"Hermes updates" = "Hermes updates";
+"Control how OS1 checks for Hermes Agent updates on the active host." = "Control how OS1 checks for Hermes Agent updates on the active host.";
+"Check for updates automatically" = "Check for updates automatically";
+"When disabled, OS1 will not re-surface the same update on every launch; a banner appears again only after a new offered version is detected." = "When disabled, OS1 will not re-surface the same update on every launch; a banner appears again only after a new offered version is detected.";
+"Major Hermes update available" = "Major Hermes update available";
+"Hermes minor update available" = "Hermes minor update available";
+"Hermes update available" = "Hermes update available";
+"Review the changelog before updating. Major updates can include workflow or configuration changes." = "Review the changelog before updating. Major updates can include workflow or configuration changes.";
+"This minor update can be installed with hermes update --backup; the gateway restarts automatically." = "This minor update can be installed with hermes update --backup; the gateway restarts automatically.";
+"Review the changelog before updating, then run hermes update --backup when ready." = "Review the changelog before updating, then run hermes update --backup when ready.";
+"%@ — %@ offered, %d commit behind main." = "%@ — %@ offered, %d commit behind main.";
+"%@ — %@ offered, %d commits behind main." = "%@ — %@ offered, %d commits behind main.";
+"%@ — %@ offered." = "%@ — %@ offered.";
+"%@ Breaking-change notes: %@" = "%@ Breaking-change notes: %@";
+"update available, %@" = "update available, %@";
+"What's new" = "What's new";
+"Hermes update banner dismissed." = "Hermes update banner dismissed.";
