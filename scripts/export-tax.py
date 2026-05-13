@@ -300,11 +300,24 @@ def make_1099(
     return body + f"\n# tax_year={tax_year} threshold_usd=600.00".encode()
 
 
+def quarterly_deadlines(tax_year: int, fiscal_year_start_month: int) -> list[str]:
+    """15th of the 4th/6th/9th/13th month of the entity's fiscal year."""
+    offsets = [3, 5, 8, 12]
+    deadlines: list[str] = []
+    for offset in offsets:
+        absolute = fiscal_year_start_month + offset
+        year = tax_year + (absolute - 1) // 12
+        month = ((absolute - 1) % 12) + 1
+        deadlines.append(f"{year:04d}-{month:02d}-15")
+    return deadlines
+
+
 def make_quarterly_estimates(
     lines: list[dict[str, Any]],
     tax_year: int,
     jurisdiction: str,
     active_fraction: float,
+    fiscal_year_start_month: int,
 ) -> bytes:
     revenue = sum(row["amount"] for row in lines if row["kind"] == "revenue")
     refunds = sum(row["amount"] for row in lines if row["kind"] == "refund")
@@ -313,12 +326,7 @@ def make_quarterly_estimates(
     rate = 0.22 if jurisdiction == "US-FED" else 0.093
     estimated = round2(net * rate * active_fraction)
     per_q = round2(estimated / 4.0)
-    deadlines = [
-        f"{tax_year:04d}-04-15",
-        f"{tax_year:04d}-06-15",
-        f"{tax_year:04d}-09-15",
-        f"{tax_year + 1:04d}-01-15",
-    ]
+    deadlines = quarterly_deadlines(tax_year, fiscal_year_start_month)
     basis = f"net={money(net)} rate={rate:.4f} active={active_fraction:.4f}"
     rows = [
         [q, d, money(per_q), basis]
@@ -388,7 +396,7 @@ def build_bundle(
         files["irs_line_items.csv"] = make_irs_line_items(lines, entity)
         files["1099_register.csv"] = make_1099(contractors, entity, tax_year)
         files["quarterly_estimates.csv"] = make_quarterly_estimates(
-            lines, tax_year, jurisdiction, active_fraction
+            lines, tax_year, jurisdiction, active_fraction, entity.get("fiscalYearStartMonth", 1)
         )
         unclassified = sum(
             1
@@ -403,7 +411,7 @@ def build_bundle(
     elif jurisdiction == "US-CA":
         files["sales_tax_summary.csv"] = make_ca_sales_tax(lines)
         files["quarterly_estimates.csv"] = make_quarterly_estimates(
-            lines, tax_year, jurisdiction, active_fraction
+            lines, tax_year, jurisdiction, active_fraction, entity.get("fiscalYearStartMonth", 1)
         )
 
     revenue = sum(row["amount"] for row in lines if row["kind"] == "revenue")

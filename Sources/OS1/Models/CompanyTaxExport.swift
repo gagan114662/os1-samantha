@@ -622,7 +622,7 @@ enum TaxExportPipeline {
         let estimatedTax = round2(net * rate * activeDayFraction)
         let perQuarter = round2(estimatedTax / 4.0)
 
-        let deadlines = quarterlyDeadlines(taxYear: taxYear, jurisdiction: jurisdiction)
+        let deadlines = quarterlyDeadlines(taxYear: taxYear, entity: entity)
         let header = ["quarter", "deadline", "amount_usd", "basis"]
         let rows: [[String]] = zip(["Q1", "Q2", "Q3", "Q4"], deadlines).map { quarter, deadline in
             [
@@ -635,16 +635,19 @@ enum TaxExportPipeline {
         return TaxExportFile(path: "quarterly_estimates.csv", bytes: Data(csvBody(header: header, rows: rows).utf8))
     }
 
-    private static func quarterlyDeadlines(taxYear: Int, jurisdiction: String) -> [String] {
-        // US Federal estimated tax deadlines (1040-ES): Apr 15, Jun 15, Sep 15, Jan 15 (following year)
-        // CA FTB Form 540-ES uses the same calendar dates.
-        let nextYear = taxYear + 1
-        return [
-            String(format: "%04d-04-15", taxYear),
-            String(format: "%04d-06-15", taxYear),
-            String(format: "%04d-09-15", taxYear),
-            String(format: "%04d-01-15", nextYear)
-        ]
+    /// Estimated-tax deadlines: 15th of the 4th / 6th / 9th / 13th month from the
+    /// entity's fiscal-year start. Calendar-year filers (FY=Jan) get the familiar
+    /// Apr 15 / Jun 15 / Sep 15 / Jan 15 (next year). FY-starting-July → Oct 15 /
+    /// Dec 15 / Mar 15 (next year) / Jul 15 (next year). Both US-FED and US-CA
+    /// follow the same schedule, so this is jurisdiction-independent.
+    static func quarterlyDeadlines(taxYear: Int, entity: TaxEntity) -> [String] {
+        let monthOffsets = [3, 5, 8, 12]
+        return monthOffsets.map { offset in
+            let absolute = entity.fiscalYearStartMonth + offset
+            let yearShift = (absolute - 1) / 12
+            let month = ((absolute - 1) % 12) + 1
+            return String(format: "%04d-%02d-15", taxYear + yearShift, month)
+        }
     }
 
     private static func makeCASalesTaxFile(lines: [TaxLedgerLine]) -> TaxExportFile {
@@ -756,10 +759,16 @@ struct TaxPipelineDoctorRow: Codable, Hashable {
     var nextQuarterlyEstimateDeadline: String?
     var daysUntilNextDeadline: Int?
 
+    /// `taxLedgerLines` carries jurisdiction-aware entries (after FX normalization and
+    /// entity mapping). California sales tax is accrued from CA-pinned revenue entries
+    /// whose `occurredAt` falls in `[lastFilingDate, now]`. If `lastFilingDate` is
+    /// omitted, the start of the current calendar year is used.
     static func compute(
         ledger: [CompanyLedgerEntry],
         registry: TaxEntityRegistry,
-        now: Date
+        now: Date,
+        taxLedgerLines: [TaxLedgerLine] = [],
+        lastFilingDate: Date? = nil
     ) -> TaxPipelineDoctorRow {
         let missingMapping = ledger.filter { entry in
             guard let companyID = entry.companyID else { return true }
@@ -771,13 +780,32 @@ struct TaxPipelineDoctorRow: Codable, Hashable {
 
         let calendar = Calendar(identifier: .gregorian)
         let year = calendar.component(.year, from: now)
-        let deadlines: [Date] = [
-            calendar.date(from: DateComponents(year: year, month: 4, day: 15)),
-            calendar.date(from: DateComponents(year: year, month: 6, day: 15)),
-            calendar.date(from: DateComponents(year: year, month: 9, day: 15)),
-            calendar.date(from: DateComponents(year: year + 1, month: 1, day: 15))
-        ].compactMap { $0 }
-        let next = deadlines.first(where: { $0 >= now })
+        let filingStart = lastFilingDate
+            ?? calendar.date(from: DateComponents(year: year, month: 1, day: 1))
+            ?? Date.distantPast
+        let caRevenue = taxLedgerLines
+            .filter {
+                $0.kind == .revenue
+                    && ($0.jurisdiction ?? "") == "US-CA"
+                    && $0.occurredAt >= filingStart
+                    && $0.occurredAt <= now
+            }
+            .reduce(0.0) { $0 + $1.amount }
+        let salesTax = (caRevenue * 0.0725 * 100).rounded() / 100
+
+        let entityList = registry.entities.isEmpty
+            ? [TaxEntity(id: "_default", legalName: "_default", entityType: .soleProprietor, primaryJurisdiction: "US-FED")]
+            : registry.entities
+        var candidates: [Date] = []
+        for entity in entityList {
+            for taxYear in [year - 1, year, year + 1] {
+                let strs = TaxExportPipeline.quarterlyDeadlines(taxYear: taxYear, entity: entity)
+                for s in strs {
+                    if let parsed = parseYMD(s, calendar: calendar) { candidates.append(parsed) }
+                }
+            }
+        }
+        let next = candidates.filter { $0 >= now }.min()
         let nextString = next.map { formatYMD($0, calendar: calendar) }
         let daysUntil = next.map {
             max(0, calendar.dateComponents([.day], from: now, to: $0).day ?? 0)
@@ -786,10 +814,16 @@ struct TaxPipelineDoctorRow: Codable, Hashable {
         return TaxPipelineDoctorRow(
             unclassifiedCostCount: unclassifiedCosts,
             missingEntityMappingCount: missingMapping,
-            salesTaxAccruedSinceLastFilingUSD: 0,
+            salesTaxAccruedSinceLastFilingUSD: salesTax,
             nextQuarterlyEstimateDeadline: nextString,
             daysUntilNextDeadline: daysUntil
         )
+    }
+
+    private static func parseYMD(_ value: String, calendar: Calendar) -> Date? {
+        let parts = value.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3 else { return nil }
+        return calendar.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2]))
     }
 
     private static func formatYMD(_ date: Date, calendar: Calendar) -> String {

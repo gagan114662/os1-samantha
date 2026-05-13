@@ -274,6 +274,35 @@ struct CompanyTaxExportPipelineTests {
         #expect(map["US-CA"]?.manifest.totals.revenueUSD == 500)
     }
 
+    // MARK: - FY-aware quarterly deadlines
+
+    @Test
+    func quarterlyDeadlinesShiftWithFiscalYearStartMonth() throws {
+        let calendarYear = entity()
+        let calendarDeadlines = TaxExportPipeline.quarterlyDeadlines(taxYear: 2025, entity: calendarYear)
+        #expect(calendarDeadlines == ["2025-04-15", "2025-06-15", "2025-09-15", "2026-01-15"])
+
+        let julyFY = TaxEntity(
+            id: "fy-jul",
+            legalName: "July FY Co",
+            entityType: .cCorp,
+            primaryJurisdiction: "US-FED",
+            fiscalYearStartMonth: 7
+        )
+        let julyDeadlines = TaxExportPipeline.quarterlyDeadlines(taxYear: 2025, entity: julyFY)
+        #expect(julyDeadlines == ["2025-10-15", "2025-12-15", "2026-03-15", "2026-07-15"])
+
+        let aprilFY = TaxEntity(
+            id: "fy-apr",
+            legalName: "April FY Co",
+            entityType: .cCorp,
+            primaryJurisdiction: "US-FED",
+            fiscalYearStartMonth: 4
+        )
+        let aprilDeadlines = TaxExportPipeline.quarterlyDeadlines(taxYear: 2025, entity: aprilFY)
+        #expect(aprilDeadlines == ["2025-07-15", "2025-09-15", "2025-12-15", "2026-04-15"])
+    }
+
     // MARK: - Duplicate jurisdiction override
 
     @Test
