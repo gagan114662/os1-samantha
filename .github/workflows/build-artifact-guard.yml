@@ -1,0 +1,43 @@
+name: Build Artifact Guard
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-artifact-guard:
+    name: Build artifact guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Refuse SwiftPM build artifacts in PR diff
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          blocked=()
+          while IFS= read -r -d '' path; do
+            case "$path" in
+              .build|.build/*|.build-*|.build-*/*|*/.build|*/.build/*|*/.build-*|*/.build-*/*)
+                blocked+=("$path")
+                ;;
+            esac
+          done < <(git diff --name-only -z "$BASE_SHA" "$HEAD_SHA")
+
+          if ((${#blocked[@]})); then
+            echo "PR diff includes SwiftPM build artifacts. Remove these paths from the branch:"
+            printf '  %s\n' "${blocked[@]}"
+            exit 1
+          fi
+
+          echo "No SwiftPM build artifacts found in the PR diff."

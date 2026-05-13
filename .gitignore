@@ -1,6 +1,7 @@
 .DS_Store
 /AGENTS.md
-/.build
+/.build/
+/.build-*/
 /.build-tests
 /artifacts
 /dist
