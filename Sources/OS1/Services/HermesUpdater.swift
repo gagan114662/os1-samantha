@@ -11,7 +11,7 @@ enum HermesUpdateAvailability: Equatable, Sendable {
     case unknown
     case notInstalled
     case upToDate(versionLabel: String)
-    case behind(versionLabel: String, commits: Int?)
+    case behind(versionLabel: String, offer: HermesUpdateOffer)
 
     var versionLabel: String? {
         switch self {
@@ -23,6 +23,49 @@ enum HermesUpdateAvailability: Equatable, Sendable {
     var isBehind: Bool {
         if case .behind = self { return true }
         return false
+    }
+}
+
+extension HermesUpdateAvailability {
+    static func make(from result: HermesAvailabilityResult, fallbackLabel: String) -> HermesUpdateAvailability {
+        if !result.installed { return .notInstalled }
+
+        let label = result.version_label ?? fallbackLabel
+        switch result.behind {
+        case .some(0):
+            return .upToDate(versionLabel: label)
+        case .some(let n) where n > 0:
+            return .behind(
+                versionLabel: label,
+                offer: HermesUpdateOffer(
+                    currentVersion: result.current_version,
+                    offeredVersion: result.offered_version,
+                    offeredVersionLabel: result.offered_version_label,
+                    commits: n,
+                    changelogURL: result.changelog_url,
+                    breakingChangeNotes: result.breaking_changes ?? []
+                )
+            )
+        case .some(-1):
+            // Behind, count unknown — `hermes update --check` exited 1
+            // but the probe could not resolve an exact count.
+            return .behind(
+                versionLabel: label,
+                offer: HermesUpdateOffer(
+                    currentVersion: result.current_version,
+                    offeredVersion: result.offered_version,
+                    offeredVersionLabel: result.offered_version_label,
+                    commits: nil,
+                    changelogURL: result.changelog_url,
+                    breakingChangeNotes: result.breaking_changes ?? []
+                )
+            )
+        default:
+            // Probe couldn't determine state (no git repo, network failure on
+            // Nix builds, etc.). We still know hermes is installed; treat as
+            // up-to-date so the UI doesn't nag.
+            return .upToDate(versionLabel: label)
+        }
     }
 }
 
@@ -49,6 +92,17 @@ struct HermesAvailabilityResult: Decodable, Equatable, Sendable {
     /// Source of the `behind` value: "cache", "fresh-check", or "unknown".
     /// Diagnostic only — surfaced in detail expander, not the headline.
     let source: String
+    /// Parsed semantic version from the installed Hermes label, when present.
+    let current_version: String?
+    /// Parsed semantic version from the offered upstream ref, when present.
+    let offered_version: String?
+    /// Human label for the upstream ref, e.g. "Hermes Agent v0.14.0".
+    let offered_version_label: String?
+    /// Changelog/compare URL for the commits included in this update.
+    let changelog_url: URL?
+    /// Breaking-change notes scraped from commit bodies between local and
+    /// offered refs. Empty when no explicit notes were found.
+    let breaking_changes: [String]?
 }
 
 struct HermesUpdateRunResult: Decodable, Equatable, Sendable {
@@ -125,10 +179,12 @@ extension HermesUpdater {
         return #"""
         import json
         import os
+        import re
         import shutil
         import subprocess
         import sys
         import time
+        import urllib.parse
 
         UPDATE_CACHE_TTL_SECONDS = 6 * 3600
 
@@ -147,6 +203,114 @@ extension HermesUpdater {
                     return candidate
             return None
 
+        def run(args, timeout=10):
+            return subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+
+        def parse_version(text):
+            if not text:
+                return None
+            match = re.search(r"v?(\d+\.\d+(?:\.\d+)?)", text)
+            return match.group(1) if match else None
+
+        def find_git_root(hermes_bin):
+            starts = [
+                os.path.dirname(os.path.realpath(hermes_bin)),
+                os.path.expanduser("~/.hermes"),
+            ]
+            seen = set()
+            for start in starts:
+                current = os.path.abspath(start)
+                for _ in range(8):
+                    if current in seen:
+                        break
+                    seen.add(current)
+                    if os.path.isdir(os.path.join(current, ".git")):
+                        return current
+                    parent = os.path.dirname(current)
+                    if parent == current:
+                        break
+                    current = parent
+                try:
+                    r = run(["git", "-C", start, "rev-parse", "--show-toplevel"])
+                    if r.returncode == 0 and r.stdout.strip():
+                        return r.stdout.strip()
+                except Exception:
+                    pass
+            return None
+
+        def git_text(root, args, timeout=10):
+            try:
+                r = run(["git", "-C", root] + args, timeout=timeout)
+                if r.returncode == 0:
+                    return (r.stdout or "").strip()
+            except Exception:
+                pass
+            return None
+
+        def upstream_ref(root):
+            for ref in ["@{u}", "origin/main", "origin/master"]:
+                value = git_text(root, ["rev-parse", "--verify", ref])
+                if value:
+                    return value
+            return None
+
+        def version_from_ref(root, ref):
+            for path in ["pyproject.toml", "setup.cfg", "hermes_cli/__init__.py", "package.json"]:
+                text = git_text(root, ["show", f"{ref}:{path}"])
+                version = parse_version(text)
+                if version:
+                    return version
+            return None
+
+        def normalize_github_remote(remote):
+            if not remote:
+                return None
+            remote = remote.strip()
+            if remote.startswith("git@github.com:"):
+                path = remote[len("git@github.com:"):]
+            else:
+                parsed = urllib.parse.urlparse(remote)
+                if parsed.netloc not in ("github.com", "www.github.com"):
+                    return None
+                path = parsed.path.lstrip("/")
+            if path.endswith(".git"):
+                path = path[:-4]
+            parts = [p for p in path.split("/") if p]
+            if len(parts) < 2:
+                return None
+            return f"https://github.com/{parts[0]}/{parts[1]}"
+
+        def changelog_url(root, current_ref, offered_ref):
+            base = normalize_github_remote(git_text(root, ["config", "--get", "remote.origin.url"]))
+            if not base or not current_ref or not offered_ref:
+                return None
+            return f"{base}/compare/{current_ref[:12]}...{offered_ref[:12]}"
+
+        def breaking_changes(root, current_ref, offered_ref):
+            if not current_ref or not offered_ref:
+                return []
+            try:
+                r = run([
+                    "git", "-C", root, "log",
+                    "--format=%s%n%b%n---END-COMMIT---",
+                    f"{current_ref}..{offered_ref}",
+                ], timeout=10)
+                if r.returncode != 0:
+                    return []
+            except Exception:
+                return []
+            notes = []
+            for commit in (r.stdout or "").split("---END-COMMIT---"):
+                lines = [line.strip() for line in commit.splitlines() if line.strip()]
+                for line in lines:
+                    lowered = line.lower()
+                    if "breaking change" in lowered or lowered.startswith("breaking:") or lowered.startswith("breaking -"):
+                        notes.append(line)
+                        break
+                if len(notes) >= 3:
+                    break
+            return notes
+
         def emit(payload):
             print(json.dumps(payload))
             sys.exit(0)
@@ -158,6 +322,11 @@ extension HermesUpdater {
                 "version_label": None,
                 "behind": None,
                 "source": "unknown",
+                "current_version": None,
+                "offered_version": None,
+                "offered_version_label": None,
+                "changelog_url": None,
+                "breaking_changes": [],
             })
 
         # Version label: first non-empty line of `hermes version`.
@@ -178,6 +347,26 @@ extension HermesUpdater {
                     break
         except Exception:
             pass
+
+        current_version = parse_version(version_label)
+        repo_root = find_git_root(hermes_bin)
+        current_ref = None
+        offered_ref = None
+        offered_version = None
+        offered_version_label = None
+        offered_changelog_url = None
+        offered_breaking_changes = []
+        if repo_root:
+            current_ref = git_text(repo_root, ["rev-parse", "HEAD"])
+            offered_ref = upstream_ref(repo_root)
+            if not current_version:
+                current_version = version_from_ref(repo_root, current_ref or "HEAD")
+            if offered_ref:
+                offered_version = version_from_ref(repo_root, offered_ref)
+                if offered_version:
+                    offered_version_label = f"Hermes Agent v{offered_version}"
+                offered_changelog_url = changelog_url(repo_root, current_ref, offered_ref)
+                offered_breaking_changes = breaking_changes(repo_root, current_ref, offered_ref)
 
         # Detection: prefer the cache file Hermes itself maintains.
         # ~/.hermes/.update_check is { "ts": <epoch>, "behind": <int|None>, "rev": <str|None> }
@@ -226,6 +415,11 @@ extension HermesUpdater {
             "version_label": version_label,
             "behind": behind,
             "source": source,
+            "current_version": current_version,
+            "offered_version": offered_version,
+            "offered_version_label": offered_version_label,
+            "changelog_url": offered_changelog_url,
+            "breaking_changes": offered_breaking_changes,
         })
         """#
     }
