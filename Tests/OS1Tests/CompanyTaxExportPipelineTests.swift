@@ -453,6 +453,200 @@ struct CompanyTaxExportPipelineTests {
         #expect(!bundle.files.contains { $0.path == "quarterly_estimates.csv" })
     }
 
+    // MARK: - Cross-language determinism (Swift ⇄ Python CLI)
+
+    @Test
+    func swiftAndPythonProduceByteIdenticalBundles() throws {
+        guard let python = which("python3") else {
+            // Python not on PATH (rare in CI but possible locally) — skip rather than fail.
+            return
+        }
+        let repoRoot = repoRootURL()
+        let cliPath = repoRoot.appendingPathComponent("scripts/export-tax.py").path
+        guard FileManager.default.fileExists(atPath: cliPath) else { return }
+
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tax-xlang-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let entity = TaxEntity(
+            id: "llc-acme",
+            legalName: "Acme Holdings LLC",
+            entityType: .llcSingleMember,
+            primaryJurisdiction: "US-FED",
+            additionalJurisdictions: ["US-CA"],
+            ein: "12-3456789",
+            fiscalYearStartMonth: 1,
+            baseCurrency: "USD",
+            allocation: .equalSplit
+        )
+        let lines: [TaxLedgerLine] = [
+            line("rev-eur", date: date(2025, 3, 1), kind: .revenue, category: .sales, amount: 1_000, currency: "EUR"),
+            line("rev-usd", date: date(2025, 4, 15), kind: .revenue, category: .sales, amount: 500),
+            line("cost-ads", date: date(2025, 5, 1), kind: .cost, category: .ads, amount: 200),
+            line("cost-cloud", date: date(2025, 6, 30), kind: .cost, category: .cloudCompute, amount: 75, currency: "GBP")
+        ]
+        let contractors = [
+            TaxContractorPayment(
+                id: "p1",
+                payerEntityID: entity.id,
+                recipientName: "Alpha Inc",
+                recipientTaxID: "xxx-xx-1111",
+                recipientCountry: "US",
+                amountUSD: 1_200,
+                isUSResident: true
+            )
+        ]
+        let req = TaxExportRequest(
+            entity: entity,
+            taxYear: 2025,
+            ledgerLines: lines,
+            contractorPayments: contractors,
+            fxRates: Self.fxRates,
+            sourceLedgerCommitHash: Self.frozenCommit,
+            exportTimestamp: Self.exportTimestamp
+        )
+
+        // Swift side: generate + write
+        let swiftOut = tmp.appendingPathComponent("swift")
+        try FileManager.default.createDirectory(at: swiftOut, withIntermediateDirectories: true)
+        let bundles = try TaxExportPipeline.generate(req)
+        for bundle in bundles {
+            let dir = swiftOut.appendingPathComponent(
+                "\(bundle.entityID)__\(bundle.jurisdiction)__\(bundle.taxYear)"
+            )
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            for file in bundle.files {
+                try file.bytes.write(to: dir.appendingPathComponent(file.path))
+            }
+        }
+
+        // Python inputs
+        let entitiesJSON = """
+        {
+          "entities": [
+            {
+              "id": "llc-acme",
+              "legalName": "Acme Holdings LLC",
+              "entityType": "llc-single-member",
+              "primaryJurisdiction": "US-FED",
+              "additionalJurisdictions": ["US-CA"],
+              "ein": "12-3456789",
+              "fiscalYearStartMonth": 1,
+              "baseCurrency": "USD",
+              "allocation": {"kind": "equalSplit"}
+            }
+          ],
+          "companyToEntity": {}
+        }
+        """
+        try entitiesJSON.write(
+            to: tmp.appendingPathComponent("entities.json"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let ledgerArray: [[String: Any]] = lines.map { line in
+            [
+                "id": line.id,
+                "entityID": line.entityID,
+                "occurredAt": isoZ(line.occurredAt),
+                "kind": line.kind.rawValue,
+                "category": line.category?.rawValue ?? NSNull(),
+                "amount": line.amount,
+                "currency": line.currency,
+                "memo": line.memo
+            ]
+        }
+        let ledgerData = try JSONSerialization.data(withJSONObject: ledgerArray, options: [.sortedKeys])
+        try ledgerData.write(to: tmp.appendingPathComponent("ledger.json"))
+
+        let contractorsArray: [[String: Any]] = contractors.map { c in
+            [
+                "id": c.id,
+                "payerEntityID": c.payerEntityID,
+                "recipientName": c.recipientName,
+                "recipientTaxID": c.recipientTaxID ?? "",
+                "recipientCountry": c.recipientCountry,
+                "amountUSD": c.amountUSD,
+                "isUSResident": c.isUSResident
+            ]
+        }
+        try JSONSerialization.data(withJSONObject: contractorsArray, options: [.sortedKeys])
+            .write(to: tmp.appendingPathComponent("contractors.json"))
+
+        let fxJSON = """
+        {"asOf": "2024-01-01T00:00:00Z", "rates": {"EUR": 1.1, "GBP": 1.27, "CAD": 0.74, "JPY": 0.0066}}
+        """
+        try fxJSON.write(to: tmp.appendingPathComponent("fx.json"), atomically: true, encoding: .utf8)
+
+        let pythonOut = tmp.appendingPathComponent("python")
+        try FileManager.default.createDirectory(at: pythonOut, withIntermediateDirectories: true)
+        let process = Process()
+        process.executableURL = python
+        process.arguments = [
+            cliPath,
+            "--entities", tmp.appendingPathComponent("entities.json").path,
+            "--ledger", tmp.appendingPathComponent("ledger.json").path,
+            "--contractors", tmp.appendingPathComponent("contractors.json").path,
+            "--fx-rates", tmp.appendingPathComponent("fx.json").path,
+            "--entity-id", "llc-acme",
+            "--tax-year", "2025",
+            "--source-commit", Self.frozenCommit,
+            "--exported-at", isoZ(Self.exportTimestamp),
+            "--out", pythonOut.path
+        ]
+        let stderr = Pipe()
+        process.standardError = stderr
+        process.standardOutput = Pipe()
+        try process.run()
+        process.waitUntilExit()
+        if process.terminationStatus != 0 {
+            let errData = stderr.fileHandleForReading.readDataToEndOfFile()
+            Issue.record("python CLI exited \(process.terminationStatus): \(String(data: errData, encoding: .utf8) ?? "")")
+            return
+        }
+
+        for bundle in bundles {
+            let suffix = "\(bundle.entityID)__\(bundle.jurisdiction)__\(bundle.taxYear)"
+            let swiftDir = swiftOut.appendingPathComponent(suffix)
+            let pythonDir = pythonOut.appendingPathComponent(suffix)
+            for file in bundle.files {
+                let swiftBytes = try Data(contentsOf: swiftDir.appendingPathComponent(file.path))
+                let pythonBytes = try Data(contentsOf: pythonDir.appendingPathComponent(file.path))
+                #expect(
+                    swiftBytes == pythonBytes,
+                    "byte mismatch in \(suffix)/\(file.path)\nswift=\(String(data: swiftBytes, encoding: .utf8) ?? "")\npython=\(String(data: pythonBytes, encoding: .utf8) ?? "")"
+                )
+            }
+        }
+    }
+
+    private func which(_ tool: String) -> URL? {
+        for path in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"] {
+            let candidate = URL(fileURLWithPath: path).appendingPathComponent(tool)
+            if FileManager.default.isExecutableFile(atPath: candidate.path) { return candidate }
+        }
+        return nil
+    }
+
+    private func repoRootURL() -> URL {
+        // Tests run with CWD at the package root under SwiftPM.
+        URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+    }
+
+    private func isoZ(_ date: Date) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC") ?? .gmt
+        let c = calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: date)
+        return String(
+            format: "%04d-%02d-%02dT%02d:%02d:%02dZ",
+            c.year ?? 0, c.month ?? 0, c.day ?? 0,
+            c.hour ?? 0, c.minute ?? 0, c.second ?? 0
+        )
+    }
+
     // MARK: - Doctor row
 
     @Test

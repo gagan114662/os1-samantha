@@ -21,7 +21,10 @@ import os
 import sys
 from collections.abc import Iterable
 from datetime import UTC, datetime
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
+
+_CENT = Decimal("0.01")
 
 USD = "USD"
 
@@ -66,7 +69,14 @@ def money(value: float) -> str:
 
 
 def round2(value: float) -> float:
-    return round(value * 100.0) / 100.0
+    """Half-away-from-zero rounding to match Swift `(x * 100).rounded() / 100`.
+
+    Python's builtin `round()` is banker's (half-to-even), which would diverge
+    from Swift's default `.toNearestOrAwayFromZero` for values like 0.005.
+    Using `Decimal.quantize(ROUND_HALF_UP)` matches Swift bit-for-bit on the
+    positive values produced by the tax export pipeline.
+    """
+    return float(Decimal(repr(value)).quantize(_CENT, rounding=ROUND_HALF_UP))
 
 
 def fx_to_usd(amount: float, currency: str, fx_rates: dict[str, float]) -> float:
@@ -417,6 +427,13 @@ def build_bundle(
     revenue = sum(row["amount"] for row in lines if row["kind"] == "revenue")
     refunds = sum(row["amount"] for row in lines if row["kind"] == "refund")
     costs = sum(row["amount"] for row in lines if row["kind"] == "cost")
+    totals_canonical = {
+        "revenueUSD": money(revenue),
+        "refundsUSD": money(refunds),
+        "costUSD": money(costs),
+        "netUSD": money(revenue - refunds - costs),
+        "lineCount": len(lines),
+    }
     totals = {
         "revenueUSD": round2(revenue),
         "refundsUSD": round2(refunds),
@@ -437,7 +454,7 @@ def build_bundle(
         "exportedAt": iso(exported_at),
         "totalsChecksum": totals_checksum(lines, totals),
         "files": file_entries,
-        "totals": totals,
+        "totals": totals_canonical,
         "notes": notes,
     }
     manifest_bytes = json.dumps(manifest, sort_keys=True, indent=2).encode("utf-8")

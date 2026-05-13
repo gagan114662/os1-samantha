@@ -664,14 +664,83 @@ enum TaxExportPipeline {
     }
 
     private static func makeManifestFile(_ manifest: TaxExportManifest) throws -> TaxExportFile {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        encoder.dateEncodingStrategy = .custom { date, encoder in
-            var container = encoder.singleValueContainer()
-            try container.encode(formatISO8601(date))
+        let json = canonicalManifestJSON(manifest)
+        return TaxExportFile(path: "manifest.json", bytes: Data(json.utf8))
+    }
+
+    /// Hand-built JSON serializer that mirrors Python's
+    /// `json.dumps(obj, sort_keys=True, indent=2)` byte-for-byte. Monetary
+    /// fields go out as `"500.00"` strings (not numbers) so the two languages
+    /// don't fight over float-shortest-roundtrip representation.
+    static func canonicalManifestJSON(_ manifest: TaxExportManifest) -> String {
+        var lines: [String] = ["{"]
+        lines.append("  \"entityID\": \(jsonString(manifest.entityID)),")
+        lines.append("  \"entityLegalName\": \(jsonString(manifest.entityLegalName)),")
+        lines.append("  \"exportedAt\": \(jsonString(formatISO8601(manifest.exportedAt))),")
+
+        let sortedFiles = manifest.files.sorted { $0.path < $1.path }
+        if sortedFiles.isEmpty {
+            lines.append("  \"files\": [],")
+        } else {
+            lines.append("  \"files\": [")
+            for (idx, file) in sortedFiles.enumerated() {
+                let suffix = idx == sortedFiles.count - 1 ? "" : ","
+                lines.append("    {")
+                lines.append("      \"byteCount\": \(file.byteCount),")
+                lines.append("      \"path\": \(jsonString(file.path)),")
+                lines.append("      \"sha256\": \(jsonString(file.sha256))")
+                lines.append("    }\(suffix)")
+            }
+            lines.append("  ],")
         }
-        let data = try encoder.encode(manifest)
-        return TaxExportFile(path: "manifest.json", bytes: data)
+
+        lines.append("  \"jurisdiction\": \(jsonString(manifest.jurisdiction)),")
+
+        if manifest.notes.isEmpty {
+            lines.append("  \"notes\": [],")
+        } else {
+            lines.append("  \"notes\": [")
+            for (idx, note) in manifest.notes.enumerated() {
+                let suffix = idx == manifest.notes.count - 1 ? "" : ","
+                lines.append("    \(jsonString(note))\(suffix)")
+            }
+            lines.append("  ],")
+        }
+
+        lines.append("  \"sourceLedgerCommitHash\": \(jsonString(manifest.sourceLedgerCommitHash)),")
+        lines.append("  \"taxYear\": \(manifest.taxYear),")
+
+        lines.append("  \"totals\": {")
+        lines.append("    \"costUSD\": \(jsonString(money(manifest.totals.costUSD))),")
+        lines.append("    \"lineCount\": \(manifest.totals.lineCount),")
+        lines.append("    \"netUSD\": \(jsonString(money(manifest.totals.netUSD))),")
+        lines.append("    \"refundsUSD\": \(jsonString(money(manifest.totals.refundsUSD))),")
+        lines.append("    \"revenueUSD\": \(jsonString(money(manifest.totals.revenueUSD)))")
+        lines.append("  },")
+
+        lines.append("  \"totalsChecksum\": \(jsonString(manifest.totalsChecksum))")
+        lines.append("}")
+        return lines.joined(separator: "\n")
+    }
+
+    private static func jsonString(_ value: String) -> String {
+        var escaped = ""
+        for scalar in value.unicodeScalars {
+            switch scalar {
+            case "\\": escaped += "\\\\"
+            case "\"": escaped += "\\\""
+            case "\u{0008}": escaped += "\\b"
+            case "\u{0009}": escaped += "\\t"
+            case "\u{000A}": escaped += "\\n"
+            case "\u{000C}": escaped += "\\f"
+            case "\u{000D}": escaped += "\\r"
+            case let s where s.value < 0x20:
+                escaped += String(format: "\\u%04x", s.value)
+            default:
+                escaped.unicodeScalars.append(scalar)
+            }
+        }
+        return "\"\(escaped)\""
     }
 
     // MARK: Totals + checksum
@@ -744,9 +813,14 @@ enum TaxExportPipeline {
     }
 
     private static func formatISO8601(_ date: Date) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.string(from: date)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC") ?? .gmt
+        let c = calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: date)
+        return String(
+            format: "%04d-%02d-%02dT%02d:%02d:%02dZ",
+            c.year ?? 0, c.month ?? 0, c.day ?? 0,
+            c.hour ?? 0, c.minute ?? 0, c.second ?? 0
+        )
     }
 }
 
