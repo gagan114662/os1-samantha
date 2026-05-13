@@ -9,6 +9,7 @@ byte-identical bytes, suitable for `diff -r` across reruns.
 
 Schema reference: docs/tax-export.md
 """
+
 from __future__ import annotations
 
 import argparse
@@ -109,11 +110,13 @@ def normalize(lines: list[dict[str, Any]], fx_rates: dict[str, float]) -> list[d
     normalized = []
     for line in lines:
         amount = fx_to_usd(line["amount"], line.get("currency", USD), fx_rates)
-        normalized.append({
-            **line,
-            "amount": round2(amount),
-            "currency": USD,
-        })
+        normalized.append(
+            {
+                **line,
+                "amount": round2(amount),
+                "currency": USD,
+            }
+        )
     return normalized
 
 
@@ -234,15 +237,17 @@ def make_register(lines: list[dict[str, Any]], kind: str, path: str) -> tuple[st
     for row in lines:
         if row["kind"] != kind:
             continue
-        rows.append([
-            row["id"],
-            row["occurredAt"],
-            row.get("category") or "",
-            money(row["amount"]),
-            row.get("jurisdiction") or "",
-            row.get("counterparty") or "",
-            row.get("memo") or "",
-        ])
+        rows.append(
+            [
+                row["id"],
+                row["occurredAt"],
+                row.get("category") or "",
+                money(row["amount"]),
+                row.get("jurisdiction") or "",
+                row.get("counterparty") or "",
+                row.get("memo") or "",
+            ]
+        )
     header = ["id", "occurred_at", "category", "amount_usd", "jurisdiction", "counterparty", "memo"]
     return path, csv_bytes(header, rows)
 
@@ -261,24 +266,35 @@ def make_1099(
     entity: dict[str, Any],
     tax_year: int,
 ) -> bytes:
-    eligible = [p for p in payments if p["payerEntityID"] == entity["id"] and p["amountUSD"] >= 600.0]
+    eligible = [
+        p for p in payments if p["payerEntityID"] == entity["id"] and p["amountUSD"] >= 600.0
+    ]
     eligible.sort(key=lambda p: p["recipientName"])
     rows = []
     for p in eligible:
         form = "1099-NEC" if p["isUSResident"] else "1042-S"
         withhold = "no" if p["isUSResident"] else "yes"
-        rows.append([
-            p["recipientName"],
-            p.get("recipientTaxID") or "",
-            p["recipientCountry"],
-            money(p["amountUSD"]),
-            "yes" if p["isUSResident"] else "no",
-            form,
-            withhold,
-        ])
+        rows.append(
+            [
+                p["recipientName"],
+                p.get("recipientTaxID") or "",
+                p["recipientCountry"],
+                money(p["amountUSD"]),
+                "yes" if p["isUSResident"] else "no",
+                form,
+                withhold,
+            ]
+        )
     body = csv_bytes(
-        ["recipient_name", "recipient_tax_id", "recipient_country",
-         "amount_usd", "us_resident", "form_type", "withholding_required"],
+        [
+            "recipient_name",
+            "recipient_tax_id",
+            "recipient_country",
+            "amount_usd",
+            "us_resident",
+            "form_type",
+            "withholding_required",
+        ],
         rows,
     )
     return body + f"\n# tax_year={tax_year} threshold_usd=600.00".encode()
@@ -304,12 +320,19 @@ def make_quarterly_estimates(
         f"{tax_year + 1:04d}-01-15",
     ]
     basis = f"net={money(net)} rate={rate:.4f} active={active_fraction:.4f}"
-    rows = [[q, d, money(per_q), basis] for q, d in zip(["Q1", "Q2", "Q3", "Q4"], deadlines, strict=True)]
+    rows = [
+        [q, d, money(per_q), basis]
+        for q, d in zip(["Q1", "Q2", "Q3", "Q4"], deadlines, strict=True)
+    ]
     return csv_bytes(["quarter", "deadline", "amount_usd", "basis"], rows)
 
 
 def make_ca_sales_tax(lines: list[dict[str, Any]]) -> bytes:
-    ca_rev = [row for row in lines if row["kind"] == "revenue" and (row.get("jurisdiction") or "US-CA") == "US-CA"]
+    ca_rev = [
+        row
+        for row in lines
+        if row["kind"] == "revenue" and (row.get("jurisdiction") or "US-CA") == "US-CA"
+    ]
     total = sum(row["amount"] for row in ca_rev)
     tax = round2(total * 0.0725)
     return csv_bytes(
@@ -325,7 +348,9 @@ def sha256_hex(data: bytes) -> str:
 def totals_checksum(lines: list[dict[str, Any]], totals: dict[str, Any]) -> str:
     canonical = ""
     for row in lines:
-        canonical += f"{row['id']}|{row['kind']}|{row.get('category') or '-'}|{money(row['amount'])}\n"
+        canonical += (
+            f"{row['id']}|{row['kind']}|{row.get('category') or '-'}|{money(row['amount'])}\n"
+        )
     canonical += (
         f"TOTAL|revenue={money(totals['revenueUSD'])}|refunds={money(totals['refundsUSD'])}|"
         f"cost={money(totals['costUSD'])}|net={money(totals['netUSD'])}|count={totals['lineCount']}"
@@ -351,7 +376,9 @@ def build_bundle(
             f"(prorated for mid-year incorporation/dissolution)."
         )
     if not lines:
-        notes.append("Zero ledger activity for this jurisdiction; export contains empty registers and zero totals.")
+        notes.append(
+            "Zero ledger activity for this jurisdiction; export contains empty registers and zero totals."
+        )
 
     files["pl.csv"] = make_pl(lines)
     files["revenue_register.csv"] = make_register(lines, "revenue", "revenue_register.csv")[1]
@@ -364,11 +391,15 @@ def build_bundle(
             lines, tax_year, jurisdiction, active_fraction
         )
         unclassified = sum(
-            1 for row in lines if row["kind"] == "cost"
+            1
+            for row in lines
+            if row["kind"] == "cost"
             and classify(row.get("category"), row["kind"]) == "unclassified"
         )
         if unclassified:
-            notes.append(f"{unclassified} cost line(s) classified as 'unclassified' - operator triage required.")
+            notes.append(
+                f"{unclassified} cost line(s) classified as 'unclassified' - operator triage required."
+            )
     elif jurisdiction == "US-CA":
         files["sales_tax_summary.csv"] = make_ca_sales_tax(lines)
         files["quarterly_estimates.csv"] = make_quarterly_estimates(
@@ -446,26 +477,40 @@ def run(args: argparse.Namespace) -> int:
             exported_at=exported_at,
             active_fraction=fraction,
         )
-        bundle_dir = os.path.join(args.out, f"{target_entity['id']}__{jurisdiction}__{args.tax_year}")
+        bundle_dir = os.path.join(
+            args.out, f"{target_entity['id']}__{jurisdiction}__{args.tax_year}"
+        )
         os.makedirs(bundle_dir, exist_ok=True)
         for path, data in sorted(files.items()):
             with open(os.path.join(bundle_dir, path), "wb") as f:
                 f.write(data)
-        print(f"wrote {bundle_dir} ({len(files)} files, totals_checksum={manifest['totalsChecksum'][:12]})")
+        print(
+            f"wrote {bundle_dir} ({len(files)} files, totals_checksum={manifest['totalsChecksum'][:12]})"
+        )
     return 0
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="OS1 tax-export pipeline (issue #191).")
-    parser.add_argument("--entities", required=True, help="Path to entities.json (TaxEntityRegistry).")
-    parser.add_argument("--ledger", required=True, help="Path to ledger.json (array of TaxLedgerLine).")
+    parser.add_argument(
+        "--entities", required=True, help="Path to entities.json (TaxEntityRegistry)."
+    )
+    parser.add_argument(
+        "--ledger", required=True, help="Path to ledger.json (array of TaxLedgerLine)."
+    )
     parser.add_argument("--contractors", help="Path to contractors.json (TaxContractorPayment[]).")
     parser.add_argument("--fx-rates", help="Path to fx-rates.json ({asOf, rates}).")
     parser.add_argument("--entity-id", required=True)
     parser.add_argument("--tax-year", type=int, required=True)
-    parser.add_argument("--jurisdiction", action="append", default=[],
-                        help="Override entity-default jurisdictions (repeatable).")
-    parser.add_argument("--source-commit", required=True, help="Git commit hash of the source ledger.")
+    parser.add_argument(
+        "--jurisdiction",
+        action="append",
+        default=[],
+        help="Override entity-default jurisdictions (repeatable).",
+    )
+    parser.add_argument(
+        "--source-commit", required=True, help="Git commit hash of the source ledger."
+    )
     parser.add_argument("--exported-at", help="Freeze export timestamp (ISO8601) for determinism.")
     parser.add_argument("--out", required=True, help="Output directory.")
     args = parser.parse_args()
