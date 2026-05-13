@@ -18,6 +18,9 @@ struct DoctorView: View {
                 if !viewModel.fleetSnapshot.workers.isEmpty {
                     DoctorFleetSummaryRows(snapshot: viewModel.fleetSnapshot)
                 }
+                if !viewModel.checks.isEmpty {
+                    DoctorChecksSummaryRow(summary: viewModel.checksSummary, isRunning: viewModel.hasUnresolvedChecks)
+                }
                 if viewModel.checks.isEmpty {
                     placeholder
                 } else {
@@ -150,6 +153,30 @@ private struct DoctorFleetSummaryRows: View {
     }
 }
 
+private struct DoctorChecksSummaryRow: View {
+    @Environment(\.os1Theme) private var theme
+    let summary: String
+    let isRunning: Bool
+
+    var body: some View {
+        HermesSurfacePanel {
+            HStack(spacing: 10) {
+                if isRunning {
+                    ProgressView().controlSize(.small).tint(theme.palette.onCoralPrimary)
+                } else {
+                    Image(systemName: "checklist.checked")
+                        .foregroundStyle(theme.palette.onCoralMuted)
+                        .frame(width: 18)
+                }
+                Text(summary)
+                    .os1Style(theme.typography.body)
+                    .foregroundStyle(theme.palette.onCoralSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+}
+
 private struct DoctorCheckCard: View {
     @Environment(\.os1Theme) private var theme
     let check: DoctorViewModel.Check
@@ -160,14 +187,24 @@ private struct DoctorCheckCard: View {
         HermesSurfacePanel {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: severityIcon)
-                        .foregroundStyle(severityColor)
-                        .font(.system(size: 16, weight: .semibold))
-                        .frame(width: 20, alignment: .center)
+                    if check.state == .running {
+                        ProgressView().controlSize(.small).tint(theme.palette.onCoralPrimary)
+                            .frame(width: 20, alignment: .center)
+                    } else {
+                        Image(systemName: stateIcon)
+                            .foregroundStyle(stateColor)
+                            .font(.system(size: 16, weight: .semibold))
+                            .frame(width: 20, alignment: .center)
+                    }
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(check.title)
-                            .os1Style(theme.typography.titlePanel)
-                            .foregroundStyle(theme.palette.onCoralPrimary)
+                        HStack(spacing: 8) {
+                            Text(check.title)
+                                .os1Style(theme.typography.titlePanel)
+                                .foregroundStyle(theme.palette.onCoralPrimary)
+                            Text(stateLabel)
+                                .os1Style(theme.typography.smallCaps)
+                                .foregroundStyle(theme.palette.onCoralMuted)
+                        }
                         Text(check.summary)
                             .os1Style(theme.typography.body)
                             .foregroundStyle(theme.palette.onCoralSecondary)
@@ -232,21 +269,36 @@ private struct DoctorCheckCard: View {
         }
     }
 
-    private var severityIcon: String {
-        switch check.severity {
-        case .unknown: return "circle.dotted"
-        case .ok: return "checkmark.circle.fill"
+    private var stateIcon: String {
+        switch check.state {
+        case .pending: return "circle.dotted"
+        case .running: return "arrow.triangle.2.circlepath"
+        case .pass: return "checkmark.circle.fill"
         case .warn: return "exclamationmark.circle.fill"
-        case .error: return "exclamationmark.octagon.fill"
+        case .fail: return "exclamationmark.octagon.fill"
+        case .timeout: return "clock.badge.exclamationmark"
+        case .skipped: return "forward.end.circle"
         }
     }
 
-    private var severityColor: Color {
-        switch check.severity {
-        case .unknown: return theme.palette.onCoralMuted
-        case .ok: return Color(red: 0.40, green: 0.78, blue: 0.50)   // muted green that reads on coral
+    private var stateColor: Color {
+        switch check.state {
+        case .pending, .running, .skipped: return theme.palette.onCoralMuted
+        case .pass: return Color(red: 0.40, green: 0.78, blue: 0.50)   // muted green that reads on coral
         case .warn: return Color(red: 0.96, green: 0.70, blue: 0.30) // amber
-        case .error: return Color(red: 0.93, green: 0.46, blue: 0.40) // red-coral
+        case .fail, .timeout: return Color(red: 0.93, green: 0.46, blue: 0.40) // red-coral
+        }
+    }
+
+    private var stateLabel: String {
+        switch check.state {
+        case .pending: return L10n.string("Pending")
+        case .running: return L10n.string("Running")
+        case .pass: return L10n.string("Pass")
+        case .warn: return L10n.string("Warn")
+        case .fail: return L10n.string("Fail")
+        case .timeout: return L10n.string("Timeout")
+        case .skipped: return L10n.string("Skipped")
         }
     }
 
@@ -257,6 +309,8 @@ private struct DoctorCheckCard: View {
         case .updateHermes: return L10n.string("Update")
         case .reinstallLaunchAgents: return L10n.string("Reinstall LaunchAgents")
         case .migrateSchema: return L10n.string("Migrate")
+        case .retryCheck: return L10n.string("Retry")
+        case .openLogs: return L10n.string("Open logs")
         }
     }
 }

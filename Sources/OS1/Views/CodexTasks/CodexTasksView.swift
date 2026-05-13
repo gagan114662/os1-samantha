@@ -2299,6 +2299,7 @@ struct CodexTasksView: View {
         case .driftDetected: return "point.3.connected.trianglepath.dotted"
         case .lifecycleStalemate: return "pause.circle.fill"
         case .experimentDecided: return "chart.line.uptrend.xyaxis"
+        case .doctorCheckRecorded, .doctorCheckFinished: return "stethoscope"
         }
     }
 
@@ -2319,6 +2320,8 @@ struct CodexTasksView: View {
             return .green
         case .experimentDecided:
             return .blue
+        case .doctorCheckRecorded, .doctorCheckFinished:
+            return .cyan
         case .companyCreated, .userInstruction, .secretAccessed:
             return theme.palette.onCoralMuted
         }

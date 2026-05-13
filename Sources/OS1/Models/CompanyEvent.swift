@@ -30,10 +30,12 @@ struct CompanyEvent: Codable, Hashable, Identifiable {
         case schemaMigration
         case stateBackupCreated
         case ledgerEntryRecorded
+        case doctorCheckRecorded
         case untrustedContentInfluencedDecision
         case driftDetected
         case lifecycleStalemate
         case experimentDecided
+        case doctorCheckFinished
     }
 
     let id: UUID
