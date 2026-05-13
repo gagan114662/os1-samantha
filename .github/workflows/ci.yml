@@ -45,6 +45,9 @@ jobs:
           name: os1-non-live-eval-report
           path: artifacts/evals/
 
+      - name: Backup restore smoke test
+        run: swift test --filter CompanyStateBackupTests/ciSmokeTestEncryptedBackupBundleRoundTripsThroughStoreRetrieveDecryptAndIntegrityVerify
+
       - name: Test
         run: swift test
 
